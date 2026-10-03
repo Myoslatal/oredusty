@@ -75,6 +75,7 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
     apps/game             playable client (--mode single|host|join)
     apps/server           dedicated server (no graphics dependency)
     apps/bot              headless client used by the integration tests
+    games/mine            the sandbox/industrial-automation game built on this framework
     tests                 unit, content and integration tests
 
 ## Build and test
@@ -83,6 +84,7 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
     cmake --build build/debug
     ctest --test-dir build/debug --output-on-failure
 
+    games/mine/tests/test_mine_menu  the start screen as a state machine (CPU only)
     tests/test_tilemap            chunked storage, collision, serialisation, hazards, one-way platforms
     tests/test_snapshot           full/delta wire format, delta merge, a 360 tick reconstruction stream
     tests/test_protocol           framing, every message payload, byte stream limits, the shared channel
@@ -108,6 +110,30 @@ somewhere. On a machine without a hardware Vulkan device, point the loader at a 
 implementation:
 
     VK_ICD_FILENAMES=/usr/lib/cef/vk_swiftshader_icd.json ./build/debug/apps/game/tile2d_game --headless ...
+
+## The game on top of the framework
+
+`games/mine` is a sandbox/industrial-automation game in progress: a top-down 2D mine of stacked
+layers, where every layer generates its own resources and structures and asks the player to deliver
+raw materials or products in a specific way before the next layer opens. Its requirements, the
+engineering constraints and the list of content the designer still has to supply live in
+[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
+
+What exists today (M1) is the shell, deliberately free of any game content:
+
+    ./build/debug/games/mine/mine_game                      # start screen
+    ./build/debug/games/mine/mine_game --world endless --seed 4242 --start 1
+
+![Start screen](games/mine/docs/images/start_screen.png)
+
+![Session screen](games/mine/docs/images/session_screen.png)
+
+* `mine_core` holds the session description and the start screen model and depends on nothing but
+  `t2d::core`, so the whole screen is tested in milliseconds without a window or a GPU
+  (`test_mine_menu`: navigation, seed editing, what each row starts).
+* `mine_app` is the Ore application shell; `begin_session()` is the single place where the layer
+  data, the server thread and the client will be created once content exists.
+* No resource, structure, recipe or machine is hard coded anywhere: those are the designer's data.
 
 ## Protocol
 
