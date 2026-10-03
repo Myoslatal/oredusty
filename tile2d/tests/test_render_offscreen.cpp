@@ -3,6 +3,7 @@
 // screen stayed empty" can never happen again. Skips (instead of failing) where there is no device.
 #include <t2d/render/atlas.h>
 #include <t2d/render/sprite_batch.h>
+#include <t2d/render/tilemap_renderer.h>
 #include <t2d/sim/tileset.h>
 
 #include <ore/ore.h>
@@ -256,6 +257,83 @@ T2D_TEST(a_rectangle_sampled_from_a_single_white_texel_is_flat_and_opaque) {
                       "the pixel at {},{} came out ({}, {}, {}, {}) instead of opaque green", point[0], point[1],
                       pixel.r, pixel.g, pixel.b, pixel.a);
     }
+}
+
+namespace {
+
+/// Draws \p map through the tilemap renderer and reads one pixel back.
+[[nodiscard]] ore::Color render_map_pixel(Fixture& fixture, SpriteBatch& batch, const TileMap& map,
+                                          ore::rhi::Texture& atlas, ore::rhi::Sampler& sampler,
+                                          TileMap::LayerMask mask, u32 pixel_x, u32 pixel_y) {
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+    fixture.renderer->begin_pass(clear, 1.0f);
+    batch.begin(frame, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, atlas, sampler.handle());
+    TilemapRenderer renderer;
+    renderer.draw_map(batch, map, Tileset::default_platformer(), Aabb2{Vec2{0.0f, 0.0f}, Vec2{64.0f, 64.0f}}, mask);
+    batch.end();
+    fixture.renderer->end_pass();
+    fixture.renderer->end_frame();
+    fixture.renderer->wait_idle();
+    const ore::Image shot = fixture.context->read_render_target(fixture.renderer->target());
+    if (shot.empty()) return {};
+    return ore::Color::from_packed(shot.pixel(pixel_x, pixel_y));
+}
+
+[[nodiscard]] bool same_color(const ore::Color& a, const ore::Color& b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+} // namespace
+
+T2D_TEST(the_higher_map_layer_is_drawn_over_the_lower_one) {
+    Fixture fixture = make_fixture(64);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_tileset_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    // The same cell on two map layers: stone on the ground layer, dirt on the structures layer. Cell
+    // (1,1) covers world 16..32, so its centre lands on pixel (24,24) of a 64x64 target.
+    TileMap both(4, 4, 16.0f, false, 2);
+    both.set(0, 1, 1, 1);
+    both.set(1, 1, 1, 2);
+    TileMap stone_only(4, 4, 16.0f, false, 1);
+    stone_only.set(0, 1, 1, 1);
+    TileMap dirt_only(4, 4, 16.0f, false, 1);
+    dirt_only.set(0, 1, 1, 2);
+
+    const ore::Color stone =
+        render_map_pixel(fixture, *batch, stone_only, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
+    const ore::Color dirt =
+        render_map_pixel(fixture, *batch, dirt_only, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
+    // Two different tiles, or nothing below proves anything.
+    T2D_CHECK_FALSE(same_color(stone, dirt));
+
+    const ore::Color layered =
+        render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
+    const ore::Color lower =
+        render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::layer_mask(0), 24, 24);
+    const ore::Color upper =
+        render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::layer_mask(1), 24, 24);
+
+    // Both layers drawn: the higher one covers the lower one. One layer at a time: exactly that tile.
+    T2D_CHECK_MSG(same_color(layered, dirt), "the layered cell was ({}, {}, {}), the top tile ({}, {}, {})",
+                  layered.r, layered.g, layered.b, dirt.r, dirt.g, dirt.b);
+    T2D_CHECK_MSG(same_color(lower, stone), "the ground layer cell was ({}, {}, {})", lower.r, lower.g, lower.b);
+    T2D_CHECK_MSG(same_color(upper, dirt), "the structure layer cell was ({}, {}, {})", upper.r, upper.g, upper.b);
+
+    // An empty cell stays clear, and a mask that names no layer of this map draws nothing at all.
+    const ore::Color empty =
+        render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::kAllLayers, 56, 56);
+    const ore::Color masked_out =
+        render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::layer_mask(5), 24, 24);
+    T2D_CHECK_EQ(empty.r + empty.g + empty.b, 0);
+    T2D_CHECK_EQ(masked_out.r + masked_out.g + masked_out.b, 0);
 }
 
 T2D_TEST_MAIN

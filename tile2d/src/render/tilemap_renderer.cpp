@@ -42,32 +42,42 @@ void TilemapRenderer::draw_tile(SpriteBatch& batch, const TileMap& map, TileId i
     ++stats_.tiles_drawn;
 }
 
-void TilemapRenderer::draw_map(SpriteBatch& batch, const TileMap& map, const Tileset& tileset, const Aabb2& view) {
+void TilemapRenderer::draw_map(SpriteBatch& batch, const TileMap& map, const Tileset& tileset, const Aabb2& view,
+                               TileMap::LayerMask mask) {
     const TileRect visible = map.visible_tiles(view);
-    stats_.layers = 3;
+    u32 drawn_layers = 0;
 
-    for (u32 layer_index = 0; layer_index < 3; ++layer_index) {
-        const auto layer = static_cast<TileLayer>(layer_index);
-        const u32 tint = layer == TileLayer::Background ? options_.background_tint
-                                                       : (layer == TileLayer::Foreground ? options_.foreground_tint
-                                                                                        : 0xFFFFFFFFu);
-        for (i32 y = visible.y; y < visible.bottom(); ++y) {
-            for (i32 x = visible.x; x < visible.right(); ++x) {
-                if (!map.in_bounds(x, y)) continue;
-                const TileId id = map.at(x, y);
-                ++stats_.tiles_considered;
-                if (id == kEmptyTile) {
-                    ++stats_.tiles_culled;
-                    continue;
+    // Map layers are drawn in order, so a higher layer covers a lower one: that is what makes a
+    // ground layer, an ore layer and a structures layer compose into one picture.
+    for (i32 map_layer = 0; map_layer < map.layer_count(); ++map_layer) {
+        if ((mask & TileMap::layer_mask(map_layer)) == 0u) continue;
+        ++drawn_layers;
+        for (u32 layer_index = 0; layer_index < 3; ++layer_index) {
+            const auto layer = static_cast<TileLayer>(layer_index);
+            const u32 tint = layer == TileLayer::Background ? options_.background_tint
+                                                           : (layer == TileLayer::Foreground
+                                                                  ? options_.foreground_tint
+                                                                  : 0xFFFFFFFFu);
+            for (i32 y = visible.y; y < visible.bottom(); ++y) {
+                for (i32 x = visible.x; x < visible.right(); ++x) {
+                    if (!map.in_bounds(x, y)) continue;
+                    const TileId id = map.at(map_layer, x, y);
+                    ++stats_.tiles_considered;
+                    if (id == kEmptyTile) {
+                        ++stats_.tiles_culled;
+                        continue;
+                    }
+                    if (layer_of(tileset, id) != layer) {
+                        ++stats_.tiles_culled;
+                        continue;
+                    }
+                    draw_tile(batch, map, id, x, y, tint);
                 }
-                if (layer_of(tileset, id) != layer) {
-                    ++stats_.tiles_culled;
-                    continue;
-                }
-                draw_tile(batch, map, id, x, y, tint);
             }
         }
     }
+    stats_.layers = 3u * drawn_layers;
+    stats_.map_layers = drawn_layers;
 }
 
 void TilemapRenderer::draw_players(SpriteBatch& batch, const std::vector<RenderPlayer>& players, PlayerId local_id,

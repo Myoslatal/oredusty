@@ -52,7 +52,14 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    if (const auto layers = cli.uint_value("tile-layers"); layers.has_value()) {
+        options.tile_layers = static_cast<mine::i32>(*layers);
+    }
+    if (const auto layer = cli.uint_value("layer"); layer.has_value()) {
+        options.start_layer = static_cast<mine::i32>(*layer);
+    }
     if (const auto fill = cli.value("fill"); fill.has_value()) options.fill = *fill;
+    if (const auto fill_layer = cli.value("fill-layer"); fill_layer.has_value()) options.fill_layer = *fill_layer;
     if (const auto layout = cli.value("layout"); layout.has_value()) options.layout_path = *layout;
     if (const auto save = cli.value("save-layout"); save.has_value()) options.save_layout_path = *save;
     if (const auto dump = cli.bool_value("dump-layer"); dump.has_value()) options.dump_layer = *dump;

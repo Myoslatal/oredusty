@@ -51,7 +51,7 @@ en::
     sandbox.content.none:"NONE (--content)"
     sandbox.layout:"LAYOUT"
     sandbox.layout.none:"NONE (--layout)"
-    sandbox.hint.keys:"ARROWS MOVE   SPACE PAINT   X ERASE   TAB PALETTE   +/- ZOOM   C CENTRE"
+    sandbox.hint.keys:"ARROWS MOVE   SPACE PAINT   X ERASE   TAB PALETTE   [ ] LAYER   +/- ZOOM   C CENTRE"
     sandbox.hint.keys2:"F5 RELOAD CONTENT   F2 SAVE   F3 LOAD   F4 DUMP   ESC BACK"
     sandbox.reloaded:"RELOAD: +{} -{}   {} CELLS REMAPPED   {} LOST"
     sandbox.reload.failed:"RELOAD FAILED: {}"
@@ -63,6 +63,8 @@ en::
     sandbox.dumped:"DUMPED {} CELLS TO THE LOG"
     sandbox.no.path:"NO --layout PATH GIVEN"
     sandbox.no.content:"NO CONTENT FILE GIVEN: THE LAYER WILL STAY EMPTY"
+    sandbox.layer:"TILE LAYER"
+    sandbox.layer.filled:"LAYER FILLED"
     sandbox.fill.unknown:"UNKNOWN FILL '{}' (none, bands, scatter)"
 
 zh-Hans::
@@ -110,7 +112,7 @@ zh-Hans::
     sandbox.content.none:"无（--content）"
     sandbox.layout:"布局文件"
     sandbox.layout.none:"无（--layout）"
-    sandbox.hint.keys:"方向键移动   空格放置   X 擦除   TAB 切换内容   +/- 缩放   C 居中"
+    sandbox.hint.keys:"方向键移动   空格放置   X 擦除   TAB 切换内容   [ ] 切换瓦片层   +/- 缩放   C 居中"
     sandbox.hint.keys2:"F5 重新加载内容   F2 保存   F3 读取   F4 导出日志   ESC 返回"
     sandbox.reloaded:"重新加载：+{} -{}   {} 个格子已重定位   {} 个丢失"
     sandbox.reload.failed:"重新加载失败：{}"
@@ -122,6 +124,8 @@ zh-Hans::
     sandbox.dumped:"已导出 {} 个格子到日志"
     sandbox.no.path:"未给出 --layout 路径"
     sandbox.no.content:"未给出内容文件：网格将保持为空"
+    sandbox.layer:"瓦片层"
+    sandbox.layer.filled:"本层已放置"
     sandbox.fill.unknown:"未知的填充方式 '{}'（none、bands、scatter）"
 
 zh-Hant::
@@ -169,7 +173,7 @@ zh-Hant::
     sandbox.content.none:"無（--content）"
     sandbox.layout:"佈局檔案"
     sandbox.layout.none:"無（--layout）"
-    sandbox.hint.keys:"方向鍵移動   空白鍵放置   X 擦除   TAB 切換內容   +/- 縮放   C 居中"
+    sandbox.hint.keys:"方向鍵移動   空白鍵放置   X 擦除   TAB 切換內容   [ ] 切換瓦片層   +/- 縮放   C 居中"
     sandbox.hint.keys2:"F5 重新載入內容   F2 儲存   F3 讀取   F4 匯出日誌   ESC 返回"
     sandbox.reloaded:"重新載入：+{} -{}   {} 個格子已重定位   {} 個遺失"
     sandbox.reload.failed:"重新載入失敗：{}"
@@ -181,4 +185,6 @@ zh-Hant::
     sandbox.dumped:"已匯出 {} 個格子到日誌"
     sandbox.no.path:"未給出 --layout 路徑"
     sandbox.no.content:"未給出內容檔案：網格將保持為空"
+    sandbox.layer:"瓦片層"
+    sandbox.layer.filled:"本層已放置"
     sandbox.fill.unknown:"未知的填充方式 '{}'（none、bands、scatter）"

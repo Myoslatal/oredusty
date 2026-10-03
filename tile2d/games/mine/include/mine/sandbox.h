@@ -1,8 +1,8 @@
 // Mine - the single layer sandbox: a content debugger, not a game mode.
 //
-// The sandbox shows exactly one layer, with no demands and no progression, and it holds no content of
-// its own. The palette is whatever the designer's data registered (docs/GAME_DESIGN.md section 7); with
-// an empty registry the layer stays empty and says so. What it is for is the loop a designer actually
+// The sandbox shows one map, with no demands and no progression, and it holds no content of its own.
+// The palette is whatever the designer's data registered (docs/GAME_DESIGN.md section 7); with an
+// empty registry the map stays empty and says so. What it is for is the loop a designer actually
 // runs - edit the data file, reload it, look at the result:
 //
 //   * the palette lists the registered content with the ids the registry handed out, so the names and
@@ -12,6 +12,11 @@
 //     silently turn one structure into another;
 //   * content that disappeared is reported, and its cells are marked missing instead of being handed to
 //     whatever now happens to hold that id.
+//
+// The map has one or more *tile layers* (the same concept the framework's TileMap has): what a layer
+// means is the designer's business, and the sandbox only numbers them. Painting writes into the active
+// layer, erasing removes what is on top, and the screen draws the stack bottom to top so a ground
+// layer, an ore layer and a structures layer can be told apart.
 //
 // Nothing in this file is content: no resource, structure, recipe or machine is named here, and none
 // ever will be.
@@ -45,7 +50,7 @@ struct GridPos {
     friend bool operator==(const GridPos&, const GridPos&) = default;
 };
 
-/// One cell of the sandbox layer. The name is kept beside the id on purpose: it is what makes the cell
+/// One cell of one tile layer. The name is kept beside the id on purpose: it is what makes the cell
 /// re-pointable after the registry changed, and what lets the screen say "this was sample_a and it is
 /// gone" instead of showing a bare 0.
 struct SandboxCell {
@@ -106,28 +111,44 @@ struct SandboxLoadReport {
     usize unknown_kind = 0; ///< cells whose saved kind is not one a cell can hold
 };
 
-/// The single layer sandbox: a grid, a palette built from the registry, a cursor and a camera. Pure
-/// logic - no window, no GPU, no clock - so the whole model is testable in milliseconds.
+/// One map with several tile layers: a grid per layer, a palette built from the registry, a cursor, a
+/// camera and an active layer. Pure logic - no window, no GPU, no clock - so the whole model is
+/// testable in milliseconds.
 class SandboxModel {
 public:
-    /// A layer larger than this is refused rather than allocated: a corrupt layout file must not be
-    /// able to ask for a gigabyte.
+    /// A map larger than this is refused rather than allocated: a corrupt layout file must not be able
+    /// to ask for a gigabyte.
     static constexpr u32 kMaxDimension = 1024;
     static constexpr u32 kDefaultWidth = 40;
     static constexpr u32 kDefaultHeight = 24;
+    /// Mirrors TileMap::kMaxLayers: how many tile layers a sandbox map can hold.
+    static constexpr i32 kMaxLayers = 32;
 
-    SandboxModel(u32 width = kDefaultWidth, u32 height = kDefaultHeight);
+    SandboxModel(u32 width = kDefaultWidth, u32 height = kDefaultHeight, i32 layers = 1);
 
-    // --- the layer ---
+    // --- the map ---
     [[nodiscard]] u32 width() const { return width_; }
     [[nodiscard]] u32 height() const { return height_; }
+    [[nodiscard]] i32 layer_count() const { return layers_; }
     [[nodiscard]] bool inside(GridPos pos) const;
+    /// The topmost non-empty cell at \p pos: what the inspector shows, and what erase() removes.
     [[nodiscard]] const SandboxCell& cell(GridPos pos) const;
+    [[nodiscard]] const SandboxCell& cell(i32 layer, GridPos pos) const;
+    /// Writes into the active layer.
     void set_cell(GridPos pos, const SandboxCell& value);
-    void clear_cells();
-    [[nodiscard]] usize filled_cells() const;
-    /// Resizes, keeping the cells that still fit.
+    void set_cell(i32 layer, GridPos pos, const SandboxCell& value);
+    void clear_cells();                                   ///< every layer
+    void clear_layer(i32 layer);
+    [[nodiscard]] usize filled_cells() const;             ///< every layer
+    [[nodiscard]] usize filled_cells(i32 layer) const;
+    /// Resizes, keeping the cells of every layer that still fit.
     void resize(u32 width, u32 height);
+
+    // --- the active layer (where the brush writes) ---
+    [[nodiscard]] i32 active_layer() const { return active_layer_; }
+    void set_active_layer(i32 layer);
+    /// Moves the active layer, wrapping at both ends (the way a key press walks the stack).
+    void cycle_layer(i32 delta);
 
     // --- the palette (the designer's data, as registered) ---
     /// Rebuilds the palette from \p registry and returns how many entries it holds. The selection is
@@ -146,11 +167,12 @@ public:
     // --- the cursor and the brush ---
     [[nodiscard]] GridPos cursor() const { return cursor_; }
     void set_cursor(GridPos pos);
-    /// Moves the cursor, clamped to the layer: the cursor always points at a cell that exists.
+    /// Moves the cursor, clamped to the map: the cursor always points at a cell that exists.
     void move_cursor(i32 dx, i32 dy);
-    /// Places the selected palette entry at the cursor; false when there is nothing to place.
+    /// Places the selected palette entry at the cursor, on the active layer; false when there is
+    /// nothing to place or the cell already holds it.
     bool paint();
-    /// Empties the cursor cell; false when it was already empty.
+    /// Empties the topmost non-empty cell at the cursor; false when it is already empty everywhere.
     bool erase();
 
     // --- the camera (screen space) ---
@@ -164,12 +186,12 @@ public:
     void zoom_at(Vec2 anchor, f32 factor);
     [[nodiscard]] GridPos cell_at_screen(Vec2 point) const;
     [[nodiscard]] Vec2 screen_of_cell(GridPos cell) const;
-    /// Centres the whole layer in a viewport of \p viewport pixels.
+    /// Centres the whole map in a viewport of \p viewport pixels.
     void center_view(Vec2 viewport);
     /// Scrolls the least amount that brings \p cell inside a viewport, keeping a margin of one cell.
     void scroll_to_show(GridPos cell, Vec2 viewport);
 
-    // --- content-agnostic debug fills ---
+    // --- content-agnostic debug fills (they fill the active layer) ---
     /// One horizontal band per palette entry, filled with it: a legible catalogue of what is registered.
     void fill_bands();
     /// A deterministic scatter of palette entries, from \p seed: what a layer of this content could
@@ -187,23 +209,29 @@ public:
     [[nodiscard]] const std::vector<std::string>& content_paths() const { return content_paths_; }
     void set_content_paths(std::vector<std::string> paths) { content_paths_ = std::move(paths); }
 
-    /// The layer as a save would store it: the cells as ids, plus the name -> id table in force, so a
-    /// later version can translate them back by name (registry.h).
+    /// The map as a save would store it: every layer's cells as ids, plus the name -> id table in
+    /// force, so a later version can translate them back by name (registry.h).
     [[nodiscard]] std::vector<u8> serialize(const ContentRegistry& registry) const;
     /// Loads a saved layout and translates its ids into the running registry. A file it cannot fully
-    /// trust is refused and the layer is left untouched; a file that loads rebuilds the palette from
-    /// \p registry, so the layer is ready to paint on.
+    /// trust is refused and the map is left untouched; a file that loads rebuilds the palette from
+    /// \p registry, so the map is ready to paint on.
     SandboxLoadReport deserialize(t2d::ConstSpan<const u8> data, const ContentRegistry& registry);
 
-    /// A readable listing of the layer: coordinates, kind, id and name per placed cell, plus the
+    /// A readable listing of the map: coordinates, layer, kind, id and name per placed cell, plus the
     /// palette. This is what goes into a bug report.
     [[nodiscard]] std::string dump_text() const;
 
 private:
-    [[nodiscard]] usize index(GridPos pos) const { return static_cast<usize>(pos.y) * width_ + static_cast<usize>(pos.x); }
+    [[nodiscard]] usize index(i32 layer, GridPos pos) const {
+        return static_cast<usize>(layer) * width_ * height_ + static_cast<usize>(pos.y) * width_ +
+               static_cast<usize>(pos.x);
+    }
 
     u32 width_ = kDefaultWidth;
     u32 height_ = kDefaultHeight;
+    i32 layers_ = 1;
+    i32 active_layer_ = 0;
+    /// Layer major: layer * width * height + y * width + x.
     std::vector<SandboxCell> cells_;
     std::vector<PaletteEntry> palette_;
     usize selected_ = 0;

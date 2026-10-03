@@ -454,32 +454,34 @@ T2D_TEST(a_layout_file_it_cannot_trust_is_refused_and_nothing_moves) {
     trailing.push_back(0u);
     refused(span_of(trailing), "trailing");
 
-    // A layer size that would ask for a gigabyte, and a cell count that does not match it.
+    // A map size that would ask for a gigabyte, and a cell count that does not match it.
+    const auto write_header = [](t2d::ByteWriter& writer, u32 width, u32 height, u32 layers, u32 count) {
+        writer.write_u32(0x3242534Du);
+        writer.write_u8(2u);
+        writer.write_varint(width);
+        writer.write_varint(height);
+        writer.write_varint(layers);
+        writer.write_varint(count);
+    };
     std::vector<u8> absurd;
     t2d::ByteWriter writer(absurd);
-    writer.write_u32(0x3142534Du);
-    writer.write_u8(1u);
-    writer.write_varint(100000u);
-    writer.write_varint(100000u);
-    writer.write_varint(1u);
+    write_header(writer, 100000u, 100000u, 1u, 1u);
     refused(span_of(absurd), "size");
 
     std::vector<u8> mismatched;
     t2d::ByteWriter mismatch_writer(mismatched);
-    mismatch_writer.write_u32(0x3142534Du);
-    mismatch_writer.write_u8(1u);
-    mismatch_writer.write_varint(2u);
-    mismatch_writer.write_varint(2u);
-    mismatch_writer.write_varint(5u);
+    write_header(mismatch_writer, 2u, 2u, 1u, 5u);
     refused(span_of(mismatched), "cell count");
+
+    // A layer count no mask could address.
+    std::vector<u8> absurd_layers;
+    t2d::ByteWriter layers_writer(absurd_layers);
+    write_header(layers_writer, 1u, 1u, 33u, 1u);
+    refused(span_of(absurd_layers), "layer count");
 
     std::vector<u8> bad_kind;
     t2d::ByteWriter kind_writer(bad_kind);
-    kind_writer.write_u32(0x3142534Du);
-    kind_writer.write_u8(1u);
-    kind_writer.write_varint(1u);
-    kind_writer.write_varint(1u);
-    kind_writer.write_varint(1u);
+    write_header(kind_writer, 1u, 1u, 1u, 1u);
     kind_writer.write_u8(200u);
     kind_writer.write_varint(1u);
     refused(span_of(bad_kind), "unknown kind");
@@ -487,11 +489,7 @@ T2D_TEST(a_layout_file_it_cannot_trust_is_refused_and_nothing_moves) {
     // A table that is not a table: the cells read fine, the name -> id table does not.
     std::vector<u8> bad_table;
     t2d::ByteWriter table_writer(bad_table);
-    table_writer.write_u32(0x3142534Du);
-    table_writer.write_u8(1u);
-    table_writer.write_varint(1u);
-    table_writer.write_varint(1u);
-    table_writer.write_varint(1u);
+    write_header(table_writer, 1u, 1u, 1u, 1u);
     table_writer.write_u8(0xFFu);
     const u8 garbage[4] = {0xDEu, 0xADu, 0xBEu, 0xEFu};
     table_writer.write_varint(4u);
@@ -513,10 +511,10 @@ T2D_TEST(the_dump_lists_the_cells_and_the_palette) {
     paint_named(model, GridPos{2, 3}, ContentKind::Structure, "sample_a", registry);
 
     const std::string dump = model.dump_text();
-    T2D_CHECK(dump.find("sandbox layer 4x4") != std::string::npos);
+    T2D_CHECK(dump.find("sandbox map 4x4, 1 tile layer(s)") != std::string::npos);
     T2D_CHECK(dump.find("content.ecfg") != std::string::npos);
     T2D_CHECK(dump.find("palette: 3 entries") != std::string::npos);
-    T2D_CHECK(dump.find("2,3 structure #1 sample_a") != std::string::npos);
+    T2D_CHECK(dump.find("L0 2,3 structure #1 sample_a") != std::string::npos);
     T2D_CHECK(dump.find("sample_c") != std::string::npos);
     T2D_CHECK(dump.find("(missing)") == std::string::npos);
 }
@@ -592,6 +590,190 @@ T2D_TEST(resizing_keeps_what_still_fits) {
     T2D_CHECK_EQ(model.width(), 6u);
     T2D_CHECK_EQ(model.cell(GridPos{0, 0}).name, std::string("sample_b"));
     T2D_CHECK_EQ(model.cell(GridPos{5, 5}).name, std::string{});
+}
+
+T2D_TEST(the_map_has_tile_layers_and_the_brush_writes_into_the_active_one) {
+    ContentRegistry registry;
+    load(registry, kContentV1);
+    SandboxModel model(8, 6, 3);
+    T2D_CHECK_EQ(model.layer_count(), 3);
+    T2D_CHECK_EQ(model.active_layer(), 0);
+
+    model.rebuild_palette(registry);
+    model.set_cursor(GridPos{2, 2});
+    T2D_CHECK(model.paint());                                  // sample_a on layer 0
+    T2D_CHECK_EQ(model.cell(0, GridPos{2, 2}).name, std::string("sample_a"));
+    T2D_CHECK_EQ(model.cell(1, GridPos{2, 2}).name, std::string{});
+
+    model.set_active_layer(2);
+    model.cycle_palette(2);                                    // sample_c, a machine
+    T2D_CHECK(model.paint());
+    T2D_CHECK_EQ(model.cell(2, GridPos{2, 2}).name, std::string("sample_c"));
+    T2D_CHECK_EQ(model.cell(0, GridPos{2, 2}).name, std::string("sample_a"));   // layer 0 is untouched
+
+    // The unqualified cell() is the topmost non-empty one: what the screen shows is what it reports.
+    T2D_CHECK_EQ(model.cell(GridPos{2, 2}).name, std::string("sample_c"));
+    model.clear_layer(2);
+    T2D_CHECK_EQ(model.cell(GridPos{2, 2}).name, std::string("sample_a"));      // only layer 0 is left
+
+    // Painting on a higher layer puts that layer on top of the stack.
+    model.set_active_layer(1);
+    model.cycle_palette(-1);                                   // sample_b
+    T2D_CHECK(model.paint());
+    T2D_CHECK_EQ(model.cell(1, GridPos{2, 2}).name, std::string("sample_b"));
+    T2D_CHECK_EQ(model.cell(GridPos{2, 2}).name, std::string("sample_b"));
+    model.set_active_layer(2);
+    model.cycle_palette(1);                                    // sample_c again
+    T2D_CHECK(model.paint());
+    T2D_CHECK_EQ(model.cell(GridPos{2, 2}).name, std::string("sample_c"));
+
+    T2D_CHECK_EQ(model.filled_cells(), 3u);
+    T2D_CHECK_EQ(model.filled_cells(0), 1u);
+    T2D_CHECK_EQ(model.filled_cells(1), 1u);
+    T2D_CHECK_EQ(model.filled_cells(2), 1u);
+    T2D_CHECK_EQ(model.filled_cells(7), 0u);                   // a layer that does not exist
+
+    // Clearing one layer leaves the others alone.
+    model.clear_layer(1);
+    T2D_CHECK_EQ(model.filled_cells(), 2u);
+    T2D_CHECK_EQ(model.cell(GridPos{2, 2}).name, std::string("sample_c"));
+    T2D_CHECK_EQ(model.cell(1, GridPos{2, 2}).name, std::string{});
+    model.clear_cells();
+    T2D_CHECK_EQ(model.filled_cells(), 0u);
+
+    // Layer numbers wrap, and the count is clamped to what the framework's maps can hold.
+    model.set_active_layer(0);
+    model.cycle_layer(-1);
+    T2D_CHECK_EQ(model.active_layer(), 2);
+    model.cycle_layer(1);
+    T2D_CHECK_EQ(model.active_layer(), 0);
+    T2D_CHECK_EQ(SandboxModel(4, 4, 99).layer_count(), SandboxModel::kMaxLayers);
+    T2D_CHECK_EQ(SandboxModel(4, 4, 0).layer_count(), 1);
+    T2D_CHECK_EQ(SandboxModel(4, 4).layer_count(), 1);         // the one layer default
+
+    // Writing to a layer that does not exist is refused, not redirected.
+    model.set_cell(9, GridPos{1, 1}, SandboxCell{ContentKind::Structure, 1, "sample_a"});
+    T2D_CHECK_EQ(model.filled_cells(), 0u);
+}
+
+T2D_TEST(erasing_removes_what_is_on_top) {
+    ContentRegistry registry;
+    load(registry, kContentV1);
+    SandboxModel model(4, 4, 2);
+    model.rebuild_palette(registry);
+    model.set_cursor(GridPos{1, 1});
+    paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);   // active layer 0
+    model.set_active_layer(1);
+    paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_b", registry);
+
+    // Erase takes the topmost cell, whichever layer holds it: the visible one goes first.
+    T2D_CHECK(model.erase());
+    T2D_CHECK(model.cell(1, GridPos{1, 1}).empty());
+    T2D_CHECK_EQ(model.cell(0, GridPos{1, 1}).name, std::string("sample_a"));
+    T2D_CHECK(model.erase());
+    T2D_CHECK(model.cell(0, GridPos{1, 1}).empty());
+    T2D_CHECK_FALSE(model.erase());
+    T2D_CHECK_EQ(model.filled_cells(), 0u);
+}
+
+T2D_TEST(a_layout_keeps_every_tile_layer) {
+    ContentRegistry registry;
+    load(registry, kContentV1);
+    SandboxModel model(6, 5, 3);
+    model.rebuild_palette(registry);
+    paint_named(model, GridPos{0, 0}, ContentKind::Structure, "sample_a", registry);
+    model.set_active_layer(1);
+    paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_b", registry);
+    paint_named(model, GridPos{5, 4}, ContentKind::Structure, "sample_b", registry);
+    model.set_active_layer(2);
+    paint_named(model, GridPos{2, 2}, ContentKind::Machine, "sample_c", registry);
+    model.set_active_layer(2);
+
+    const std::vector<u8> bytes = model.serialize(registry);
+    SandboxModel loaded(1, 1);
+    const SandboxLoadReport report = loaded.deserialize(span_of(bytes), registry);
+    T2D_CHECK_MSG(report.ok, "{}", report.error);
+    T2D_CHECK_EQ(report.translated, 4u);
+    T2D_CHECK_EQ(report.missing, 0u);
+    T2D_CHECK_EQ(loaded.layer_count(), 3);
+    T2D_CHECK_EQ(loaded.active_layer(), 0);      // a loaded map starts on its base layer
+    T2D_CHECK_EQ(loaded.width(), 6u);
+    T2D_CHECK_EQ(loaded.height(), 5u);
+    for (i32 layer = 0; layer < 3; ++layer) {
+        for (u32 y = 0; y < 5; ++y) {
+            for (u32 x = 0; x < 6; ++x) {
+                const GridPos pos{static_cast<i32>(x), static_cast<i32>(y)};
+                T2D_CHECK(loaded.cell(layer, pos) == model.cell(layer, pos));
+            }
+        }
+    }
+    T2D_CHECK_EQ(loaded.filled_cells(0), 1u);
+    T2D_CHECK_EQ(loaded.filled_cells(1), 2u);
+    T2D_CHECK_EQ(loaded.filled_cells(2), 1u);
+
+    // The dump says which layer each cell is on.
+    const std::string dump = loaded.dump_text();
+    T2D_CHECK(dump.find("3 tile layer(s)") != std::string::npos);
+    T2D_CHECK(dump.find("L0 0,0 structure #1 sample_a") != std::string::npos);
+    T2D_CHECK(dump.find("L1 1,1 structure #2 sample_b") != std::string::npos);
+    T2D_CHECK(dump.find("L2 2,2 machine #1 sample_c") != std::string::npos);
+}
+
+T2D_TEST(a_reload_repoints_cells_on_every_tile_layer) {
+    ContentRegistry registry;
+    load(registry, kContentV1);
+    SandboxModel model(6, 5, 2);
+    model.rebuild_palette(registry);
+    paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);
+    model.set_active_layer(1);
+    paint_named(model, GridPos{2, 2}, ContentKind::Structure, "sample_b", registry);
+
+    // v2 inserts a structure at the top of the table: both layers' ids move, both must follow.
+    const SandboxReloadReport report = model.reload_texts(registry, {kContentV2}, {"v2.ecfg"});
+    T2D_CHECK(report.parsed);
+    T2D_CHECK_EQ(report.remapped_cells, 2u);
+    T2D_CHECK_EQ(report.lost_cells, 0u);
+    T2D_CHECK_EQ(model.cell(0, GridPos{1, 1}).id, registry.find(ContentKind::Structure, "sample_a"));
+    T2D_CHECK_EQ(model.cell(1, GridPos{2, 2}).id, registry.find(ContentKind::Structure, "sample_b"));
+    T2D_CHECK_EQ(model.cell(0, GridPos{1, 1}).name, std::string("sample_a"));
+    T2D_CHECK_EQ(model.cell(1, GridPos{2, 2}).name, std::string("sample_b"));
+
+    // And content that disappeared is marked missing wherever it sits.
+    const SandboxReloadReport removed = model.reload_texts(registry, {kContentV3}, {"v3.ecfg"});
+    T2D_CHECK_EQ(removed.lost_cells, 1u);
+    T2D_CHECK(model.cell(1, GridPos{2, 2}).missing());
+    T2D_CHECK_FALSE(model.cell(0, GridPos{1, 1}).missing());
+}
+
+T2D_TEST(the_debug_fills_only_touch_the_active_layer) {
+    ContentRegistry registry;
+    load(registry, kContentV1);
+    SandboxModel model(12, 8, 2);
+    model.rebuild_palette(registry);
+    model.set_active_layer(1);
+    model.fill_bands();
+    T2D_CHECK_EQ(model.filled_cells(1), 12u * 8u);
+    T2D_CHECK_EQ(model.filled_cells(0), 0u);
+    T2D_CHECK_EQ(model.cell(GridPos{0, 0}).name, std::string("sample_a"));   // topmost is layer 1
+
+    model.fill_scatter(7u);
+    const std::string first = model.dump_text();
+    T2D_CHECK_GT(model.filled_cells(1), 0u);
+    T2D_CHECK_EQ(model.filled_cells(0), 0u);
+    model.fill_scatter(7u);
+    T2D_CHECK_EQ(model.dump_text(), first);
+
+    // A fill with nothing in the palette empties the active layer and leaves the others alone.
+    model.set_active_layer(0);
+    paint_named(model, GridPos{3, 3}, ContentKind::Structure, "sample_a", registry);
+    T2D_CHECK_EQ(model.filled_cells(0), 1u);
+    const usize scattered = model.filled_cells(1);
+    T2D_CHECK_GT(scattered, 0u);
+    ContentRegistry empty;
+    model.rebuild_palette(empty);
+    model.fill_scatter(7u);
+    T2D_CHECK_EQ(model.filled_cells(0), 0u);      // the active layer was cleared
+    T2D_CHECK_EQ(model.filled_cells(1), scattered);
 }
 
 T2D_TEST_MAIN

@@ -46,6 +46,11 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
 * **Fixed timestep, deterministic simulation.** `World` advances one 60 Hz tick at a time; the client
   predicts its own player with exactly the same code (`World::step_player`) and replays
   unacknowledged commands after every authoritative snapshot (reconciliation).
+* **A map has as many tile layers as the game needs.** Layers are independent grids of the same
+  size, drawn bottom to top, and every collision query takes a `LayerMask` — so "walls and machines
+  block, the ground layer does not" is the game's call, not the map's. Chunks belong to a layer, so a
+  layer nothing was written into costs headers and nothing else; a one layer map is what every caller
+  that does not ask for more still gets.
 * **The client never simulates anybody else.** Remote players are interpolated 100 ms behind the
   newest snapshot; the local player is drawn straight from the prediction, so it costs no extra
   input latency.
@@ -67,7 +72,7 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
 ## Layout
 
     include/t2d/core      types, log, deterministic RNG, 2D math, byte streams, fixed timestep, CLI
-    include/t2d/sim       tilemap (chunked, collision), tileset, world (deterministic), snapshots
+    include/t2d/sim       tilemap (chunked, multi-layer, collision), tileset, world (deterministic), snapshots
     include/t2d/net       ILink, shared-memory link (mmap + lock-free SPSC rings), KCP, UDP transport, protocol
     include/t2d/client    prediction/reconciliation, snapshot interpolation, local client
     include/t2d/server    authoritative server host (own thread)
@@ -86,7 +91,7 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
 
     games/mine/tests/test_mine_menu  the start screen as a state machine (CPU only)
     games/mine/tests/test_sandbox    the single layer sandbox: grid, palette, reload by name, layouts
-    tests/test_tilemap            chunked storage, collision, serialisation, hazards, one-way platforms
+    tests/test_tilemap            chunked storage, tile layers, collision, serialisation, hazards, platforms
     tests/test_snapshot           full/delta wire format, delta merge, a 360 tick reconstruction stream
     tests/test_protocol           framing, every message payload, byte stream limits, the shared channel
     tests/test_kcp                reliability over a lossy/reordering link, 1 MiB transfer, ikcp wire format

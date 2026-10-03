@@ -153,8 +153,11 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"cjk-font", "<path>", "CJK font file used for Chinese text"},
         {"ui-text", "<path>", "interface strings (.ecfg); defaults to assets/text/ui.ecfg"},
         {"content", "<path>", "content data (.ecfg) for the sandbox; repeatable"},
-        {"grid", "<WxH>", "sandbox layer size (default 40x24)"},
+        {"grid", "<WxH>", "sandbox map size (default 40x24)"},
+        {"tile-layers", "<n>", "how many tile layers the sandbox map has (default 1)"},
+        {"layer", "<n>", "which tile layer the sandbox starts on (default 0)"},
         {"fill", "<none|bands|scatter>", "sandbox debug fill: the palette laid out, never content"},
+        {"fill-layer", "<n|all>", "which tile layers the fill writes into (default: the active one)"},
         {"layout", "<path>", "sandbox layout file: loaded at startup, written by F2"},
         {"save-layout", "<path>", "write the sandbox layout once at shutdown (scripted runs)"},
         {"dump-layer", "<0|1>", "write the sandbox layer as text to the log at shutdown"},
@@ -511,9 +514,11 @@ void MineApp::fit_sandbox_view() {
 void MineApp::open_sandbox() {
     // Coming back from the start screen keeps the layer that was painted: a reload re-points every
     // cell by name anyway, so there is nothing to lose by staying.
-    if (sandbox_.width() != options_.grid_width || sandbox_.height() != options_.grid_height) {
-        sandbox_ = SandboxModel(options_.grid_width, options_.grid_height);
+    if (sandbox_.width() != options_.grid_width || sandbox_.height() != options_.grid_height ||
+        sandbox_.layer_count() != std::clamp(options_.tile_layers, 1, SandboxModel::kMaxLayers)) {
+        sandbox_ = SandboxModel(options_.grid_width, options_.grid_height, options_.tile_layers);
     }
+    sandbox_.set_active_layer(options_.start_layer);
     sandbox_.set_content_paths(options_.content_paths);
     if (options_.content_paths.empty()) {
         sandbox_.rebuild_palette(registry_);
@@ -521,15 +526,39 @@ void MineApp::open_sandbox() {
     } else {
         reload_content();
     }
+    // A debug fill first, then the layout file: a map the designer saved on purpose must not be
+    // overwritten by a fill they asked for to see the palette.
+    apply_fill();
     if (!options_.layout_path.empty()) load_layout();
-    if (options_.fill == "bands") sandbox_.fill_bands();
-    else if (options_.fill == "scatter") sandbox_.fill_scatter(session_.seed);
-    else if (!options_.fill.empty() && options_.fill != "none") {
-        set_status(format_localized(locale_.text("sandbox.fill.unknown"), options_.fill), true);
-    }
     fit_sandbox_view();
-    T2D_INFO("sandbox: {}x{} layer, {} palette entries, {} cells filled", sandbox_.width(), sandbox_.height(),
-             sandbox_.palette_count(), sandbox_.filled_cells());
+    T2D_INFO("sandbox: {}x{} map, {} tile layer(s), {} palette entries, {} cells filled", sandbox_.width(),
+             sandbox_.height(), sandbox_.layer_count(), sandbox_.palette_count(), sandbox_.filled_cells());
+}
+
+void MineApp::apply_fill() {
+    if (options_.fill.empty() || options_.fill == "none") return;
+    if (options_.fill != "bands" && options_.fill != "scatter") {
+        set_status(format_localized(locale_.text("sandbox.fill.unknown"), options_.fill), true);
+        return;
+    }
+    // Which layers the fill writes into: the active one by default, all of them when a designer wants
+    // to see how a whole stack composes. Every layer of an "all" scatter gets its own seed, so the
+    // layers are distinguishable instead of three copies of the same picture.
+    i32 first = sandbox_.active_layer();
+    i32 last = first;
+    if (options_.fill_layer == "all") {
+        first = 0;
+        last = sandbox_.layer_count() - 1;
+    } else if (!options_.fill_layer.empty()) {
+        const unsigned long parsed = std::strtoul(options_.fill_layer.c_str(), nullptr, 10);
+        first = last = static_cast<i32>(parsed);
+    }
+    for (i32 layer = first; layer <= last; ++layer) {
+        sandbox_.set_active_layer(layer);
+        if (options_.fill == "bands") sandbox_.fill_bands();
+        else sandbox_.fill_scatter(session_.seed + static_cast<u64>(layer));
+    }
+    sandbox_.set_active_layer(options_.start_layer);
 }
 
 void MineApp::reload_content() {
@@ -631,6 +660,9 @@ void MineApp::handle_sandbox_input() {
         sandbox_.erase();
     }
     if (input.key_pressed(ore::Key::Tab)) sandbox_.cycle_palette(input.shift_down() ? -1 : 1);
+    // Which tile layer the brush writes into: the stack is walked with [ ] or PageUp/PageDown.
+    if (input.key_pressed(ore::Key::LeftBracket) || input.key_pressed(ore::Key::PageDown)) sandbox_.cycle_layer(-1);
+    if (input.key_pressed(ore::Key::RightBracket) || input.key_pressed(ore::Key::PageUp)) sandbox_.cycle_layer(1);
     if (input.key_pressed(ore::Key::Equal) || input.key_pressed(ore::Key::KpAdd)) sandbox_.zoom_at(centre, 1.25f);
     if (input.key_pressed(ore::Key::Minus) || input.key_pressed(ore::Key::KpSubtract)) {
         sandbox_.zoom_at(centre, 0.8f);
@@ -677,31 +709,37 @@ void MineApp::draw_sandbox_screen() {
     // A label budget: a layer full of content would otherwise spend every quad the batch has on text.
     constexpr usize kMaxLabels = 320;
     usize labels = 0;
-    for (i32 y = y0; y <= y1; ++y) {
-        for (i32 x = x0; x <= x1; ++x) {
-            const GridPos pos{x, y};
-            const SandboxCell& value = sandbox_.cell(pos);
-            if (value.empty()) continue;
-            const t2d::Vec2 at = sandbox_.screen_of_cell(pos);
-            const t2d::Aabb2 rect{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + cell, at.y + cell}};
-            const u32 colour = debug_color_for(value.name);
-            batch_->draw_rect(rect, dim_color(colour, 0.45f));
-            if (value.missing()) batch_->draw_rect_outline(rect, 2.0f, kPalette.missing);
-            if (cell < 12.0f || labels >= kMaxLabels) continue;
-            t2d::TextStyle style;
-            style.size_px = static_cast<u16>(std::clamp(cell * 0.5f, 9.0f, 16.0f));
-            style.color = value.missing() ? kPalette.missing : colour;
-            // The name when it fits, otherwise the id: on a small cell the number a save would store
-            // is the more useful label anyway.
-            std::string label = value.name;
-            if (text_->measure(label, fonts_, style).width > cell - 4.0f) {
-                label = std::format("#{}", value.id);
-                if (text_->measure(label, fonts_, style).width > cell - 4.0f) continue;
+    // Bottom to top, so a higher tile layer covers a lower one. The layer the brush writes into is
+    // drawn at full strength with its labels, the others dimmed: that is what makes the stack read as
+    // a stack instead of a pile of unrelated colours.
+    for (i32 layer = 0; layer < sandbox_.layer_count(); ++layer) {
+        const bool active = layer == sandbox_.active_layer();
+        for (i32 y = y0; y <= y1; ++y) {
+            for (i32 x = x0; x <= x1; ++x) {
+                const GridPos pos{x, y};
+                const SandboxCell& value = sandbox_.cell(layer, pos);
+                if (value.empty()) continue;
+                const t2d::Vec2 at = sandbox_.screen_of_cell(pos);
+                const t2d::Aabb2 rect{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + cell, at.y + cell}};
+                const u32 colour = debug_color_for(value.name);
+                batch_->draw_rect(rect, dim_color(colour, active ? 0.45f : 0.20f));
+                if (value.missing()) batch_->draw_rect_outline(rect, 2.0f, kPalette.missing);
+                if (!active || cell < 12.0f || labels >= kMaxLabels) continue;
+                t2d::TextStyle style;
+                style.size_px = static_cast<u16>(std::clamp(cell * 0.5f, 9.0f, 16.0f));
+                style.color = value.missing() ? kPalette.missing : colour;
+                // The name when it fits, otherwise the id: on a small cell the number a save would
+                // store is the more useful label anyway.
+                std::string label = value.name;
+                if (text_->measure(label, fonts_, style).width > cell - 4.0f) {
+                    label = std::format("#{}", value.id);
+                    if (text_->measure(label, fonts_, style).width > cell - 4.0f) continue;
+                }
+                const f32 text_height = static_cast<f32>(style.size_px) * 1.2f;
+                (void)text_->draw(*batch_, label, fonts_, style,
+                                  t2d::Vec2{at.x + 2.0f, at.y + (cell - text_height) * 0.5f});
+                ++labels;
             }
-            const f32 text_height = static_cast<f32>(style.size_px) * 1.2f;
-            (void)text_->draw(*batch_, label, fonts_, style,
-                              t2d::Vec2{at.x + 2.0f, at.y + (cell - text_height) * 0.5f});
-            ++labels;
         }
     }
 
@@ -775,7 +813,7 @@ void MineApp::draw_sandbox_screen() {
 
     f32 label_width = 0.0f;
     for (const char* id : {"sandbox.cursor", "sandbox.cell", "sandbox.grid", "sandbox.filled", "sandbox.content",
-                           "sandbox.layout"}) {
+                           "sandbox.layout", "sandbox.layer", "sandbox.layer.filled"}) {
         label_width = std::max(label_width, text_->measure(locale_.text(id), fonts_, measure_style).width);
     }
     const f32 left = status.min.x + padding;
@@ -783,12 +821,18 @@ void MineApp::draw_sandbox_screen() {
     const f32 value_column = left + label_width + 2.0f * unit_;
     const f32 middle_column = middle + label_width + 2.0f * unit_;
 
+    // The cell is reported as the whole stack at the cursor, topmost first: on a multi layer map
+    // "what is here" is a list, not one tile.
     const SandboxCell& under = sandbox_.cell(sandbox_.cursor());
-    std::string cell_text{locale_.text("sandbox.cell.empty")};
-    if (!under.empty()) {
-        cell_text = std::format("{} #{} {}", content_kind_name(under.kind), under.id, under.name);
-        if (under.missing()) cell_text += std::string(" ") + std::string(locale_.text("sandbox.cell.missing"));
+    std::string cell_text;
+    for (i32 layer = sandbox_.layer_count() - 1; layer >= 0; --layer) {
+        const SandboxCell& value = sandbox_.cell(layer, sandbox_.cursor());
+        if (value.empty()) continue;
+        if (!cell_text.empty()) cell_text += " | ";
+        cell_text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.id, value.name);
+        if (value.missing()) cell_text += std::string(" ") + std::string(locale_.text("sandbox.cell.missing"));
     }
+    if (cell_text.empty()) cell_text = locale_.text("sandbox.cell.empty");
     std::string content_text{locale_.text("sandbox.content.none")};
     if (!sandbox_.content_paths().empty()) {
         content_text.clear();
@@ -818,6 +862,15 @@ void MineApp::draw_sandbox_screen() {
               left_width);
     draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.filled"),
               std::format("{} / {}", sandbox_.filled_cells(),
+                          static_cast<usize>(sandbox_.width()) * sandbox_.height() *
+                              static_cast<usize>(sandbox_.layer_count())),
+              kPalette.text_dim, kPalette.text, right_width);
+    y += line;
+    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.layer"),
+              std::format("{} / {}", sandbox_.active_layer() + 1, sandbox_.layer_count()), kPalette.text_dim,
+              kPalette.accent, left_width);
+    draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.layer.filled"),
+              std::format("{} / {}", sandbox_.filled_cells(sandbox_.active_layer()),
                           static_cast<usize>(sandbox_.width()) * sandbox_.height()),
               kPalette.text_dim, kPalette.text, right_width);
     y += line;

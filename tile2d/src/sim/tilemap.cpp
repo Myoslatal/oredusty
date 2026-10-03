@@ -2,6 +2,7 @@
 //
 // Storage is chunked (kChunkSize x kChunkSize) and allocated lazily: a 4096 x 4096 map costs one
 // empty vector per chunk (about 384 KiB of headers) until something is written into that chunk.
+// Chunks belong to a layer, so a layer nothing was written into costs those headers and nothing else.
 //
 // Collision contract (move_aabb): the box keeps its size, Result::position is its new top-left
 // corner and Result::velocity has the blocked axis components zeroed. The box is moved one axis at
@@ -39,7 +40,10 @@ constexpr i32 kMaxRaySteps = 1 << 20;
 /// is the biggest map deserialize() hands back.
 constexpr u32 kMaxDimension = 1u << 16;
 constexpr u64 kMaxCells = 1ull << 24;
-constexpr u8 kFormatVersion = 1;
+/// Deserialising allocates a chunk per run it reads, so the total across layers is capped too: 64M
+/// tiles is 128 MiB, already far more than a sane map needs.
+constexpr u64 kMaxTotalCells = 1ull << 26;
+constexpr u8 kFormatVersion = 2;
 constexpr u8 kFlagOutOfBoundsSolid = 1u << 0;
 
 constexpr u64 kFnvOffsetBasis = 0xCBF29CE484222325ull;
@@ -64,22 +68,35 @@ constexpr u64 kFnvPrime = 0x100000001B3ull;
     return TileRect{x0, y0, x1 - x0, y1 - y0};
 }
 
+/// True when any layer in \p mask makes \p predicate true at (x, y). The mask is walked layer by
+/// layer, so a query that names one layer does not pay for the others.
+template <class Predicate>
+[[nodiscard]] bool any_layer(const TileMap& map, i32 x, i32 y, TileMap::LayerMask mask, Predicate&& predicate) {
+    for (i32 layer = 0; layer < map.layer_count(); ++layer) {
+        if ((mask & TileMap::layer_mask(layer)) == 0u) continue;
+        if (predicate(map.at(layer, x, y))) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 // --- construction and accessors ---------------------------------------------
 
-TileMap::TileMap(i32 width, i32 height, f32 tile_size, bool out_of_bounds_solid)
+TileMap::TileMap(i32 width, i32 height, f32 tile_size, bool out_of_bounds_solid, i32 layers)
     : width_(width > 0 ? width : 0), height_(height > 0 ? height : 0),
+      layers_(clamp_i32(layers, 1, kMaxLayers)),
       tile_size_((tile_size > 0.0f && std::isfinite(tile_size)) ? tile_size : 16.0f),
       out_of_bounds_solid_(out_of_bounds_solid) {
     chunks_x_ = (width_ + kChunkSize - 1) / kChunkSize;
     chunks_y_ = (height_ + kChunkSize - 1) / kChunkSize;
     // Chunk headers only: the tile storage of every chunk stays unallocated until it is written.
-    chunks_.resize(static_cast<usize>(chunks_x_) * static_cast<usize>(chunks_y_));
+    chunks_.resize(static_cast<usize>(chunks_per_layer()) * static_cast<usize>(layers_));
 }
 
 i32 TileMap::width() const { return width_; }
 i32 TileMap::height() const { return height_; }
+i32 TileMap::layer_count() const { return layers_; }
 f32 TileMap::tile_size() const { return tile_size_; }
 bool TileMap::out_of_bounds_solid() const { return out_of_bounds_solid_; }
 
@@ -91,49 +108,73 @@ bool TileMap::empty() const { return width_ <= 0 || height_ <= 0; }
 
 bool TileMap::in_bounds(i32 x, i32 y) const { return x >= 0 && x < width_ && y >= 0 && y < height_; }
 
-u32 TileMap::chunk_index(i32 chunk_x, i32 chunk_y) const {
-    T2D_ASSERT(chunk_x >= 0 && chunk_x < chunks_x_ && chunk_y >= 0 && chunk_y < chunks_y_);
-    return static_cast<u32>(chunk_y * chunks_x_ + chunk_x);
+u32 TileMap::chunks_per_layer() const {
+    return static_cast<u32>(chunks_x_) * static_cast<u32>(chunks_y_);
 }
 
-TileMap::Chunk* TileMap::chunk_at(i32 chunk_x, i32 chunk_y) {
+u32 TileMap::chunk_index(i32 layer, i32 chunk_x, i32 chunk_y) const {
+    T2D_ASSERT(layer >= 0 && layer < layers_);
+    T2D_ASSERT(chunk_x >= 0 && chunk_x < chunks_x_ && chunk_y >= 0 && chunk_y < chunks_y_);
+    return static_cast<u32>(layer) * chunks_per_layer() + static_cast<u32>(chunk_y * chunks_x_ + chunk_x);
+}
+
+TileMap::Chunk* TileMap::chunk_at(i32 layer, i32 chunk_x, i32 chunk_y) {
     // nullptr covers both "outside the map" and "never written to": an unallocated chunk reads as
     // empty tiles, which is what keeps a large map cheap.
+    if (layer < 0 || layer >= layers_) return nullptr;
     if (chunk_x < 0 || chunk_x >= chunks_x_ || chunk_y < 0 || chunk_y >= chunks_y_) return nullptr;
-    Chunk& chunk = chunks_[chunk_index(chunk_x, chunk_y)];
+    Chunk& chunk = chunks_[chunk_index(layer, chunk_x, chunk_y)];
     return chunk.tiles.empty() ? nullptr : &chunk;
 }
 
-const TileMap::Chunk* TileMap::chunk_at(i32 chunk_x, i32 chunk_y) const {
+const TileMap::Chunk* TileMap::chunk_at(i32 layer, i32 chunk_x, i32 chunk_y) const {
+    if (layer < 0 || layer >= layers_) return nullptr;
     if (chunk_x < 0 || chunk_x >= chunks_x_ || chunk_y < 0 || chunk_y >= chunks_y_) return nullptr;
-    const Chunk& chunk = chunks_[chunk_index(chunk_x, chunk_y)];
+    const Chunk& chunk = chunks_[chunk_index(layer, chunk_x, chunk_y)];
     return chunk.tiles.empty() ? nullptr : &chunk;
 }
 
-TileId TileMap::at(i32 x, i32 y) const {
+TileId TileMap::at(i32 x, i32 y) const { return at(0, x, y); }
+
+TileId TileMap::at(i32 layer, i32 x, i32 y) const {
     if (!in_bounds(x, y)) return kEmptyTile;
     const i32 chunk_x = x / kChunkSize;
     const i32 chunk_y = y / kChunkSize;
-    const Chunk* chunk = chunk_at(chunk_x, chunk_y);
+    const Chunk* chunk = chunk_at(layer, chunk_x, chunk_y);
     if (chunk == nullptr) return kEmptyTile;
     const i32 local_x = x - chunk_x * kChunkSize;
     const i32 local_y = y - chunk_y * kChunkSize;
     return chunk->tiles[static_cast<usize>(local_y) * kChunkSize + local_x];
 }
 
-TileId TileMap::at_clamped(i32 x, i32 y) const {
+TileId TileMap::at_clamped(i32 x, i32 y) const { return at_clamped(0, x, y); }
+
+TileId TileMap::at_clamped(i32 layer, i32 x, i32 y) const {
     if (width_ <= 0 || height_ <= 0) return kEmptyTile;
-    return at(clamp_i32(x, 0, width_ - 1), clamp_i32(y, 0, height_ - 1));
+    return at(layer, clamp_i32(x, 0, width_ - 1), clamp_i32(y, 0, height_ - 1));
 }
 
-void TileMap::set(i32 x, i32 y, TileId id) {
+TileId TileMap::topmost(i32 x, i32 y, LayerMask mask) const {
+    if (!in_bounds(x, y)) return kEmptyTile;
+    for (i32 layer = layers_ - 1; layer >= 0; --layer) {
+        if ((mask & layer_mask(layer)) == 0u) continue;
+        const TileId id = at(layer, x, y);
+        if (id != kEmptyTile) return id;
+    }
+    return kEmptyTile;
+}
+
+void TileMap::set(i32 x, i32 y, TileId id) { set(0, x, y, id); }
+
+void TileMap::set(i32 layer, i32 x, i32 y, TileId id) {
+    if (layer < 0 || layer >= layers_) return;
     if (!in_bounds(x, y)) return;
     const i32 chunk_x = x / kChunkSize;
     const i32 chunk_y = y / kChunkSize;
-    Chunk* chunk = chunk_at(chunk_x, chunk_y);
+    Chunk* chunk = chunk_at(layer, chunk_x, chunk_y);
     if (chunk == nullptr) {
         if (id == kEmptyTile) return;   // writing empty into a missing chunk is a no-op: stay lazy
-        chunk = &chunks_[chunk_index(chunk_x, chunk_y)];
+        chunk = &chunks_[chunk_index(layer, chunk_x, chunk_y)];
         chunk->tiles.assign(static_cast<usize>(kChunkSize) * kChunkSize, kEmptyTile);
     }
     const i32 local_x = x - chunk_x * kChunkSize;
@@ -142,17 +183,30 @@ void TileMap::set(i32 x, i32 y, TileId id) {
 }
 
 void TileMap::fill(TileId id) {
+    for (i32 layer = 0; layer < layers_; ++layer) fill(layer, id);
+}
+
+void TileMap::fill(i32 layer, TileId id) {
+    if (layer < 0 || layer >= layers_) return;
     if (id == kEmptyTile) {
-        // Release the storage entirely: an empty map must not hold a single chunk.
-        for (Chunk& chunk : chunks_) std::vector<TileId>().swap(chunk.tiles);
+        // Release the storage entirely: an empty layer must not hold a single chunk.
+        const u32 first = static_cast<u32>(layer) * chunks_per_layer();
+        for (u32 index = first; index < first + chunks_per_layer(); ++index) {
+            std::vector<TileId>().swap(chunks_[index].tiles);
+        }
         return;
     }
     // Only cells inside the map may be written: the padding of the last chunk row/column is not
     // part of the map and must stay empty (count_tiles() and checksum() ignore it).
-    fill_rect(TileRect{0, 0, width_, height_}, id);
+    fill_rect(layer, TileRect{0, 0, width_, height_}, id);
 }
 
 void TileMap::fill_rect(const TileRect& rect, TileId id) {
+    for (i32 layer = 0; layer < layers_; ++layer) fill_rect(layer, rect, id);
+}
+
+void TileMap::fill_rect(i32 layer, const TileRect& rect, TileId id) {
+    if (layer < 0 || layer >= layers_) return;
     if (width_ <= 0 || height_ <= 0) return;
     const i32 x0 = std::max(rect.x, 0);
     const i32 y0 = std::max(rect.y, 0);
@@ -168,10 +222,10 @@ void TileMap::fill_rect(const TileRect& rect, TileId id) {
             const i32 chunk_left = chunk_x * kChunkSize;
             const i32 local_x0 = std::max(x0, chunk_left) - chunk_left;
             const i32 local_x1 = std::min(x1, chunk_left + kChunkSize) - chunk_left;
-            Chunk* chunk = chunk_at(chunk_x, chunk_y);
+            Chunk* chunk = chunk_at(layer, chunk_x, chunk_y);
             if (chunk == nullptr) {
                 if (id == kEmptyTile) continue;   // clearing an unallocated chunk is a no-op
-                chunk = &chunks_[chunk_index(chunk_x, chunk_y)];
+                chunk = &chunks_[chunk_index(layer, chunk_x, chunk_y)];
                 chunk->tiles.assign(static_cast<usize>(kChunkSize) * kChunkSize, kEmptyTile);
             }
             for (i32 local_y = local_y0; local_y < local_y1; ++local_y) {
@@ -183,6 +237,13 @@ void TileMap::fill_rect(const TileRect& rect, TileId id) {
 }
 
 usize TileMap::count_tiles(TileId id) const {
+    usize total = 0;
+    for (i32 layer = 0; layer < layers_; ++layer) total += count_tiles(layer, id);
+    return total;
+}
+
+usize TileMap::count_tiles(i32 layer, TileId id) const {
+    if (layer < 0 || layer >= layers_) return 0;
     // Chunks cover whole 32 x 32 blocks, so the last chunk row/column holds cells outside the map.
     // Those are never written (see fill()) and must never be counted either.
     usize matched = 0;
@@ -190,7 +251,7 @@ usize TileMap::count_tiles(TileId id) const {
     for (i32 chunk_y = 0; chunk_y < chunks_y_; ++chunk_y) {
         const i32 row_end = std::min((chunk_y + 1) * kChunkSize, height_);
         for (i32 chunk_x = 0; chunk_x < chunks_x_; ++chunk_x) {
-            const Chunk* chunk = chunk_at(chunk_x, chunk_y);
+            const Chunk* chunk = chunk_at(layer, chunk_x, chunk_y);
             if (chunk == nullptr || chunk->tiles.empty()) continue;
             const i32 column_end = std::min((chunk_x + 1) * kChunkSize, width_);
             for (i32 y = chunk_y * kChunkSize; y < row_end; ++y) {
@@ -236,20 +297,22 @@ TileRect TileMap::visible_tiles(const Aabb2& view) const {
 
 // --- queries ----------------------------------------------------------------
 
-bool TileMap::is_solid(i32 x, i32 y, const Tileset& tileset) const {
+bool TileMap::is_solid(i32 x, i32 y, const Tileset& tileset, LayerMask mask) const {
     if (!in_bounds(x, y)) return out_of_bounds_solid_;   // walls around the level by default
-    return tileset.is_solid(at(x, y));
+    return any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_solid(id); });
 }
 
-bool TileMap::is_one_way(i32 x, i32 y, const Tileset& tileset) const {
-    return in_bounds(x, y) && tileset.is_one_way(at(x, y));
+bool TileMap::is_one_way(i32 x, i32 y, const Tileset& tileset, LayerMask mask) const {
+    if (!in_bounds(x, y)) return false;
+    return any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_one_way(id); });
 }
 
-bool TileMap::is_hazard(i32 x, i32 y, const Tileset& tileset) const {
-    return in_bounds(x, y) && tileset.is_hazard(at(x, y));
+bool TileMap::is_hazard(i32 x, i32 y, const Tileset& tileset, LayerMask mask) const {
+    if (!in_bounds(x, y)) return false;
+    return any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_hazard(id); });
 }
 
-bool TileMap::overlaps_solid(const Aabb2& box, const Tileset& tileset) const {
+bool TileMap::overlaps_solid(const Aabb2& box, const Tileset& tileset, LayerMask mask) const {
     const Vec2 world = world_size();
     if (out_of_bounds_solid_ &&
         (box.min.x < 0.0f || box.min.y < 0.0f || box.max.x > world.x || box.max.y > world.y)) {
@@ -262,13 +325,13 @@ bool TileMap::overlaps_solid(const Aabb2& box, const Tileset& tileset) const {
     const i32 y1 = std::min(cells.bottom(), height_);
     for (i32 y = y0; y < y1; ++y) {
         for (i32 x = x0; x < x1; ++x) {
-            if (tileset.is_solid(at(x, y))) return true;
+            if (any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_solid(id); })) return true;
         }
     }
     return false;
 }
 
-bool TileMap::overlaps_hazard(const Aabb2& box, const Tileset& tileset) const {
+bool TileMap::overlaps_hazard(const Aabb2& box, const Tileset& tileset, LayerMask mask) const {
     const TileRect cells = box_cells(box, tile_size_);
     const i32 x0 = std::max(cells.x, 0);
     const i32 y0 = std::max(cells.y, 0);
@@ -276,13 +339,13 @@ bool TileMap::overlaps_hazard(const Aabb2& box, const Tileset& tileset) const {
     const i32 y1 = std::min(cells.bottom(), height_);
     for (i32 y = y0; y < y1; ++y) {
         for (i32 x = x0; x < x1; ++x) {
-            if (tileset.is_hazard(at(x, y))) return true;
+            if (any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_hazard(id); })) return true;
         }
     }
     return false;
 }
 
-bool TileMap::is_on_ground(const Aabb2& box, const Tileset& tileset) const {
+bool TileMap::is_on_ground(const Aabb2& box, const Tileset& tileset, LayerMask mask) const {
     // One pixel probe below the box, in the same "cells touched" convention the rest of the file
     // uses: a box resting on a tile has its bottom edge just above or exactly on the tile top.
     const Aabb2 probe{Vec2{box.min.x, box.max.y}, Vec2{box.max.x, box.max.y + 1.0f}};
@@ -298,21 +361,23 @@ bool TileMap::is_on_ground(const Aabb2& box, const Tileset& tileset) const {
     const i32 y1 = std::min(cells.bottom(), height_);
     for (i32 y = y0; y < y1; ++y) {
         for (i32 x = x0; x < x1; ++x) {
-            if (tileset.blocks_falling(at(x, y))) return true;
+            if (any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.blocks_falling(id); })) {
+                return true;
+            }
         }
     }
     return false;
 }
 
 std::optional<Vec2> TileMap::raycast_solid(Vec2 origin, Vec2 direction, f32 max_distance,
-                                           const Tileset& tileset) const {
+                                           const Tileset& tileset, LayerMask mask) const {
     if (max_distance < 0.0f) return std::nullopt;
     const Vec2 heading = normalize(direction);
     if (heading.x == 0.0f && heading.y == 0.0f) return std::nullopt;
 
     i32 cell_x = floor_to_i32(origin.x / tile_size_);
     i32 cell_y = floor_to_i32(origin.y / tile_size_);
-    if (is_solid(cell_x, cell_y, tileset)) return origin;   // already inside a wall
+    if (is_solid(cell_x, cell_y, tileset, mask)) return origin;   // already inside a wall
 
     const f32 infinity = std::numeric_limits<f32>::infinity();
     const i32 step_x = heading.x > 0.0f ? 1 : (heading.x < 0.0f ? -1 : 0);
@@ -341,7 +406,7 @@ std::optional<Vec2> TileMap::raycast_solid(Vec2 origin, Vec2 direction, f32 max_
             travel_y += delta_y;
         }
         if (distance > max_distance) break;
-        if (is_solid(cell_x, cell_y, tileset)) return origin + heading * distance;
+        if (is_solid(cell_x, cell_y, tileset, mask)) return origin + heading * distance;
     }
     return std::nullopt;
 }
@@ -349,7 +414,7 @@ std::optional<Vec2> TileMap::raycast_solid(Vec2 origin, Vec2 direction, f32 max_
 // --- movement ---------------------------------------------------------------
 
 TileMap::MoveResult TileMap::move_aabb(const Aabb2& box, Vec2 velocity, f32 delta_seconds,
-                                       const Tileset& tileset, bool drop_through) const {
+                                       const Tileset& tileset, bool drop_through, LayerMask mask) const {
     MoveResult result;
     result.position = box.min;   // top-left corner, the box keeps its size
     result.velocity = velocity;
@@ -417,9 +482,12 @@ TileMap::MoveResult TileMap::move_aabb(const Aabb2& box, Vec2 velocity, f32 delt
         u8 kind = 0;
         for (i32 y = cells.y; y < cells.bottom(); ++y) {
             for (i32 x = cells.x; x < cells.right(); ++x) {
-                const TileId id = at(x, y);
-                if (tileset.is_solid(id)) return static_cast<u8>(1);
-                if (tileset.is_one_way(id)) kind = 2;
+                if (any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_solid(id); })) {
+                    return static_cast<u8>(1);
+                }
+                if (any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_one_way(id); })) {
+                    kind = 2;
+                }
             }
         }
         return kind;
@@ -483,7 +551,7 @@ TileMap::MoveResult TileMap::move_aabb(const Aabb2& box, Vec2 velocity, f32 delt
 
     const auto move_x = [&](f32 amount) {
         const bool blocked = resolve_axis(true, amount, [&](i32 x, i32 y) -> u8 {
-            return is_solid(x, y, tileset) ? 1u : 0u;
+            return is_solid(x, y, tileset, mask) ? 1u : 0u;
         });
         if (blocked) {
             result.velocity.x = 0.0f;
@@ -496,9 +564,9 @@ TileMap::MoveResult TileMap::move_aabb(const Aabb2& box, Vec2 velocity, f32 delt
         const f32 previous_bottom = result.position.y + size.y;
         const bool falling = amount > 0.0f;
         const bool blocked = resolve_axis(false, amount, [&](i32 x, i32 y) -> u8 {
-            const TileId id = at(x, y);
-            if (tileset.is_solid(id)) return 1u;
-            if (!falling || drop_through || !tileset.is_one_way(id)) return 0u;
+            if (any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_solid(id); })) return 1u;
+            if (!falling || drop_through) return 0u;
+            if (!any_layer(*this, x, y, mask, [&tileset](TileId id) { return tileset.is_one_way(id); })) return 0u;
             // Only a box that was at or above the platform top edge before the step is stopped.
             if (previous_bottom > static_cast<f32>(y) * tile + kOneWayTolerance) return 0u;
             return 2u;
@@ -551,7 +619,9 @@ TileMap::MoveResult TileMap::move_aabb(const Aabb2& box, Vec2 velocity, f32 delt
 //
 // Layout (little endian, varints are LEB128 like ByteWriter::write_varint):
 //   "T2DM" magic | u8 version | u8 flags (bit 0: out_of_bounds_solid) | varint width | varint height
-//   | f32 tile_size | varint cell_count | (varint run_length | u16 tile_id)*  in row major order.
+//   | varint layer_count | f32 tile_size | varint cell_count (per layer)
+//   | for every layer, bottom to top: (varint run_length | u16 tile_id)* in row major order.
+// A run never spans two layers, so a layer can be decoded without touching the ones around it.
 
 std::vector<u8> TileMap::serialize() const {
     std::vector<u8> bytes;
@@ -564,45 +634,48 @@ std::vector<u8> TileMap::serialize() const {
     writer.write_u8(out_of_bounds_solid_ ? kFlagOutOfBoundsSolid : 0u);
     writer.write_varint(static_cast<u32>(width_));
     writer.write_varint(static_cast<u32>(height_));
+    writer.write_varint(static_cast<u32>(layers_));
     writer.write_f32(tile_size_);
     writer.write_varint(static_cast<u32>(static_cast<u64>(width_) * static_cast<u64>(height_)));
 
     u32 run_length = 0;
     TileId run_tile = kEmptyTile;
+    const auto flush = [&]() {
+        if (run_length == 0) return;
+        writer.write_varint(run_length);
+        writer.write_u16(run_tile);
+        run_length = 0;
+    };
     const auto emit = [&](TileId tile) {
         if (run_length != 0 && tile == run_tile) {
             ++run_length;
             return;
         }
-        if (run_length != 0) {
-            writer.write_varint(run_length);
-            writer.write_u16(run_tile);
-        }
+        flush();
         run_tile = tile;
         run_length = 1;
     };
-    // Row major: rows top to bottom, each row left to right, chunk columns in between.
-    for (i32 chunk_y = 0; chunk_y < chunks_y_; ++chunk_y) {
-        const i32 row_begin = chunk_y * kChunkSize;
-        const i32 row_end = std::min(row_begin + kChunkSize, height_);
-        for (i32 y = row_begin; y < row_end; ++y) {
-            const usize local_y = static_cast<usize>(y - row_begin);
-            for (i32 chunk_x = 0; chunk_x < chunks_x_; ++chunk_x) {
-                const i32 column_begin = chunk_x * kChunkSize;
-                const i32 column_end = std::min(column_begin + kChunkSize, width_);
-                const Chunk* chunk = chunk_at(chunk_x, chunk_y);
-                if (chunk == nullptr) {
-                    for (i32 x = column_begin; x < column_end; ++x) emit(kEmptyTile);
-                    continue;
+    for (i32 layer = 0; layer < layers_; ++layer) {
+        // Row major: rows top to bottom, each row left to right, chunk columns in between.
+        for (i32 chunk_y = 0; chunk_y < chunks_y_; ++chunk_y) {
+            const i32 row_begin = chunk_y * kChunkSize;
+            const i32 row_end = std::min(row_begin + kChunkSize, height_);
+            for (i32 y = row_begin; y < row_end; ++y) {
+                const usize local_y = static_cast<usize>(y - row_begin);
+                for (i32 chunk_x = 0; chunk_x < chunks_x_; ++chunk_x) {
+                    const i32 column_begin = chunk_x * kChunkSize;
+                    const i32 column_end = std::min(column_begin + kChunkSize, width_);
+                    const Chunk* chunk = chunk_at(layer, chunk_x, chunk_y);
+                    if (chunk == nullptr) {
+                        for (i32 x = column_begin; x < column_end; ++x) emit(kEmptyTile);
+                        continue;
+                    }
+                    const TileId* row = chunk->tiles.data() + local_y * kChunkSize;
+                    for (i32 x = column_begin; x < column_end; ++x) emit(row[x - column_begin]);
                 }
-                const TileId* row = chunk->tiles.data() + local_y * kChunkSize;
-                for (i32 x = column_begin; x < column_end; ++x) emit(row[x - column_begin]);
             }
         }
-    }
-    if (run_length != 0) {
-        writer.write_varint(run_length);
-        writer.write_u16(run_tile);
+        flush();   // a run never spans two layers
     }
     return bytes;
 }
@@ -618,19 +691,22 @@ std::optional<TileMap> TileMap::deserialize(ConstSpan<const u8> data) {
     if ((flags & ~kFlagOutOfBoundsSolid) != 0u) return std::nullopt;
     const u32 width = reader.read_varint();
     const u32 height = reader.read_varint();
+    const u32 layers = reader.read_varint();
     const f32 tile_size = reader.read_f32();
     const u32 cells = reader.read_varint();
     if (!reader.ok() || !std::isfinite(tile_size) || tile_size <= 0.0f) return std::nullopt;
     if (width > kMaxDimension || height > kMaxDimension) return std::nullopt;
+    if (layers == 0u || layers > static_cast<u32>(kMaxLayers)) return std::nullopt;
     if (static_cast<u64>(width) * static_cast<u64>(height) != static_cast<u64>(cells)) {
         return std::nullopt;
     }
     if (static_cast<u64>(cells) > kMaxCells) return std::nullopt;
+    if (static_cast<u64>(cells) * layers > kMaxTotalCells) return std::nullopt;
 
     TileMap map(static_cast<i32>(width), static_cast<i32>(height), tile_size,
-                (flags & kFlagOutOfBoundsSolid) != 0u);
+                (flags & kFlagOutOfBoundsSolid) != 0u, static_cast<i32>(layers));
     // Runs are written per row so an empty run does not allocate the chunks it crosses.
-    const auto write_run = [&map](u64 start, u32 count, TileId tile) {
+    const auto write_run = [&map](i32 layer, u64 start, u32 count, TileId tile) {
         const u64 line = static_cast<u64>(map.width());
         if (line == 0) return;
         u64 index = start;
@@ -639,46 +715,52 @@ std::optional<TileMap> TileMap::deserialize(ConstSpan<const u8> data) {
             const i32 x = static_cast<i32>(index % line);
             const i32 y = static_cast<i32>(index / line);
             const u32 span = std::min<u32>(remaining, static_cast<u32>(line - static_cast<u64>(x)));
-            map.fill_rect(TileRect{x, y, static_cast<i32>(span), 1}, tile);
+            map.fill_rect(layer, TileRect{x, y, static_cast<i32>(span), 1}, tile);
             index += span;
             remaining -= span;
         }
     };
 
-    u64 index = 0;
-    while (index < static_cast<u64>(cells)) {
-        const u32 run_length = reader.read_varint();
-        const u16 tile = reader.read_u16();
-        if (!reader.ok()) return std::nullopt;
-        if (run_length == 0u) return std::nullopt;                                // malformed run
-        if (static_cast<u64>(run_length) > static_cast<u64>(cells) - index) {
-            return std::nullopt;                                                  // too many cells
+    for (u32 layer = 0; layer < layers; ++layer) {
+        u64 index = 0;
+        while (index < static_cast<u64>(cells)) {
+            const u32 run_length = reader.read_varint();
+            const u16 tile = reader.read_u16();
+            if (!reader.ok()) return std::nullopt;
+            if (run_length == 0u) return std::nullopt;                            // malformed run
+            if (static_cast<u64>(run_length) > static_cast<u64>(cells) - index) {
+                return std::nullopt;                                              // too many cells
+            }
+            write_run(static_cast<i32>(layer), index, run_length, tile);
+            index += run_length;
         }
-        write_run(index, run_length, tile);
-        index += run_length;
     }
     if (!reader.empty()) return std::nullopt;   // trailing bytes: not a clean map blob
     return map;
 }
 
 u64 TileMap::checksum() const {
-    // FNV-1a over the dimensions and then every tile id in row major order, little endian.
+    // FNV-1a over the dimensions, the layer count and then every tile id in row major order per
+    // layer, bottom to top, little endian.
     u64 hash = kFnvOffsetBasis;
     hash = fnv_mix(hash, static_cast<u64>(static_cast<u32>(width_)), 4);
     hash = fnv_mix(hash, static_cast<u64>(static_cast<u32>(height_)), 4);
-    for (i32 chunk_y = 0; chunk_y < chunks_y_; ++chunk_y) {
-        const i32 row_begin = chunk_y * kChunkSize;
-        const i32 row_end = std::min(row_begin + kChunkSize, height_);
-        for (i32 y = row_begin; y < row_end; ++y) {
-            const usize local_y = static_cast<usize>(y - row_begin);
-            for (i32 chunk_x = 0; chunk_x < chunks_x_; ++chunk_x) {
-                const i32 column_begin = chunk_x * kChunkSize;
-                const i32 column_end = std::min(column_begin + kChunkSize, width_);
-                const Chunk* chunk = chunk_at(chunk_x, chunk_y);
-                const TileId* row =
-                    chunk != nullptr ? chunk->tiles.data() + local_y * kChunkSize : nullptr;
-                for (i32 x = column_begin; x < column_end; ++x) {
-                    hash = fnv_mix(hash, row != nullptr ? row[x - column_begin] : kEmptyTile, 2);
+    hash = fnv_mix(hash, static_cast<u64>(static_cast<u32>(layers_)), 4);
+    for (i32 layer = 0; layer < layers_; ++layer) {
+        for (i32 chunk_y = 0; chunk_y < chunks_y_; ++chunk_y) {
+            const i32 row_begin = chunk_y * kChunkSize;
+            const i32 row_end = std::min(row_begin + kChunkSize, height_);
+            for (i32 y = row_begin; y < row_end; ++y) {
+                const usize local_y = static_cast<usize>(y - row_begin);
+                for (i32 chunk_x = 0; chunk_x < chunks_x_; ++chunk_x) {
+                    const i32 column_begin = chunk_x * kChunkSize;
+                    const i32 column_end = std::min(column_begin + kChunkSize, width_);
+                    const Chunk* chunk = chunk_at(layer, chunk_x, chunk_y);
+                    const TileId* row =
+                        chunk != nullptr ? chunk->tiles.data() + local_y * kChunkSize : nullptr;
+                    for (i32 x = column_begin; x < column_end; ++x) {
+                        hash = fnv_mix(hash, row != nullptr ? row[x - column_begin] : kEmptyTile, 2);
+                    }
                 }
             }
         }
@@ -701,11 +783,21 @@ std::optional<TileMap> TileMap::from_ascii(ConstSpan<const std::string> rows,
     if (!std::isfinite(tile_size) || tile_size <= 0.0f) return std::nullopt;
     if (width > kMaxDimension || rows.size() > kMaxDimension) return std::nullopt;
     TileMap map(static_cast<i32>(width), static_cast<i32>(rows.size()), tile_size);
+    map.stamp_ascii(0, rows, legend);
+    return map;
+}
+
+void TileMap::stamp_ascii(i32 layer, ConstSpan<const std::string> rows,
+                          const std::unordered_map<char, TileId>& legend, i32 origin_x, i32 origin_y) {
+    if (layer < 0 || layer >= layers_) {
+        T2D_WARN("level: a {} layer map has no layer {}, nothing was stamped", layers_, layer);
+        return;
+    }
     u32 unknown_count = 0;
     std::string unknown_characters;
     for (usize y = 0; y < rows.size(); ++y) {
         const std::string& row = rows[y];
-        for (usize x = 0; x < width; ++x) {
+        for (usize x = 0; x < row.size(); ++x) {
             const auto found = legend.find(row[x]);
             if (found == legend.end()) {
                 // Unknown characters stay empty, but silently dropping them once cost the demo level
@@ -716,29 +808,33 @@ std::optional<TileMap> TileMap::from_ascii(ConstSpan<const std::string> rows,
                 }
                 if (unknown_count == 1) {
                     T2D_WARN("level: unknown tile character '{}' at ({}, {}) is left empty", row[x],
-                             static_cast<i32>(x), static_cast<i32>(y));
+                             static_cast<i32>(x) + origin_x, static_cast<i32>(y) + origin_y);
                 }
                 continue;
             }
-            map.set(static_cast<i32>(x), static_cast<i32>(y), found->second);
+            set(layer, static_cast<i32>(x) + origin_x, static_cast<i32>(y) + origin_y, found->second);
         }
     }
     if (unknown_count > 0) {
         T2D_WARN("level: {} cell(s) used unknown character(s) '{}' and were left empty", unknown_count,
                  unknown_characters);
     }
-    return map;
 }
 
 std::vector<std::string> TileMap::to_ascii(const std::unordered_map<TileId, char>& legend,
                                            char unknown) const {
+    return to_ascii(0, legend, unknown);
+}
+
+std::vector<std::string> TileMap::to_ascii(i32 layer, const std::unordered_map<TileId, char>& legend,
+                                           char unknown) const {
     std::vector<std::string> rows;
-    if (width_ <= 0 || height_ <= 0) return rows;
+    if (width_ <= 0 || height_ <= 0 || layer < 0 || layer >= layers_) return rows;
     rows.reserve(static_cast<usize>(height_));
     for (i32 y = 0; y < height_; ++y) {
         std::string row(static_cast<usize>(width_), unknown);
         for (i32 x = 0; x < width_; ++x) {
-            const auto found = legend.find(at(x, y));
+            const auto found = legend.find(at(layer, x, y));
             if (found == legend.end()) continue;               // no character: keep unknown
             row[static_cast<usize>(x)] = found->second;
         }

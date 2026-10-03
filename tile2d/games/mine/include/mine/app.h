@@ -49,11 +49,17 @@ struct MineOptions {
     std::vector<std::string> content_paths;
     u32 grid_width = SandboxModel::kDefaultWidth;
     u32 grid_height = SandboxModel::kDefaultHeight;
+    /// How many tile layers the sandbox map has, and which one the brush writes into. What each layer
+    /// means is the designer's business; the sandbox only numbers them.
+    i32 tile_layers = 1;
+    i32 start_layer = 0;
     std::string layout_path;
     /// Written once at shutdown; for a scripted run that has no keyboard to press F2 on.
     std::string save_layout_path;
     /// "none", "bands" or "scatter" - a view of the palette, never content of its own.
     std::string fill;
+    /// Which tile layers --fill writes into: "" (the active layer), "all", or a layer number.
+    std::string fill_layer;
     /// Write the layer as text to the log at shutdown (a scripted run has no keyboard for F4).
     bool dump_layer = false;
 };
@@ -80,6 +86,7 @@ private:
     void handle_sandbox_input();
     void begin_session(const SessionConfig& session);
     void open_sandbox();
+    void apply_fill();
     void reload_content();
     void save_layout();
     void load_layout();

@@ -14,7 +14,10 @@ struct TilemapRenderStats {
     u32 tiles_considered = 0;
     u32 tiles_drawn = 0;
     u32 tiles_culled = 0;
+    /// Draw passes: three sprite layers (background, main, foreground) per map layer drawn.
     u32 layers = 0;
+    /// Map layers the last draw_map() actually visited.
+    u32 map_layers = 0;
     u32 sprites = 0;
 };
 
@@ -32,7 +35,10 @@ public:
     explicit TilemapRenderer(const Options& options) : options_(options) {}
 
     /// Draws every layer of \p map that intersects \p view.
-    void draw_map(SpriteBatch& batch, const TileMap& map, const Tileset& tileset, const Aabb2& view);
+    /// Draws the map layers in \p mask that intersect \p view, bottom to top; inside one map layer the
+    /// tiles are drawn backgrounds first, then the main layer, then foreground decor.
+    void draw_map(SpriteBatch& batch, const TileMap& map, const Tileset& tileset, const Aabb2& view,
+                  TileMap::LayerMask mask = TileMap::kAllLayers);
     void draw_players(SpriteBatch& batch, const std::vector<RenderPlayer>& players, PlayerId local_id,
                       const PlayerTuning& tuning);
     void draw_pickups(SpriteBatch& batch, ConstSpan<Pickup> pickups);
