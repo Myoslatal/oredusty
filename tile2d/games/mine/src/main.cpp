@@ -8,6 +8,7 @@
 #include <t2d/text/locale.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 
 int main(int argc, char** argv) {
@@ -60,7 +61,15 @@ int main(int argc, char** argv) {
     }
     if (const auto fill = cli.value("fill"); fill.has_value()) options.fill = *fill;
     if (const auto fill_layer = cli.value("fill-layer"); fill_layer.has_value()) options.fill_layer = *fill_layer;
+    for (const std::string& path : cli.values("pack")) options.pack_paths.push_back(path);
+    for (const std::string& directory : cli.values("packs")) options.pack_directories.push_back(directory);
     for (const std::string& directory : cli.values("mods")) options.mod_directories.push_back(directory);
+    // A "packs" directory beside the game is a default, not a promise: when it is not there, nothing
+    // is reported, because nobody asked for it. An explicit --packs that is missing *is* reported.
+    if (options.pack_directories.empty()) {
+        std::error_code code;
+        if (std::filesystem::is_directory("packs", code)) options.pack_directories.push_back("packs");
+    }
     if (const auto layout = cli.value("layout"); layout.has_value()) options.layout_path = *layout;
     if (const auto save = cli.value("save-layout"); save.has_value()) options.save_layout_path = *save;
     if (const auto dump = cli.bool_value("dump-layer"); dump.has_value()) options.dump_layer = *dump;

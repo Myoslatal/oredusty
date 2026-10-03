@@ -158,6 +158,8 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"layer", "<n>", "which tile layer the sandbox starts on (default 0)"},
         {"fill", "<none|bands|scatter>", "sandbox debug fill: the palette laid out, never content"},
         {"fill-layer", "<n|all>", "which tile layers the fill writes into (default: the active one)"},
+        {"pack", "<file.ecfg>", "a content pack to load; repeatable"},
+        {"packs", "<dir>", "directory of content packs (*.ecfg); repeatable, defaults to ./packs"},
         {"mods", "<dir>", "directory of mod packages to load; repeatable"},
         {"layout", "<path>", "sandbox layout file: loaded at startup, written by F2"},
         {"save-layout", "<path>", "write the sandbox layout once at shutdown (scripted runs)"},
@@ -217,6 +219,9 @@ void MineApp::on_start() {
     body_px_ = static_cast<u16>(std::max(14.0f, 5.0f * unit_));
 
     load_localisation();
+    // The game's content, its packs and its mods, loaded once at startup: a session reports what it
+    // has before anything is created, and the sandbox reloads the same set with F5.
+    (void)load_content();
     menu_.set_mode(options_.session.mode);
     menu_.set_seed(options_.session.seed);
     session_ = options_.session;
@@ -433,7 +438,8 @@ void MineApp::draw_session_screen() {
     f32 label_width = 0.0f;
     t2d::TextStyle measure_style;
     measure_style.size_px = body_px_;
-    for (const char* id : {"session.world", "session.content", "session.role", "session.seed", "session.connect"}) {
+    for (const char* id : {"session.world", "session.content", "session.packs", "session.role", "session.seed",
+                           "session.connect"}) {
         label_width = std::max(label_width, text_->measure(locale_.text(id), fonts_, measure_style).width);
     }
     const f32 value_column = left + label_width + 3.0f * unit_;
@@ -443,6 +449,10 @@ void MineApp::draw_session_screen() {
     y = draw_pair(left, y, value_column, body_px_, locale_.text("session.content"),
                   format_localized(locale_.text("content.registered"), registry_.total_count()),
                   kPalette.text_dim, kPalette.text);
+    y = draw_pair(left, y, value_column, body_px_, locale_.text("session.packs"),
+                  format_localized(locale_.text("session.packs.value"), content_.report().packs,
+                                   content_.report().pack_content),
+                  kPalette.text_dim, content_.report().clean() ? kPalette.text : kPalette.error);
     y = draw_pair(left, y, value_column, body_px_, locale_.text("session.role"),
                   locale_.text(session_.role == Role::Host ? "role.host"
                                                            : (session_.role == Role::Join ? "role.join"
@@ -521,7 +531,8 @@ void MineApp::open_sandbox() {
     }
     sandbox_.set_active_layer(options_.start_layer);
     sandbox_.set_content_paths(options_.content_paths);
-    if (options_.content_paths.empty() && options_.mod_directories.empty()) {
+    if (options_.content_paths.empty() && options_.pack_paths.empty() && options_.pack_directories.empty() &&
+        options_.mod_directories.empty()) {
         sandbox_.rebuild_palette(registry_);
         set_status(locale_.text("sandbox.no.content"), true);
     } else {
@@ -562,33 +573,32 @@ void MineApp::apply_fill() {
     sandbox_.set_active_layer(options_.start_layer);
 }
 
-void MineApp::reload_content() {
-    const SandboxReloadReport report = sandbox_.reload(registry_, options_.content_paths);
-    if (!report.parsed) {
-        const std::string first = report.errors.empty() ? std::string("-") : report.errors.front();
-        set_status(format_localized(locale_.text("sandbox.reload.failed"), first), true);
-        return;
-    }
-    std::string message = format_localized(locale_.text("sandbox.reloaded"), report.added, report.removed,
-                                           report.remapped_cells, report.lost_cells);
-    if (!report.unknown_tables.empty()) {
-        message += format_localized(locale_.text("sandbox.reload.unknown"), report.unknown_tables.size(),
-                                    report.unknown_tables.front());
-    }
+const ContentPipelineReport& MineApp::load_content() {
+    // One place decides what the registry holds: the game's own files, then packs, then mods. Loading
+    // again is a reload - the pipeline unloads the mods (on_unload, then the library closes) and clears
+    // the registry first, so ids come out the same every time.
+    content_.set_base_files(options_.content_paths);
+    content_.set_pack_files(options_.pack_paths);
+    content_.set_pack_directories(options_.pack_directories);
+    content_.set_mod_directories(options_.mod_directories);
+    return content_.load(registry_);
+}
 
-    // Mods come after the game's own content, so a mod that redefines one of its names is reported
-    // instead of quietly taking the id over. load() unloads whatever was loaded before, which is what
-    // makes F5 a reload of the mods too.
-    const ModLoadReport& mods = mods_.load(options_.mod_directories, registry_);
-    // One rebind after the last source of names, so a single pass sees the whole registry.
-    sandbox_.rebind(registry_);
-    if (!mods.empty()) {
-        message += format_localized(locale_.text("sandbox.mods.loaded"), mods_.count(), mods.native_modules,
-                                    mods.content_registered);
+void MineApp::reload_content() {
+    const ContentPipelineReport& loaded = load_content();
+    // One rebind after the last source of names, so a single pass over the map sees the whole registry.
+    const SandboxReloadReport remapped = sandbox_.rebind(registry_);
+    std::string message = format_localized(locale_.text("sandbox.reloaded"), loaded.total_content,
+                                           remapped.remapped_cells, remapped.lost_cells);
+    if (loaded.packs > 0) {
+        message += format_localized(locale_.text("sandbox.packs.loaded"), loaded.packs, loaded.pack_content);
     }
-    if (!mods.clean()) {
-        const std::string first = mods.errors.empty() ? std::string("-") : mods.errors.front();
-        set_status(std::format("{}   {}", message, first), true);
+    if (loaded.mods > 0) {
+        message += format_localized(locale_.text("sandbox.mods.loaded"), loaded.mods, loaded.native_mods,
+                                    loaded.mod_content);
+    }
+    if (!loaded.clean()) {
+        set_status(std::format("{}   {}", message, loaded.first_error()), true);
         return;
     }
     set_status(std::move(message));
@@ -830,7 +840,8 @@ void MineApp::draw_sandbox_screen() {
 
     f32 label_width = 0.0f;
     for (const char* id : {"sandbox.cursor", "sandbox.cell", "sandbox.grid", "sandbox.filled", "sandbox.content",
-                           "sandbox.layout", "sandbox.layer", "sandbox.layer.filled", "sandbox.mods"}) {
+                           "sandbox.layout", "sandbox.layer", "sandbox.layer.filled", "sandbox.mods",
+                           "sandbox.packs"}) {
         label_width = std::max(label_width, text_->measure(locale_.text(id), fonts_, measure_style).width);
     }
     const f32 left = status.min.x + padding;
@@ -860,11 +871,15 @@ void MineApp::draw_sandbox_screen() {
     }
     const std::string layout_text =
         options_.layout_path.empty() ? std::string(locale_.text("sandbox.layout.none")) : options_.layout_path;
+    const ContentPipelineReport& loaded = content_.report();
+    const std::string packs_text =
+        loaded.packs == 0 ? std::string(locale_.text("sandbox.packs.none"))
+                          : format_localized(locale_.text("sandbox.packs.value"), loaded.packs,
+                                             loaded.pack_content);
     const std::string mods_text =
-        options_.mod_directories.empty()
-            ? std::string(locale_.text("sandbox.mods.none"))
-            : format_localized(locale_.text("sandbox.mods.value"), mods_.count(),
-                               mods_.report().native_modules, mods_.report().content_registered);
+        loaded.mods == 0 ? std::string(locale_.text("sandbox.mods.none"))
+                         : format_localized(locale_.text("sandbox.mods.value"), loaded.mods, loaded.native_mods,
+                                            loaded.mod_content);
 
     // A long path or a long content name is clipped at the column boundary: wrapping it would land
     // on the line below and make the status bar unreadable exactly when something went wrong.
@@ -901,10 +916,12 @@ void MineApp::draw_sandbox_screen() {
     draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.layout"), layout_text, kPalette.text_dim,
               kPalette.text, right_width);
     y += line;
-    // Mods get a row of their own: they are a second source of content, and a designer needs to see at
-    // a glance whether the packages they are working on actually loaded.
-    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.mods"), mods_text, kPalette.text_dim,
-              mods_.report().clean() ? kPalette.text : kPalette.error, left_width);
+    // Packs and mods get a row of their own: they are the sources a designer is working on, and they
+    // need to see at a glance whether what they are editing actually loaded.
+    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.packs"), packs_text, kPalette.text_dim,
+              loaded.clean() ? kPalette.text : kPalette.error, left_width);
+    draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.mods"), mods_text, kPalette.text_dim,
+              loaded.clean() ? kPalette.text : kPalette.error, right_width);
     y += line + 4.0f;
     if (!status_.empty()) {
         draw_fitted(left, y, body_px_, status_is_error_ ? kPalette.error : kPalette.warning, status_, full_width);

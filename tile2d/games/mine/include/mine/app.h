@@ -13,6 +13,7 @@
 // per language (a CJK face for Chinese, the Latin face for everything else).
 #pragma once
 
+#include <mine/content_pack.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
 #include <mine/registry.h>
@@ -61,8 +62,11 @@ struct MineOptions {
     std::string fill;
     /// Which tile layers --fill writes into: "" (the active layer), "all", or a layer number.
     std::string fill_layer;
-    /// Directories of mod packages (repeated --mods). Their content joins the registry after the
-    /// game's own, and their native modules are loaded into this process.
+    /// What the game loads into its content registry, in this order: its own files (--content), then
+    /// content packs (--pack files and --packs directories of pure .ecfg), then mod packages (--mods,
+    /// which may also carry native code).
+    std::vector<std::string> pack_paths;
+    std::vector<std::string> pack_directories;
     std::vector<std::string> mod_directories;
     /// Write the layer as text to the log at shutdown (a scripted run has no keyboard for F4).
     bool dump_layer = false;
@@ -91,6 +95,9 @@ private:
     void begin_session(const SessionConfig& session);
     void open_sandbox();
     void apply_fill();
+    /// Loads the game's content, its packs and its mods into registry_ through the pipeline.
+    const ContentPipelineReport& load_content();
+    /// The same, then re-points the sandbox's cells at the ids the registry now hands out.
     void reload_content();
     void save_layout();
     void load_layout();
@@ -128,8 +135,9 @@ private:
     ContentRegistry registry_{};
     /// The single layer the sandbox screen paints on, and the message the last action left behind.
     SandboxModel sandbox_{};
-    /// The mod packages that are loaded. Owns their libraries, so it outlives every call into them.
-    ModHost mods_{};
+    /// Everything the game's registry is filled from. Owns the loaded libraries, so it outlives every
+    /// call into them.
+    ContentPipeline content_{};
     std::string status_{};
     bool status_is_error_ = false;
 

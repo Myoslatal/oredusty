@@ -376,21 +376,21 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
         }
         for (const t2d::EcfgDocument& document : documents) {
             std::vector<std::string> unknown_tables;
-            for (const ContentEntry& declared : content_declarations(document, &unknown_tables)) {
-                if (registry.find(declared.kind, declared.name) != kNoContent) {
-                    // Taken by the game's own content, by an earlier mod, or by an earlier file of
-                    // this mod: all three are reported, and none of them is merged silently.
-                    const std::string message =
-                        std::format("mod '{}': {} '{}' is already registered and was not replaced",
-                                    manifest.id, content_kind_name(declared.kind), declared.name);
-                    report_.errors.push_back(message);
-                    if (slot.loaded.error.empty()) slot.loaded.error = message;
-                    continue;
-                }
-                const ContentId id = registry.register_content(declared.kind, declared.name);
-                if (id == kNoContent) continue;
-                slot.loaded.registered.push_back(ModContentEntry{declared.kind, id, declared.name});
-                ++report_.content_registered;
+            const std::vector<ContentEntry> declared = content_declarations(document, &unknown_tables);
+            std::vector<ContentEntry> added;
+            const ContentRegistrationReport registered = register_declared_content(registry, declared, &added);
+            for (const ContentEntry& entry : added) {
+                slot.loaded.registered.push_back(ModContentEntry{entry.kind, entry.id, entry.name});
+            }
+            report_.content_registered += registered.registered;
+            for (const ContentEntry& clash : registered.collisions) {
+                // Taken by the game's own content, by an earlier mod, or by an earlier file of this
+                // mod: all three are reported, and none of them is merged silently.
+                const std::string message =
+                    std::format("mod '{}': {} '{}' is already registered and was not replaced", manifest.id,
+                                content_kind_name(clash.kind), clash.name);
+                report_.errors.push_back(message);
+                if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
             for (const std::string& table : unknown_tables) {
                 report_.warnings.push_back(std::format("mod '{}': '{}' is not a content kind", manifest.id, table));

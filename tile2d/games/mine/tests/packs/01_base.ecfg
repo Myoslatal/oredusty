@@ -1,0 +1,11 @@
+# A content pack: one .ecfg file, a pack:: header that says who it is, and content tables. Nothing
+# else - no manifest file, no directory layout, no code.
+pack::
+    id:"base_pack"
+    name:"Base pack"
+    version:"2.0"
+item::
+    pack_ore::
+        note:"placeholder content: the real tables come from the designer"
+structure::
+    pack_floor::

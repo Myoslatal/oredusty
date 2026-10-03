@@ -121,18 +121,25 @@
   `mine_core/content_loader.h` 负责把名字灌进注册表；非 kind 的表会被**报告**而不是忽略（防拼写
   错误）。单测 `test_content_loader` 走通"配置文件 → 注册表 → 存档表 → 用变化后的注册表重新加载"。
 
-### 模组包：内容的交付方式
+### 内容的交付方式：纯 ecfg 内容包与模组包
 
-内容不必编译进本体。`--mods <dir>` 从外部目录加载模组包（`docs/MODS.md`）：
+内容不必编译进本体，有两种外部形式（`docs/MODS.md`），加载顺序固定为**本体内容 → 内容包 → 模组包**，
+三者进同一个注册表，id 按注册顺序分配：
+
+* **纯 ecfg 内容包**：**一个 `.ecfg` 文件就是一个包**，可选一个 `pack::` 头（id / name / version / requires）。
+  `--pack <file>` 指定单个文件，`--packs <dir>` 把目录下每个 `*.ecfg` 当作一个包（按文件名排序，再按 `requires`
+  只移动必须移动的）；不写 `--packs` 时工作目录下存在的 `packs/` 会被自动加载。没有清单文件、没有目录结构、没有代码。
+* **模组包**：目录 + 清单 + 可选共享库，用于需要"跑点什么"的内容。
 
 * 包 = 目录 + `mod.ecfg` 清单 + 若干内容文件 + 可选的共享库。清单里出现未知的键、缺 id、依赖缺失或
   成环、内容文件语法错、原生库缺失/ABI 不符/`on_load` 拒绝——一律**报告并跳过该包**。
-* 模组内容与本体内容进入**同一个注册表**，**本体内容先注册**：本体的 id 因此保持稳定，模组只能往后追加。
-  同名内容**报冲突而不合并**（谁先注册谁保留，冲突记进报告）。
+* 三者进入**同一个注册表**，**本体内容先注册**：本体的 id 因此保持稳定，内容包与模组只能往后追加。
+  同名内容**报冲突而不合并**（谁先注册谁保留，冲突记进报告）；内容包重定义本体内容时，本体赢。
 * 原生模组编译时只需要 `mine/mod_api.h`（及其引用的类型头），**不链接本体的任何库**；跨过 ABI 的只有
   纯数据与函数指针，接口按"只追加 + `struct_size` + 版本号"的方式演进。
-* `[已实现]` 单测 `test_module`（5 用例 / 33 断言）与 `test_mod_package`（9 用例 / 102 断言，
-  覆盖上面每一条失败路径），示例包在 `games/mine/tests/mods/`。
+* `[已实现]` 单测 `test_module`（5 用例 / 33 断言）、`test_mod_package`（9 用例 / 102 断言）与
+  `test_content_pack`（7 用例 / 85 断言，覆盖包头错误、重复 id、依赖缺失与成环、语法错、重定义本体内容、
+  三来源顺序与重载一致性），示例在 `games/mine/tests/{packs,mods}/`。
 
 ## 7. 需要设计者提供的内容清单（本清单就是"内容接口"）
 
@@ -264,7 +271,9 @@
   与离屏像素测试 `test_render_offscreen`（高层覆盖低层、掩码选层）。
 * `[已实现]` 沙盒支持瓦片层：`--tile-layers / --layer / --fill-layer`，`[ ]` 切换当前层，非当前层压暗，
   光标处的"格子"报告整叠内容；布局文件（magic `MSB2`）逐层存取。
-* `[已实现]` **模组包**：`t2d/core/module.h`（动态库加载：`dlopen`/`LoadLibrary`、符号解析、
+* `[已实现]` **内容包与模组包**：`mine/content_pack.h`（一个 `.ecfg` = 一个内容包，可选 `pack::` 头；
+  目录扫描；依赖排序）与 `ContentPipeline`（本体文件 → 内容包 → 模组包，同一个注册表、同一份报告）；
+  `t2d/core/module.h`（动态库加载：`dlopen`/`LoadLibrary`、符号解析、
   错误报告、移动语义）与 `mine/mod_package.h`（清单解析、目录扫描、依赖拓扑排序、冲突报告、
   原生模块宿主与 C ABI 实现）；模组 SDK 头 `mine/mod_api.h`（版本化、只追加的 C ABI）；示例包
   `games/mine/tests/mods/*`（一个纯数据、一个原生）；沙盒 `--mods`、F5 连模组一起重载、状态栏 MODS 行。
@@ -308,6 +317,7 @@
 | M1.1 | 新增 §6：内容注册与存档 id 策略（注册按名字、存档存数字 id、每存档自带 name→id 表、缺失内容报告而非重映射）；里程碑与术语顺延 |
 | M1.2 | 新增 `.ecfg` 配置读取器（格式由仓库根 `example.ecfg` 定义）与内容加载器（配置文件 → 注册表）；§6 与 §9 相应更新 |
 | M1.3 | 新增字体引擎（TrueType + CFF 轮廓、解析式抗锯齿、字形图集、UTF-8 排版）与多语言界面（`en / zh-Hans / zh-Hant`，运行时切换，语言决定 CJK 字面）；界面文案全部走字符串表，代码中无硬编码文案 |
+| M1.8 | **纯 ecfg 内容包**：一个 `.ecfg` 文件即一个包（可选 `pack::` 头：id/name/version/requires），`--pack` 与 `--packs`（目录扫描 + 依赖排序），缺省自动加载工作目录下的 `packs/`；新增 `ContentPipeline` 把**本体内容 → 内容包 → 模组包**三个来源装进同一个注册表、同一份报告，游戏本体（会话界面）与沙盒都用它，F5 全部重载；单测 `test_content_pack`（7 用例 / 85 断言） |
 | M1.7 | **模组包**：内容（定义与逻辑）从外部包加载——`mod.ecfg` 清单、依赖排序与校验、同名冲突报告而非合并、可选的 C++ 模块（`dlopen` + 版本化 C ABI `mine/mod_api.h`，`on_load`/`on_unload`、按 `struct_size` 只追加地演进）；框架侧 `t2d/core/module.h`；沙盒 `--mods` 与 F5 重载、状态栏 MODS 行；文档 `docs/MODS.md` |
 | M1.6 | **删除横版演示**（设计者确认它不是项目内容）：平台跳跃 `World`、快照/命令、客户端预测/和解/插值、`ServerHost`/`LocalClient`、三个演示程序、内置平台 tileset 与程序化 tileset 图集、演示关卡与截图。保留内容无关的传输层（`ILink`/共享内存/KCP/分帧/握手/地图分块）并继续由 `test_kcp`、`test_protocol` 覆盖；`TilemapRenderer` 去掉玩家/拾取物绘制与内置图集依赖（图集网格改由 `Tileset::set_atlas_grid` 声明），`Tileset` 去掉内置 tileset，`TileMap` 去掉内置 ASCII 图例。测试套件 17 → 13（删掉 `test_snapshot`/`test_atlas`/`test_integration_*`），预设 `server-only` 改名 `no-renderer` |
 | M1.5 | **多层瓦片地图**：`TileMap` 支持 1..32 层（默认 1，既有调用不变）、层掩码查询、逐层填充/计数/ASCII、序列化 v2、校验和含层数；渲染器按层自下而上；沙盒可分层绘制与编辑（`--tile-layers / --layer / --fill-layer`，`[ ]` 切层，布局 magic `MSB2`）。三层布局的真机往返：699 格 / 438 个 id 位移后仍逐格对上，删掉内容后 140 格在三层上被标为缺失 |

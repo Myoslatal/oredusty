@@ -5,9 +5,11 @@
 namespace mine {
 
 std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
-                                               std::vector<std::string>* unknown_tables) {
+                                               std::vector<std::string>* unknown_tables,
+                                               std::string_view ignore_table) {
     std::vector<ContentEntry> declared;
     for (const t2d::EcfgValue& table : document.root().children()) {
+        if (!ignore_table.empty() && table.key() == ignore_table) continue;
         ContentKind kind = ContentKind::Count;
         bool known = false;
         for (usize index = 0; index < kContentKindCount; ++index) {
@@ -20,7 +22,8 @@ std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document
         }
         if (!known) {
             // A table that is not named after a content kind is reported, never ignored: it is almost
-            // always a typo in the data file.
+            // always a typo in the data file. A caller that knows about extra tables of its own (a
+            // pack's "pack::" header, for instance) filters them out before calling this.
             if (unknown_tables != nullptr) unknown_tables->emplace_back(table.key());
             continue;
         }
@@ -35,9 +38,27 @@ std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document
     return declared;
 }
 
+ContentRegistrationReport register_declared_content(ContentRegistry& registry,
+                                                    t2d::ConstSpan<const ContentEntry> declared,
+                                                    std::vector<ContentEntry>* registered_out) {
+    ContentRegistrationReport report;
+    for (const ContentEntry& entry : declared) {
+        if (registry.find(entry.kind, entry.name) != kNoContent) {
+            report.collisions.push_back(entry);
+            continue;
+        }
+        const ContentId id = registry.register_content(entry.kind, entry.name);
+        if (id == kNoContent) continue;   // the registry reported why
+        if (registered_out != nullptr) registered_out->push_back(ContentEntry{entry.kind, id, entry.name});
+        ++report.registered;
+    }
+    return report;
+}
+
 ContentLoadReport register_content_from_ecfg(ContentRegistry& registry, const t2d::EcfgDocument& document) {
     ContentLoadReport report;
-    for (const ContentEntry& entry : content_declarations(document, &report.unknown_tables)) {
+    const std::vector<ContentEntry> declared = content_declarations(document, &report.unknown_tables);
+    for (const ContentEntry& entry : declared) {
         const ContentId before = registry.find(entry.kind, entry.name);
         const ContentId id = registry.register_content(entry.kind, entry.name);
         if (id == kNoContent) continue; // the registry already reported why

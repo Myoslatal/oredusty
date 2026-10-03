@@ -14,7 +14,13 @@ target_link_libraries(test_content_loader PRIVATE mine_core)
 t2d_add_test(test_sandbox test_sandbox.cpp)
 target_link_libraries(test_sandbox PRIVATE mine_core)
 
-# --- mod packages ---------------------------------------------------------------------------------
+# --- content packs and mod packages ---------------------------------------------------------------
+# The packs are plain .ecfg files in the source tree: no build step, which is the point of a pack.
+t2d_add_test(test_content_pack test_content_pack.cpp)
+target_link_libraries(test_content_pack PRIVATE mine_core)
+target_compile_definitions(test_content_pack PRIVATE
+    T2D_TEST_PACKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/packs")
+
 # The example packages are assembled in the build tree exactly the way a real install would lay them
 # out: a directory per mod, its manifest and data copied next to the library built from its source.
 set(MINE_TEST_MODS_DIR "${CMAKE_CURRENT_BINARY_DIR}/mods")
@@ -55,3 +61,8 @@ target_compile_definitions(test_mod_package PRIVATE
     T2D_TEST_MOD_BAD_API="$<TARGET_FILE:example_native_bad_api>"
     T2D_TEST_MOD_FAILS="$<TARGET_FILE:example_native_fails>")
 add_dependencies(test_mod_package example_native example_native_bad_api example_native_fails)
+
+# The pipeline test loads all three sources, so it needs the assembled mods directory as well.
+target_compile_definitions(test_content_pack PRIVATE
+    T2D_TEST_MODS_DIR="${MINE_TEST_MODS_DIR}")
+add_dependencies(test_content_pack example_native example_native_bad_api example_native_fails)

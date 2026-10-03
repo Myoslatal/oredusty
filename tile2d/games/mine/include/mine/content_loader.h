@@ -1,4 +1,4 @@
-// Mine - loading the designer's content data into the registry.
+// Mine - loading content into the registry, from every source the game has.
 //
 // A content file is a .ecfg document whose tables are named after the content kinds (see
 // content_kind_name): every key inside such a table is a piece of content, and everything below it is
@@ -20,7 +20,10 @@
 
 #include <t2d/core/ecfg.h>
 
+#include <format>
+#include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mine {
@@ -34,11 +37,87 @@ struct ContentLoadReport {
 };
 
 /// Every piece of content \p document declares, in file order (ids are kNoContent: nothing is
-/// registered). register_content_from_ecfg() is this walk plus registration; a mod loader needs the
-/// list *before* it registers anything, so a name another mod already took can be reported instead of
-/// silently merged.
+/// registered). register_content_from_ecfg() is this walk plus registration; a loader that fills the
+/// registry from several sources needs the list *before* it registers anything, so a name another
+/// source already took can be reported instead of silently merged.
+/// \p ignore_table names a table the caller handles itself (a pack's "pack::" header, for instance):
+/// it is skipped silently instead of being reported as a table that is not a content kind.
 [[nodiscard]] std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
-                                                             std::vector<std::string>* unknown_tables = nullptr);
+                                                             std::vector<std::string>* unknown_tables = nullptr,
+                                                             std::string_view ignore_table = {});
+
+/// What one register_declared_content() call did.
+struct ContentRegistrationReport {
+    usize registered = 0;
+    /// Names that were already taken. They are refused, never merged: who owns an id has to be
+    /// unambiguous, and "the second file silently won" is how a save gets corrupted.
+    std::vector<ContentEntry> collisions;
+};
+
+/// Registers \p declared into \p registry, refusing (and listing) names that are already taken.
+/// \p registered_out, when given, collects what this call actually added.
+[[nodiscard]] ContentRegistrationReport register_declared_content(ContentRegistry& registry,
+                                                                  t2d::ConstSpan<const ContentEntry> declared,
+                                                                  std::vector<ContentEntry>* registered_out = nullptr);
+
+/// The result of ordering a set of things that require each other.
+struct RequirementOrder {
+    std::vector<usize> order;         ///< indices, everything a thing requires comes before it
+    std::vector<usize> dropped;       ///< indices that cannot load: a missing requirement, or a cycle
+    std::vector<std::string> errors;  ///< why, in the caller's own words ("'a' requires 'b', ...")
+};
+
+/// Orders \p count things so that what a thing requires comes first. \p id_of names one, \p requires_of
+/// lists what it needs. A requirement nobody provides drops the thing that wanted it; anything left
+/// over is a cycle. Both are reported rather than guessed at: a load order that is not what the data
+/// asked for is worse than no load order.
+template <class IdOf, class RequiresOf>
+[[nodiscard]] RequirementOrder order_by_requirements(usize count, IdOf&& id_of, RequiresOf&& requires_of) {
+    RequirementOrder result;
+    std::map<std::string, usize> by_id;
+    for (usize index = 0; index < count; ++index) by_id.emplace(id_of(index), index);
+
+    std::vector<bool> placed(count, false);
+    std::vector<bool> dropped(count, false);
+    usize dropped_count = 0;
+    for (usize index = 0; index < count; ++index) {
+        for (const std::string& need : requires_of(index)) {
+            if (by_id.find(need) != by_id.end()) continue;
+            result.errors.push_back(std::format("'{}' requires '{}', which is not loaded", id_of(index), need));
+            dropped[index] = true;
+            ++dropped_count;
+            break;
+        }
+    }
+    while (result.order.size() + dropped_count < count) {
+        bool progress = false;
+        for (usize index = 0; index < count; ++index) {
+            if (placed[index] || dropped[index]) continue;
+            bool ready = true;
+            for (const std::string& need : requires_of(index)) {
+                const auto found = by_id.find(need);
+                if (found == by_id.end() || !placed[found->second]) {
+                    ready = false;
+                    break;
+                }
+            }
+            if (!ready) continue;
+            placed[index] = true;
+            result.order.push_back(index);
+            progress = true;
+        }
+        if (!progress) break;
+    }
+    for (usize index = 0; index < count; ++index) {
+        if (placed[index] || dropped[index]) continue;
+        result.errors.push_back(std::format("'{}': its requirements form a cycle", id_of(index)));
+        dropped[index] = true;
+    }
+    for (usize index = 0; index < count; ++index) {
+        if (dropped[index]) result.dropped.push_back(index);
+    }
+    return result;
+}
 
 /// Registers every content name found in \p document. Tables that are not named after a content kind
 /// are listed in the report and skipped.

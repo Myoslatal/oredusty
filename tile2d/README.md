@@ -56,6 +56,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_sandbox        22 cases / 650 checks  the sandbox: grid, palette, reload by name, layouts
+    games/mine/tests/test_content_pack    7 cases /  85 checks  packs: headers, order, collisions, the three sources
     games/mine/tests/test_mod_package     9 cases / 102 checks  mod manifests, dependency order, collisions, a native module
 
 ## The tile map
@@ -181,9 +182,26 @@ written with.
 `test_content_loader` walks the whole path: config file -> registry -> the table a save stores ->
 loading it back with a registry whose ids have moved, resolving every reference by name.
 
-## Mod packages
+## Content packs and mod packages
 
-Content — definitions *and* logic — can live outside the game. A mod is a directory with a manifest:
+Content — definitions *and* logic — can live outside the game, in two forms:
+
+| Form | What it is | Code? |
+|---|---|---|
+| **Content pack** | **one `.ecfg` file**, optionally prefixed by a `pack::` header that says who it is | no |
+| **Mod package** | a directory with a `mod.ecfg` manifest, content files and an optional shared library | yes |
+
+Most content only needs the first. The load order is fixed — **the game's own files, then packs, then
+mods** — and all three fill the same registry, so the game's ids stay stable and everything else appends.
+
+    packs/01_base.ecfg               # pack::  + content tables
+
+    ./build/debug/games/mine/mine_game --world story --start 1 --packs packs
+    ./build/debug/games/mine/mine_game --world sandbox --start 1 --pack packs/01_base.ecfg
+
+![Packs loaded by the game itself](games/mine/docs/images/session_packs_en.png)
+
+A pack that has to *run* something is a mod package instead:
 
     mods/example_native/
         mod.ecfg                 id, name, version, api, requires, content, native, data
@@ -192,11 +210,14 @@ Content — definitions *and* logic — can live outside the game. A mod is a di
     ./build/debug/games/mine/mine_game --world sandbox --start 1 \
         --content games/mine/tests/data/placeholder_content.ecfg --mods mods
 
-![Content from the game and from two mods](games/mine/docs/images/sandbox_mods_en.png)
+![Content from the game, from packs and from two mods](games/mine/docs/images/sandbox_mods_en.png)
 
-* **Data first.** A package's content files go into the same registry the game's own content does, so
-  ids, saves and the name → id table work the same. The game's content registers first, so its ids stay
-  stable and a mod can only append. A name two packages both declare is **reported, never merged**.
+* **Data first.** A pack is one `.ecfg` file: its tables are content, exactly as in the game's own files,
+  and `pack::` is metadata (id, name, version, requires). `--packs <dir>` loads every `*.ecfg` in a
+  directory, ordered by file name and then by what they require; a `packs/` directory beside the game
+  is picked up on its own. Everything lands in the same registry the game's own content does, so ids,
+  saves and the name → id table work the same — and a name two sources both declare is **reported, never
+  merged**, with the game's own content always keeping its id.
 * **Code second, and optional.** A native mod is a shared library that exports one symbol. It compiles
   against `mine/mod_api.h` and **links nothing of the game** — nothing but plain data and function
   pointers crosses the line, and the interface grows by appending fields behind a `struct_size` and a
@@ -274,10 +295,10 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 15/15 tests green |
-| `release` | 15/15 tests green |
-| `asan` (Address + UB sanitizers) | 15/15 tests green |
-| `tsan` (ThreadSanitizer) | 15/15 tests green |
+| `debug` | 16/16 tests green |
+| `release` | 16/16 tests green |
+| `asan` (Address + UB sanitizers) | 16/16 tests green |
+| `tsan` (ThreadSanitizer) | 16/16 tests green |
 | `no-renderer` | 8/8 tests green, no Vulkan, GLFW or game binary |
 
 Hardware: **Intel Arc Pro 130T/140T (Arrow Lake-P), Mesa 26.2.3, Wayland**. The windowed path is
