@@ -181,7 +181,12 @@ void SpriteBatch::draw_quad(const Aabb2& rect, const Aabb2& uv_rect, u32 color) 
 }
 
 void SpriteBatch::draw_rect(const Aabb2& rect, u32 color) {
-    draw_quad(rect, Aabb2{Vec2{white_u_, white_v_}, Vec2{white_u_ + 0.001f, white_v_ + 0.001f}}, color);
+    // A degenerate uv rect: all four corners sample the same texel, so the quad is one flat colour.
+    // A tiny *span* instead (the obvious "0.001") is interpolated across the quad, and with linear
+    // filtering it blends the white texel with whatever surrounds it. The built-in bitmap atlas has a
+    // whole white cell so the span stayed inside it and nobody noticed; the glyph atlas reserves a
+    // single pixel, and there every rectangle faded out towards one corner.
+    draw_quad(rect, Aabb2{Vec2{white_u_, white_v_}, Vec2{white_u_, white_v_}}, color);
 }
 
 void SpriteBatch::draw_rect_outline(const Aabb2& rect, f32 thickness, u32 color) {

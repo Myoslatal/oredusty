@@ -15,6 +15,11 @@ namespace mine {
 using t2d::i32;
 using t2d::usize;
 
+/// Locale id of the world row's value for `mode`. It lives beside the model rather than in the screen
+/// because every mode must have a label: the screen used to choose between two, which quietly printed
+/// STORY for the sandbox.
+[[nodiscard]] const char* mode_value_id(Mode mode);
+
 /// What the start screen asks the application to do.
 enum class MenuAction : u8 { None, StartSession, Quit };
 
@@ -34,7 +39,7 @@ struct MenuRow {
 
 class MenuModel {
 public:
-    /// World, language, seed (endless only) and four actions.
+    /// World, language, seed (endless only) and up to four actions.
     static constexpr usize kMaxRows = 7;
     /// Seeds are kept in a range that stays readable on screen.
     static constexpr u32 kMinSeed = 1;
@@ -52,6 +57,8 @@ public:
 
     [[nodiscard]] Mode mode() const { return mode_; }
     void set_mode(Mode mode);
+    /// Next world type in the cycle a left/right press walks: story -> endless -> sandbox -> story.
+    [[nodiscard]] Mode next_mode(i32 delta) const;
     [[nodiscard]] t2d::Language language() const { return language_; }
     void set_language(t2d::Language language);
     /// Next language in the cycle, the way a left/right press walks it.
@@ -68,6 +75,8 @@ public:
 
 private:
     void rebuild_rows();
+    /// Focuses the first action row: used when the focused row disappears from under the cursor.
+    void select_first_action();
 
     Mode mode_ = Mode::Story;
     t2d::Language language_ = t2d::Language::English;

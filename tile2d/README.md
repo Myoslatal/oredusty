@@ -85,6 +85,7 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
     ctest --test-dir build/debug --output-on-failure
 
     games/mine/tests/test_mine_menu  the start screen as a state machine (CPU only)
+    games/mine/tests/test_sandbox    the single layer sandbox: grid, palette, reload by name, layouts
     tests/test_tilemap            chunked storage, collision, serialisation, hazards, one-way platforms
     tests/test_snapshot           full/delta wire format, delta merge, a 360 tick reconstruction stream
     tests/test_protocol           framing, every message payload, byte stream limits, the shared channel
@@ -119,7 +120,8 @@ raw materials or products in a specific way before the next layer opens. Its req
 engineering constraints and the list of content the designer still has to supply live in
 [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
 
-What exists today (M1) is the shell, deliberately free of any game content:
+What exists today (M1 plus the sandbox) is the shell and the content debugger, deliberately free of
+any game content:
 
     ./build/debug/games/mine/mine_game                      # start screen
     ./build/debug/games/mine/mine_game --world endless --seed 4242 --start 1
@@ -178,6 +180,35 @@ written with.
 
 `test_content_loader` walks the whole path: config file -> registry -> the table a save stores ->
 loading it back with a registry whose ids have moved, resolving every reference by name.
+
+### The single layer sandbox
+
+Content is not authored yet, so the game ships a **content debugger** instead of a pretend layer: one
+layer, no demands, no progression, and no content of its own — the palette is whatever the designer's
+data registered.
+
+    ./build/debug/games/mine/mine_game --world sandbox --start 1
+    ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+        --content games/mine/tests/data/placeholder_content.ecfg --fill bands
+
+![Sandbox, palette laid out as bands](games/mine/docs/images/sandbox_en.png)
+
+![Sandbox, empty registry](games/mine/docs/images/sandbox_empty.png)
+
+* **The palette is the registry**, printed with the ids the registry handed out (`structure #3`), so a
+  designer can see both the names and the numbers a save would store.
+* **F5 reloads the content files without restarting**, and every placed cell is re-pointed at its
+  content **by name**. Inserting an entry in the middle of a file shifts every id after it; without
+  the name table the layer would quietly turn one structure into another. Content that disappeared is
+  reported and its cells are marked missing — never handed to whatever now holds that number.
+* **The layout round trips through the real save path** (ids plus the name → id table), which is how
+  the strategy in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §6 got its end to end evidence: 241 cells
+  painted under one version of a content file load back as 241 cells under a version where 148 of their
+  ids moved, and as 190 cells plus 51 explicitly missing ones when the content is deleted.
+* **No content in the code**: the placeholder names used by the tool's own tests are marked as such in
+  `games/mine/tests/data/placeholder_content.ecfg`.
+
+Usage, keys and limits: [docs/SANDBOX.md](docs/SANDBOX.md).
 
 ## Text and languages
 

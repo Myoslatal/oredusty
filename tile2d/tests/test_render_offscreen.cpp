@@ -212,4 +212,50 @@ T2D_TEST(a_frame_with_many_quads_uses_only_the_ring_space_it_needs) {
     T2D_CHECK_MSG(after - before < 4096u, "the frame ring grew by {} bytes for 8 quads", after - before);
 }
 
+T2D_TEST(a_rectangle_sampled_from_a_single_white_texel_is_flat_and_opaque) {
+    // The glyph atlas reserves exactly one white pixel and the game samples it through a *linear*
+    // filter (glyphs are anti-aliased). If draw_rect() asks for a uv *span* instead of a point, the
+    // corners of the quad sample the transparent neighbours of that pixel and the rectangle comes out
+    // as a gradient fading towards one corner - which is what every panel, every highlight row and
+    // every sandbox cell looked like while the span was 0.001 of a 2048 page.
+    Fixture fixture = make_fixture(64);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture);
+    T2D_REQUIRE(batch != nullptr);
+
+    constexpr u32 kPage = 512; // 0.001 of a 512 page is half a texel: enough to leave the white pixel
+    ore::Image image = ore::Image::create(kPage, kPage, ore::make_rgba(255, 255, 255, 0));
+    image.set_pixel(0, 0, ore::make_rgba(255, 255, 255, 255));
+    Scope<ore::rhi::Texture> atlas = fixture.context->create_texture(image, false, "test.one.white.texel");
+    T2D_REQUIRE(atlas != nullptr);
+    ore::rhi::SamplerDesc desc;
+    desc.min_filter = VK_FILTER_LINEAR;
+    desc.mag_filter = VK_FILTER_LINEAR;
+    desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    Scope<ore::rhi::Sampler> sampler = ore::rhi::Sampler::create(fixture.context->device(), desc);
+    T2D_REQUIRE(sampler != nullptr);
+
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+    fixture.renderer->begin_pass(clear, 1.0f);
+    batch->begin(frame, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, *atlas, sampler->handle());
+    batch->set_white_texel(Vec2{0.5f / static_cast<f32>(kPage), 0.5f / static_cast<f32>(kPage)});
+    batch->draw_rect(Aabb2{Vec2{0.0f, 0.0f}, Vec2{64.0f, 64.0f}}, 0xFF00FF00u); // opaque green
+    batch->end();
+    fixture.renderer->end_pass();
+    fixture.renderer->end_frame();
+    fixture.renderer->wait_idle();
+
+    const ore::Image shot = fixture.context->read_render_target(fixture.renderer->target());
+    T2D_REQUIRE(!shot.empty());
+    const u32 corners[5][2] = {{1u, 1u}, {62u, 1u}, {1u, 62u}, {62u, 62u}, {32u, 32u}};
+    for (const auto& point : corners) {
+        const ore::Color pixel = ore::Color::from_packed(shot.pixel(point[0], point[1]));
+        T2D_CHECK_MSG(pixel.g > 200 && pixel.a == 255,
+                      "the pixel at {},{} came out ({}, {}, {}, {}) instead of opaque green", point[0], point[1],
+                      pixel.r, pixel.g, pixel.b, pixel.a);
+    }
+}
+
 T2D_TEST_MAIN

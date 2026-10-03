@@ -12,6 +12,7 @@ constexpr const char* kStartLabel = "row.start";
 constexpr const char* kHostLabel = "row.host";
 constexpr const char* kJoinLabel = "row.join";
 constexpr const char* kQuitLabel = "row.quit";
+constexpr const char* kSandboxLabel = "row.sandbox";
 
 /// Keeps a seed inside the readable range: values that already fit are untouched, anything else is
 /// folded back in (so a seed typed on the command line can be any u32).
@@ -22,6 +23,15 @@ constexpr const char* kQuitLabel = "row.quit";
 }
 
 } // namespace
+
+const char* mode_value_id(Mode mode) {
+    switch (mode) {
+        case Mode::Endless: return "value.endless";
+        case Mode::Sandbox: return "value.sandbox";
+        case Mode::Story: break;
+    }
+    return "value.story";
+}
 
 MenuModel::MenuModel() { rebuild_rows(); }
 
@@ -43,12 +53,34 @@ void MenuModel::rebuild_rows() {
     rows_[count++] = MenuRow{RowKind::World, MenuAction::None, Role::Single, kWorldLabel};
     rows_[count++] = MenuRow{RowKind::Language, MenuAction::None, Role::Single, kLanguageLabel};
     if (seed_visible()) rows_[count++] = MenuRow{RowKind::Seed, MenuAction::None, Role::Single, kSeedLabel};
-    rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Single, kStartLabel};
-    rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Host, kHostLabel};
-    rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Join, kJoinLabel};
+    if (mode_ == Mode::Sandbox) {
+        // The sandbox is one local layer with no server behind it, so hosting and joining are not
+        // offered: a row that cannot work is worse than a missing row.
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Single, kSandboxLabel};
+    } else {
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Single, kStartLabel};
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Host, kHostLabel};
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Join, kJoinLabel};
+    }
     rows_[count++] = MenuRow{RowKind::Action, MenuAction::Quit, Role::Single, kQuitLabel};
     row_count_ = count;
     if (selected_ >= row_count_) selected_ = row_count_ - 1;
+}
+
+void MenuModel::select_first_action() {
+    for (usize index = 0; index < row_count_; ++index) {
+        if (rows_[index].kind == RowKind::Action) {
+            select(index);
+            return;
+        }
+    }
+}
+
+Mode MenuModel::next_mode(i32 delta) const {
+    const i32 count = static_cast<i32>(kModeCount);
+    i32 index = static_cast<i32>(mode_) + delta;
+    index = ((index % count) + count) % count; // wrap in both directions
+    return static_cast<Mode>(index);
 }
 
 void MenuModel::set_mode(Mode mode) {
@@ -58,7 +90,7 @@ void MenuModel::set_mode(Mode mode) {
     rebuild_rows();
     // Leaving endless mode removes the seed row; land on the first action instead of on whatever
     // slid into its place.
-    if (was_seed_row && !seed_visible()) select(row_count_ - 4);
+    if (was_seed_row && !seed_visible()) select_first_action();
 }
 
 void MenuModel::set_language(t2d::Language language) {
@@ -91,7 +123,7 @@ MenuAction MenuModel::handle(MenuKey key) {
             const bool forward = key == MenuKey::Right;
             const MenuRow& current = rows_[selected_];
             if (current.kind == RowKind::World) {
-                set_mode(forward ? Mode::Endless : Mode::Story);
+                set_mode(next_mode(forward ? 1 : -1));
             } else if (current.kind == RowKind::Language) {
                 set_language(next_language(forward ? 1 : -1));
             } else if (current.kind == RowKind::Seed) {

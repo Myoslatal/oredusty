@@ -3,7 +3,11 @@
 
 #include <support/test_support.h>
 
+#include <t2d/core/ecfg.h>
+
+#include <optional>
 #include <string>
+#include <vector>
 
 using namespace mine;
 
@@ -182,6 +186,95 @@ T2D_TEST(randomising_the_seed_is_deterministic_and_changes_it) {
     const u32 story_seed = story.seed();
     (void)story.handle(MenuKey::Randomise);
     T2D_CHECK_EQ(story.seed(), story_seed);
+}
+
+T2D_TEST(the_world_row_cycles_through_story_endless_and_sandbox) {
+    MenuModel menu;
+    T2D_CHECK_EQ(menu.mode(), Mode::Story);
+    T2D_CHECK_EQ(menu.next_mode(1), Mode::Endless);
+    T2D_CHECK_EQ(menu.next_mode(-1), Mode::Sandbox); // wraps backwards
+    T2D_CHECK_EQ(std::string(mode_name(Mode::Sandbox)), std::string("SANDBOX"));
+
+    menu.select(0);
+    (void)menu.handle(MenuKey::Right);
+    T2D_CHECK_EQ(menu.mode(), Mode::Endless);
+    (void)menu.handle(MenuKey::Right);
+    T2D_CHECK_EQ(menu.mode(), Mode::Sandbox);
+    (void)menu.handle(MenuKey::Right);
+    T2D_CHECK_EQ(menu.mode(), Mode::Story);
+    (void)menu.handle(MenuKey::Left);
+    T2D_CHECK_EQ(menu.mode(), Mode::Sandbox);
+}
+
+T2D_TEST(the_sandbox_offers_one_local_row_and_no_hosting) {
+    MenuModel menu;
+    menu.set_mode(Mode::Sandbox);
+    T2D_CHECK_FALSE(menu.seed_visible());
+    T2D_CHECK_EQ(menu.row_count(), 4u); // world, language, open the sandbox, quit
+    T2D_CHECK_EQ(std::string(menu.row(2).id), std::string("row.sandbox"));
+    T2D_CHECK_EQ(menu.row(2).kind, RowKind::Action);
+    T2D_CHECK_EQ(menu.row(2).role, Role::Single);
+    // Hosting and joining are not offered: the sandbox is one local layer with no server behind it.
+    T2D_CHECK_EQ(action_row(menu, MenuAction::StartSession, Role::Host), menu.row_count());
+    T2D_CHECK_EQ(action_row(menu, MenuAction::StartSession, Role::Join), menu.row_count());
+
+    menu.select(2);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::StartSession);
+    T2D_CHECK_EQ(menu.session_config().mode, Mode::Sandbox);
+    T2D_CHECK_EQ(menu.session_config().role, Role::Single);
+
+    // The seed row goes away when the sandbox is chosen from endless mode, and the focus lands on an
+    // action rather than on whatever slid into its place.
+    menu.set_mode(Mode::Endless);
+    menu.select(2);
+    T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Seed);
+    menu.set_mode(Mode::Sandbox);
+    T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Action);
+
+    // And leaving the sandbox puts the hosting rows back.
+    menu.select(menu.row_count() - 1);
+    menu.set_mode(Mode::Story);
+    T2D_CHECK_EQ(menu.row_count(), 6u);
+    T2D_CHECK(menu.selected() < menu.row_count());
+    T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Action);
+}
+
+T2D_TEST(every_label_the_menu_can_show_exists_in_the_shipped_string_table) {
+    // The menu hands out locale ids, so a typo in one of them would be printed on screen as the id
+    // itself. This walks every id the menu can produce through the file the game actually ships.
+    const std::string path = std::string(T2D_SOURCE_DIR) + "/assets/text/ui.ecfg";
+    t2d::EcfgError error;
+    std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(path, &error);
+    if (!document.has_value()) {
+        T2D_CHECK_MSG(false, "{}", error.describe(path));
+        return;
+    }
+
+    MenuModel menu;
+    std::vector<std::string> ids;
+    for (const Mode mode : {Mode::Story, Mode::Endless, Mode::Sandbox}) {
+        menu.set_mode(mode);
+        ids.emplace_back(mode_value_id(mode));
+        for (usize index = 0; index < menu.row_count(); ++index) ids.emplace_back(menu.row(index).id);
+    }
+    T2D_CHECK_GE(ids.size(), 14u); // three worlds, four rows in each
+
+    // Looked up in the parsed file rather than through Locale, so this stays a t2d::core only test.
+    for (const char* language : {"en", "zh-Hans", "zh-Hant"}) {
+        const t2d::EcfgValue* table = document->find(language);
+        T2D_CHECK_MSG(table != nullptr && table->is_table(), "the string table '{}' is missing", language);
+        if (table == nullptr) continue;
+        for (const std::string& id : ids) {
+            const t2d::EcfgValue* value = table->find(id);
+            T2D_CHECK_MSG(value != nullptr && value->is_string() && !value->as_string().empty(),
+                          "'{}' has no text in '{}'", id, language);
+        }
+    }
+
+    // Three worlds, three different labels: the two way choice this replaced printed STORY for both
+    // story and sandbox.
+    T2D_CHECK_NE(std::string(mode_value_id(Mode::Story)), std::string(mode_value_id(Mode::Sandbox)));
+    T2D_CHECK_NE(std::string(mode_value_id(Mode::Endless)), std::string(mode_value_id(Mode::Sandbox)));
 }
 
 T2D_TEST_MAIN
