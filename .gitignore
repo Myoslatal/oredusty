@@ -13,6 +13,10 @@ out/
 **/cmake_install.cmake
 **/CTestTestfile.cmake
 **/Makefile
+# An accidental in-source configure writes these next to the sources (the presets never do).
+**/CMakeCache.txt
+**/generated/
+**/CMakeUserPresets.json
 **/*.a
 /examples/ore_example_*
 /tests/test_*
