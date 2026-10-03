@@ -46,6 +46,19 @@ struct ContentLoadReport {
                                                              std::vector<std::string>* unknown_tables = nullptr,
                                                              std::string_view ignore_table = {});
 
+/// One content entry's picture. The engine does not read the designer's fields - with one exception:
+/// it has to be able to draw what the designer describes, so "image" is read, and its path is kept
+/// exactly as written. Resolving that path against whatever the content came from is the caller's job.
+struct ContentImage {
+    ContentKind kind = ContentKind::Item;
+    std::string name;   ///< the content entry it belongs to
+    std::string path;   ///< the image field as written ("art/wall.png")
+};
+
+/// Every "image" field \p document declares, in file order. Entries without one are simply absent.
+[[nodiscard]] std::vector<ContentImage> content_images(const t2d::EcfgDocument& document,
+                                                       std::string_view ignore_table = {});
+
 /// What one register_declared_content() call did.
 struct ContentRegistrationReport {
     usize registered = 0;

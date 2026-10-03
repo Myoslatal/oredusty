@@ -20,6 +20,7 @@
 #include <mine/sandbox.h>
 #include <mine/session.h>
 
+#include <t2d/render/image_atlas.h>
 #include <t2d/render/sprite_batch.h>
 #include <t2d/render/text_renderer.h>
 #include <t2d/text/font.h>
@@ -106,6 +107,17 @@ private:
     void fit_sandbox_view();
     void load_localisation();
     void load_fonts();
+    /// Decodes every picture the packs ship into one atlas, so the sandbox can draw what the content
+    /// describes instead of a colour standing in for it.
+    void load_pack_images();
+    /// The palette rows the panel actually shows: shared by the panel pass and the picture pass.
+    struct PaletteLayout {
+        f32 left = 0.0f, right = 0.0f, first_y = 0.0f, row_height = 0.0f;
+        usize first_visible = 0, visible = 0;
+    };
+    [[nodiscard]] PaletteLayout palette_layout() const;
+    /// Draws the pictures of the visible cells and of the palette, in their own batch: one texture.
+    void draw_sandbox_images();
     void draw_start_screen();
     void draw_session_screen();
     void draw_sandbox_screen();
@@ -149,6 +161,10 @@ private:
 
     Scope<t2d::SpriteBatch> batch_;
     Scope<ore::rhi::Sampler> sampler_;
+    /// Pack art: one page for every picture the content references, drawn in a second batch.
+    Scope<t2d::ImageAtlas> image_atlas_;
+    Scope<ore::rhi::Sampler> image_sampler_;
+    std::vector<std::string> image_errors_;
     f32 unit_ = 2.0f;      ///< layout unit derived from the window height
     u16 body_px_ = 16;     ///< text size the interface is drawn at
 };

@@ -106,8 +106,7 @@ T2D_TEST(a_directory_of_packs_loads_in_dependency_order) {
     T2D_CHECK_EQ(registry.find(ContentKind::Item, "pack_scrap"), 2u);
 
     // The pack:: header is metadata: it is not reported as a table that is not a content kind.
-    T2D_CHECK_FALSE(mentions(report.warnings, "pack"));
-    T2D_CHECK_FALSE(mentions(report.errors, "pack"));
+    T2D_CHECK_FALSE(mentions(report.warnings, "is not a content kind"));
 }
 
 T2D_TEST(a_pack_without_a_header_takes_its_name_from_the_file) {
@@ -281,6 +280,82 @@ T2D_TEST(the_pipeline_loads_the_game_first_then_packs_then_mods) {
     T2D_CHECK(pipeline.packs().empty());
     T2D_CHECK(pipeline.mods().empty());
     T2D_CHECK_EQ(registry.total_count(), entries);   // unloading mods does not touch the registry
+}
+
+T2D_TEST(a_pack_image_is_resolved_and_checked) {
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({T2D_TEST_PACKS_DIR});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK_EQ(report.pack_images, 4u);   // two in each pack
+    const ContentPack* base = find_pack(pipeline, "base_pack");
+    T2D_REQUIRE(base != nullptr);
+    T2D_CHECK_EQ(base->images.size(), 2u);
+    for (const PackImage& image : base->images) {
+        T2D_CHECK_MSG(image.ok, "{}: {}", image.path, image.error);
+        T2D_CHECK(image.resolved.find("packs") != std::string::npos);
+        T2D_CHECK(image.resolved.find("floor.png") != std::string::npos ||
+                  image.resolved.find("tower.png") != std::string::npos);
+    }
+    T2D_CHECK_EQ(base->images[0].content, std::string("pack_ore"));
+    T2D_CHECK_EQ(base->images[0].kind, ContentKind::Item);
+
+    // A picture that is not there, an empty path, and a file the engine cannot decode are all
+    // reported: a content entry that cannot be drawn must not look like one that can.
+    const struct {
+        const char* name;
+        const char* text;
+        const char* expected;
+    } cases[] = {
+        {"missing", "item::\n    a::\n        image:\"art/nope.png\"\n", "is not there"},
+        {"empty", "item::\n    a::\n        image:\"\"\n", "the image path is empty"},
+        {"notpng", "item::\n    a::\n        image:\"art/thing.jpg\"\n", "only PNG is decoded"},
+    };
+    for (const auto& test_case : cases) {
+        Scratch scratch;
+        scratch.write("pack.ecfg", test_case.text);
+        scratch.write("art/thing.jpg", "not an image");
+        ContentRegistry scratch_registry;
+        ContentPipeline scratch_pipeline;
+        scratch_pipeline.set_pack_directories({scratch.root()});
+        const ContentPipelineReport& scratch_report = scratch_pipeline.load(scratch_registry);
+        T2D_CHECK_MSG(!scratch_report.clean(), "{} was accepted", test_case.name);
+        T2D_CHECK_MSG(mentions(scratch_report.errors, test_case.expected), "{}: errors were {}",
+                      test_case.name, scratch_report.first_error());
+        T2D_CHECK_EQ(scratch_report.pack_images, 0u);
+        // The content itself still loads: a missing picture is a drawing problem, not a data problem.
+        T2D_CHECK_EQ(scratch_registry.count(ContentKind::Item), 1u);
+    }
+
+    // A pack that says nothing about pictures has none, and is not bothered about it.
+    ContentRegistry plain_registry;
+    ContentPipeline plain;
+    plain.set_pack_files({std::string(T2D_TEST_PACKS_DIR) + "/02_anonymous.ecfg"});
+    const ContentPipelineReport& plain_report = plain.load(plain_registry);
+    T2D_CHECK(plain_report.clean());
+    T2D_CHECK_EQ(plain_report.pack_images, 0u);
+}
+
+T2D_TEST(the_pack_workspace_and_its_template_always_load) {
+    // The repository ships a pack workspace (tile2d/packs) with a template project in it. The game
+    // picks ./packs up on its own, so the template has to stay loadable and stay empty: a template
+    // that registers content would put placeholder names in front of a designer on every run.
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({std::string(T2D_SOURCE_DIR) + "/packs"});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK_EQ(report.packs, 1u);
+    T2D_REQUIRE(pipeline.packs().size() == 1u);
+    T2D_CHECK_EQ(pipeline.packs()[0].id, std::string("template"));
+    T2D_CHECK_EQ(pipeline.packs()[0].name, std::string("内容包模板"));
+    T2D_CHECK_EQ(report.pack_content, 0u);
+    T2D_CHECK_EQ(registry.total_count(), 0u);
+
+    // The workspace is found by walking into the project directory, which is what makes a workspace of
+    // pack projects work with a single --packs.
+    T2D_CHECK(pipeline.packs()[0].path.find("template") != std::string::npos);
 }
 
 T2D_TEST_MAIN

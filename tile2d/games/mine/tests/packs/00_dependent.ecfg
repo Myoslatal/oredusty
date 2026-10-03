@@ -7,5 +7,7 @@ pack::
     requires:["base_pack"]
 structure::
     pack_tower::
+        image:"art/tower.png"
 machine::
     pack_lift::
+        image:"art/lift.png"

@@ -2,6 +2,7 @@
 // available and assert on the pixels that come back, so "the renderer reported draw calls but the
 // screen stayed empty" can never happen again. Skips (instead of failing) where there is no device.
 #include <t2d/render/atlas.h>
+#include <t2d/render/image_atlas.h>
 #include <t2d/render/sprite_batch.h>
 #include <t2d/render/tilemap_renderer.h>
 #include <t2d/sim/tileset.h>
@@ -376,6 +377,68 @@ T2D_TEST(the_higher_map_layer_is_drawn_over_the_lower_one) {
         render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::layer_mask(5), 24, 24);
     T2D_CHECK_EQ(empty.r + empty.g + empty.b, 0);
     T2D_CHECK_EQ(masked_out.r + masked_out.g + masked_out.b, 0);
+}
+
+T2D_TEST(images_packed_into_one_page_draw_with_one_texture) {
+    Fixture fixture = make_fixture(64);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    ImageAtlas::Options options;
+    options.page_size = 128;
+    options.cell_size = 16;
+    Scope<ImageAtlas> atlas = ImageAtlas::create(*fixture.context, options);
+    T2D_REQUIRE(atlas != nullptr);
+    T2D_CHECK_EQ(atlas->capacity(), 64u);
+
+    const ore::Image red = ore::Image::create(16, 16, ore::make_rgba(200, 40, 40));
+    const ore::Image blue = ore::Image::create(8, 8, ore::make_rgba(40, 40, 200));
+    T2D_CHECK(atlas->add("red", red));
+    T2D_CHECK(atlas->add("blue", blue));
+    T2D_CHECK(atlas->has("red"));
+    T2D_CHECK_FALSE(atlas->has("green"));
+    T2D_CHECK_EQ(atlas->count(), 2u);
+    T2D_CHECK_EQ(atlas->dropped(), 0u);
+    // A key that is already taken, an image that does not fit a cell, and an empty one are refused
+    // rather than quietly overwriting somebody else's art.
+    T2D_CHECK_FALSE(atlas->add("red", blue));
+    T2D_CHECK_FALSE(atlas->add("big", ore::Image::create(32, 32, ore::make_rgba(1, 2, 3))));
+    T2D_CHECK_FALSE(atlas->add("empty", ore::Image{}));
+    T2D_CHECK_EQ(atlas->count(), 2u);
+    T2D_CHECK_EQ(atlas->dropped(), 1u);
+    T2D_CHECK_EQ(atlas->uv("green").size().x, 0.0f);
+
+    // Both images in one batch, from one texture, each in its own cell.
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+    fixture.renderer->begin_pass(clear, 1.0f);
+    batch->begin(frame, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, atlas->texture(), sampler->handle());
+    batch->draw_quad(Aabb2{Vec2{0.0f, 0.0f}, Vec2{32.0f, 32.0f}}, atlas->uv("red"), 0xFFFFFFFFu);
+    batch->draw_quad(Aabb2{Vec2{32.0f, 0.0f}, Vec2{64.0f, 32.0f}}, atlas->uv("blue"), 0xFFFFFFFFu);
+    batch->end();
+    fixture.renderer->end_pass();
+    fixture.renderer->end_frame();
+    fixture.renderer->wait_idle();
+    T2D_CHECK_EQ(batch->draw_calls(), 1u);
+
+    const ore::Image shot = fixture.context->read_render_target(fixture.renderer->target());
+    T2D_REQUIRE(!shot.empty());
+    const ore::Color left = ore::Color::from_packed(shot.pixel(16, 16));
+    const ore::Color right = ore::Color::from_packed(shot.pixel(48, 16));
+    T2D_CHECK_MSG(left.r > 150 && left.b < 90, "the first image came out ({}, {}, {})", left.r, left.g, left.b);
+    T2D_CHECK_MSG(right.b > 150 && right.r < 90, "the second image came out ({}, {}, {})", right.r, right.g,
+                  right.b);
+    // The far edge of the first quad is still red: the half texel inset keeps the neighbouring cell
+    // (which is blue) out of it, which is what the inset is for.
+    const ore::Color edge = ore::Color::from_packed(shot.pixel(31, 31));
+    T2D_CHECK_MSG(edge.r > 150 && edge.b < 90, "the edge came out ({}, {}, {})", edge.r, edge.g, edge.b);
+    // And nothing is drawn outside the quads.
+    const ore::Color outside = ore::Color::from_packed(shot.pixel(48, 48));
+    T2D_CHECK_EQ(outside.r + outside.g + outside.b, 0);
 }
 
 T2D_TEST_MAIN

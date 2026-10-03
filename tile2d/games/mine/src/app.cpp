@@ -116,6 +116,12 @@ template <class... Args>
     return fitted.empty() ? fitted : fitted + std::string(kEllipsis);
 }
 
+/// Where a content entry's picture lives in the image atlas. Kind and name together, because two
+/// kinds may use the same name.
+[[nodiscard]] std::string image_key(ContentKind kind, std::string_view name) {
+    return std::format("{}:{}", content_kind_name(kind), name);
+}
+
 /// A cell fill that reads as a colour instead of as a lamp: the palette colour pulled towards the
 /// background, with the full strength colour kept for the label and the outline.
 [[nodiscard]] u32 dim_color(u32 color, f32 factor) {
@@ -253,6 +259,13 @@ void MineApp::on_start() {
     sampler_desc.mag_filter = VK_FILTER_LINEAR;
     sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     sampler_ = ore::rhi::Sampler::create(context.device(), sampler_desc);
+    // Pack art gets its own sampler: nearest, so a picture drawn on a grid stays crisp and the atlas
+    // cells cannot bleed into each other through a linear filter.
+    ore::rhi::SamplerDesc image_sampler_desc;
+    image_sampler_desc.min_filter = VK_FILTER_NEAREST;
+    image_sampler_desc.mag_filter = VK_FILTER_NEAREST;
+    image_sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    image_sampler_ = ore::rhi::Sampler::create(context.device(), image_sampler_desc);
     if (screen_ == Screen::Sandbox) open_sandbox();
 }
 
@@ -573,6 +586,40 @@ void MineApp::apply_fill() {
     sandbox_.set_active_layer(options_.start_layer);
 }
 
+void MineApp::load_pack_images() {
+    image_errors_.clear();
+    image_atlas_.reset();
+    t2d::ImageAtlas::Options options;
+    options.page_size = 1024;
+    options.cell_size = 64;
+    image_atlas_ = t2d::ImageAtlas::create(context(), options);
+    if (image_atlas_ == nullptr) {
+        image_errors_.emplace_back("the image atlas could not be created");
+        return;
+    }
+    usize loaded = 0;
+    for (const ContentPack& pack : content_.packs()) {
+        for (const PackImage& image : pack.images) {
+            if (!image.ok) continue;   // the content loader already reported why
+            const std::optional<ore::Image> pixels = ore::Image::load_png(image.resolved);
+            if (!pixels.has_value()) {
+                image_errors_.push_back(std::format("{}: cannot be decoded", image.resolved));
+                continue;
+            }
+            if (!image_atlas_->add(image_key(image.kind, image.content), *pixels)) {
+                image_errors_.push_back(std::format("{}: does not fit the atlas", image.resolved));
+                continue;
+            }
+            ++loaded;
+        }
+    }
+    if (loaded > 0) {
+        T2D_INFO("images: {} loaded into a {}x{} atlas ({} cell)", loaded, image_atlas_->page_size(),
+                 image_atlas_->page_size(), image_atlas_->cell_size());
+    }
+    for (const std::string& error : image_errors_) T2D_WARN("images: {}", error);
+}
+
 const ContentPipelineReport& MineApp::load_content() {
     // One place decides what the registry holds: the game's own files, then packs, then mods. Loading
     // again is a reload - the pipeline unloads the mods (on_unload, then the library closes) and clears
@@ -581,7 +628,9 @@ const ContentPipelineReport& MineApp::load_content() {
     content_.set_pack_files(options_.pack_paths);
     content_.set_pack_directories(options_.pack_directories);
     content_.set_mod_directories(options_.mod_directories);
-    return content_.load(registry_);
+    const ContentPipelineReport& report = content_.load(registry_);
+    load_pack_images();
+    return report;
 }
 
 void MineApp::reload_content() {
@@ -716,6 +765,24 @@ void MineApp::handle_sandbox_input() {
     }
 }
 
+MineApp::PaletteLayout MineApp::palette_layout() const {
+    const t2d::Aabb2 panel = sandbox_panel_area();
+    const f32 padding = 8.0f * unit_;
+    const f32 line = static_cast<f32>(body_px_) * 1.45f;
+    const f32 title_px = static_cast<f32>(static_cast<u16>(body_px_ * 1.15f));
+    PaletteLayout layout;
+    layout.left = panel.min.x + padding;
+    layout.right = panel.max.x - padding;
+    layout.row_height = line;
+    // The panel title, its rule and the gap under them, exactly as the panel pass draws them.
+    layout.first_y = panel.min.y + padding + title_px * 1.45f + 4.0f + 8.0f;
+    const usize rows =
+        static_cast<usize>(std::max(0.0f, (panel.max.y - padding - layout.first_y) / line));
+    layout.visible = rows;
+    layout.first_visible = sandbox_.palette_window_start(rows);
+    return layout;
+}
+
 void MineApp::draw_sandbox_screen() {
     const t2d::Aabb2 area = sandbox_grid_area();
     const t2d::Aabb2 panel = sandbox_panel_area();
@@ -810,8 +877,10 @@ void MineApp::draw_sandbox_screen() {
         draw_line(panel_left, y, body_px_, kPalette.warning, locale_.text("sandbox.palette.empty"));
         draw_line(panel_left, y + line, body_px_, kPalette.text_dim, locale_.text("sandbox.palette.hint"));
     } else {
-        const usize rows = static_cast<usize>(std::max(0.0f, (panel.max.y - padding - y) / line));
-        const usize start = sandbox_.palette_window_start(rows);
+        const PaletteLayout layout = palette_layout();
+        const usize start = layout.first_visible;
+        const usize rows = layout.visible;
+        y = layout.first_y;
         for (usize index = start; index < sandbox_.palette_count() && index < start + rows; ++index) {
             const PaletteEntry& entry = sandbox_.palette(index);
             const bool focused = index == sandbox_.selected_palette();
@@ -931,6 +1000,54 @@ void MineApp::draw_sandbox_screen() {
     draw_fitted(left, y + line, body_px_, kPalette.text_dim, locale_.text("sandbox.hint.keys2"), full_width);
 }
 
+void MineApp::draw_sandbox_images() {
+    if (image_atlas_ == nullptr || image_atlas_->count() == 0) return;
+    const t2d::Aabb2 area = sandbox_grid_area();
+    const f32 cell = sandbox_.cell_px();
+    const GridPos first = sandbox_.cell_at_screen(t2d::Vec2{area.min.x, area.min.y});
+    const GridPos last = sandbox_.cell_at_screen(t2d::Vec2{area.max.x - 1.0f, area.max.y - 1.0f});
+    const i32 x0 = std::max(first.x, 0);
+    const i32 y0 = std::max(first.y, 0);
+    const i32 x1 = std::min(last.x, static_cast<i32>(sandbox_.width()) - 1);
+    const i32 y1 = std::min(last.y, static_cast<i32>(sandbox_.height()) - 1);
+
+    // Bottom to top, like the panel pass, so a higher layer's art covers a lower one's. A layer the
+    // brush is not on is dimmed here too, or the art would undo the dimming the colours got.
+    for (i32 layer = 0; layer < sandbox_.layer_count(); ++layer) {
+        const bool active = layer == sandbox_.active_layer();
+        for (i32 y = y0; y <= y1; ++y) {
+            for (i32 x = x0; x <= x1; ++x) {
+                const GridPos pos{x, y};
+                const SandboxCell& value = sandbox_.cell(layer, pos);
+                if (value.empty()) continue;
+                const std::string key = image_key(value.kind, value.name);
+                if (!image_atlas_->has(key)) continue;
+                const t2d::Vec2 at = sandbox_.screen_of_cell(pos);
+                const f32 inset = cell * 0.08f;
+                batch_->draw_quad(t2d::Aabb2{t2d::Vec2{at.x + inset, at.y + inset},
+                                             t2d::Vec2{at.x + cell - inset, at.y + cell - inset}},
+                                  image_atlas_->uv(key), active ? 0xFFFFFFFFu : 0x80FFFFFFu);
+            }
+        }
+    }
+
+    // The palette's swatches: the same picture the cell would get, so a designer can tell two entries
+    // apart by looking at them.
+    if (sandbox_.palette_count() == 0) return;
+    const PaletteLayout layout = palette_layout();
+    const f32 swatch = 10.0f;
+    for (usize index = layout.first_visible; index < sandbox_.palette_count() &&
+                                              index < layout.first_visible + layout.visible; ++index) {
+        const PaletteEntry& entry = sandbox_.palette(index);
+        const std::string key = image_key(entry.kind, entry.name);
+        if (!image_atlas_->has(key)) continue;
+        const f32 y = layout.first_y + static_cast<f32>(index - layout.first_visible) * layout.row_height;
+        batch_->draw_quad(t2d::Aabb2{t2d::Vec2{layout.left, y + 2.0f},
+                                     t2d::Vec2{layout.left + swatch, y + 2.0f + swatch}},
+                          image_atlas_->uv(key), 0xFFFFFFFFu);
+    }
+}
+
 void MineApp::on_resize(u32 width, u32 height) {
     (void)width;
     (void)height;
@@ -944,9 +1061,10 @@ void MineApp::on_render(ore::RenderFrame& frame) {
     renderer().begin_pass(clear, 1.0f);
 
     const t2d::Vec2 view{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())};
+    const ore::Mat4 view_projection =
+        t2d::sprite_view_projection(t2d::Vec2{view.x * 0.5f, view.y * 0.5f}, view);
     // One pass, one texture: the glyph atlas holds both the text and the white texel rectangles use.
-    batch_->begin(frame, t2d::sprite_view_projection(t2d::Vec2{view.x * 0.5f, view.y * 0.5f}, view),
-                  *text_->texture(), sampler_->handle());
+    batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
     batch_->draw_rect(t2d::Aabb2{t2d::Vec2{0.0f, 0.0f}, view}, kPalette.background);
     switch (screen_) {
         case Screen::Start: draw_start_screen(); break;
@@ -954,6 +1072,14 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         case Screen::Sandbox: draw_sandbox_screen(); break;
     }
     batch_->end();
+
+    // Pack art is a second texture, so it is a second batch. It is worth it: a content entry that
+    // ships a picture is drawn with it, which is what makes the sandbox a view of the real thing.
+    if (screen_ == Screen::Sandbox && image_atlas_ != nullptr && image_atlas_->count() > 0) {
+        batch_->begin(frame, view_projection, image_atlas_->texture(), image_sampler_->handle());
+        draw_sandbox_images();
+        batch_->end();
+    }
 
     frame.counters.draw_calls = batch_->draw_calls();
     frame.counters.triangles = batch_->quads() * 2;

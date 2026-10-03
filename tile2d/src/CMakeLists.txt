@@ -69,6 +69,7 @@ if(T2D_WITH_RENDERER)
     add_library(t2d_render STATIC
         render/atlas.cpp
         render/glyph_atlas.cpp
+        render/image_atlas.cpp
         render/sprite_batch.cpp
         render/text_renderer.cpp
         render/tilemap_renderer.cpp

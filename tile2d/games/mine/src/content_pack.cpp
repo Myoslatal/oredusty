@@ -104,7 +104,12 @@ std::vector<std::string> ContentPack::scan_directory(const std::string& director
         files.push_back(root.string());   // a caller that passed a file meant that file
         return files;
     }
-    for (const fs::directory_entry& entry : fs::directory_iterator(root, code)) {
+    // Recursive, so a workspace can hold one *directory per pack project* - a pack is one .ecfg file,
+    // but a project is a folder with that file, its notes and its art in it. Entries that start with a
+    // dot are skipped, which keeps .git and editor leftovers out of the load.
+    for (const fs::directory_entry& entry : fs::recursive_directory_iterator(root, code)) {
+        const std::string name = entry.path().filename().string();
+        if (!name.empty() && name[0] == '.') continue;
         if (!entry.is_regular_file(code)) continue;
         if (entry.path().extension() != ".ecfg") continue;
         files.push_back(entry.path().string());
@@ -228,6 +233,36 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         for (const std::string& table : unknown_tables) {
             report_.warnings.push_back(std::format("pack '{}': '{}' is not a content kind", pack.id, table));
         }
+        // The pictures: the one field of the designer's data the engine reads, because it has to be
+        // able to draw what the data describes. Paths are relative to the pack, and a picture that is
+        // not there (or is not something the engine can decode) is reported rather than drawn blank.
+        for (const ContentImage& image : content_images(pack.content, kPackTable)) {
+            PackImage entry;
+            entry.kind = image.kind;
+            entry.content = image.name;
+            entry.path = image.path;
+            const fs::path resolved = fs::path(pack.path).parent_path() / image.path;
+            std::error_code file_code;
+            if (image.path.empty()) {
+                entry.error = "the image path is empty";
+            } else if (!fs::is_regular_file(resolved, file_code)) {
+                entry.error = std::format("'{}' is not there", resolved.string());
+            } else if (resolved.extension() != ".png") {
+                // Ore's decoder reads PNG; anything else would need another one, and pretending
+                // otherwise would fail later, at draw time, where it is much harder to explain.
+                entry.error = std::format("'{}': only PNG is decoded", resolved.extension().string());
+            } else {
+                entry.resolved = resolved.string();
+                entry.ok = true;
+                ++report_.pack_images;
+            }
+            if (!entry.ok) {
+                report_.errors.push_back(std::format("pack '{}': {} '{}': {}", pack.id,
+                                                     content_kind_name(entry.kind), entry.content, entry.error));
+                if (pack.error.empty()) pack.error = entry.error;
+            }
+            pack.images.push_back(std::move(entry));
+        }
         ++report_.packs;
         packs_.push_back(std::move(pack));
     }
@@ -241,9 +276,10 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     for (const std::string& warning : mods.warnings) report_.warnings.push_back(warning);
 
     report_.total_content = registry.total_count();
-    T2D_INFO("content: {} base, {} pack(s) with {}, {} mod(s) with {} -> {} registered, {} error(s)",
-             report_.base_registered, report_.packs, report_.pack_content, report_.mods, report_.mod_content,
-             report_.total_content, report_.errors.size());
+    T2D_INFO("content: {} base, {} pack(s) with {} and {} image(s), {} mod(s) with {} -> {} registered, "
+             "{} error(s)",
+             report_.base_registered, report_.packs, report_.pack_content, report_.pack_images, report_.mods,
+             report_.mod_content, report_.total_content, report_.errors.size());
     for (const std::string& error : report_.errors) T2D_WARN("content: {}", error);
     for (const std::string& warning : report_.warnings) T2D_WARN("content: {}", warning);
     return report_;

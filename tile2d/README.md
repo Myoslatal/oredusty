@@ -212,6 +212,10 @@ A pack that has to *run* something is a mod package instead:
 
 ![Content from the game, from packs and from two mods](games/mine/docs/images/sandbox_mods_en.png)
 
+* **Pictures are the one field the engine reads.** A content entry says `image:"art/wall.png"`, a path
+  relative to its pack; the loader checks the file is there and is a PNG, decodes it with Ore's own
+  decoder and packs every picture into one atlas, which the sandbox draws instead of a stand-in
+  colour. The art *style* is polygonal, the resource is an ordinary image - no vector rendering.
 * **Data first.** A pack is one `.ecfg` file: its tables are content, exactly as in the game's own files,
   and `pack::` is metadata (id, name, version, requires). `--packs <dir>` loads every `*.ecfg` in a
   directory, ordered by file name and then by what they require; a `packs/` directory beside the game

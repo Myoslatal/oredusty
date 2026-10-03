@@ -38,6 +38,35 @@ std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document
     return declared;
 }
 
+std::vector<ContentImage> content_images(const t2d::EcfgDocument& document, std::string_view ignore_table) {
+    std::vector<ContentImage> images;
+    for (const t2d::EcfgValue& table : document.root().children()) {
+        if (!ignore_table.empty() && table.key() == ignore_table) continue;
+        ContentKind kind = ContentKind::Count;
+        bool known = false;
+        for (usize index = 0; index < kContentKindCount; ++index) {
+            const auto candidate = static_cast<ContentKind>(index);
+            if (table.key() == content_kind_name(candidate)) {
+                kind = candidate;
+                known = true;
+                break;
+            }
+        }
+        if (!known || !table.is_table()) continue;
+        for (const t2d::EcfgValue& entry : table.children()) {
+            const t2d::EcfgValue* image = entry.find("image");
+            if (image == nullptr) continue;
+            if (!image->is_string()) {
+                T2D_WARN("content: {} '{}' has an image that is not a quoted path", content_kind_name(kind),
+                         entry.key());
+                continue;
+            }
+            images.push_back(ContentImage{kind, std::string(entry.key()), std::string(image->as_string())});
+        }
+    }
+    return images;
+}
+
 ContentRegistrationReport register_declared_content(ContentRegistry& registry,
                                                     t2d::ConstSpan<const ContentEntry> declared,
                                                     std::vector<ContentEntry>* registered_out) {
