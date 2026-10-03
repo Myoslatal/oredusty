@@ -76,4 +76,18 @@ private:
     return content;
 }
 
+/// Reads a whole binary file (fonts, saves, level blobs). Empty optional when it cannot be opened.
+[[nodiscard]] inline std::optional<std::vector<u8>> read_binary(const std::string& path) {
+    std::FILE* file = std::fopen(path.c_str(), "rb");
+    if (file == nullptr) return std::nullopt;
+    std::vector<u8> content;
+    u8 buffer[8192];
+    usize read = 0;
+    while ((read = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        content.insert(content.end(), buffer, buffer + read);
+    }
+    std::fclose(file);
+    return content;
+}
+
 } // namespace t2d

@@ -155,6 +155,11 @@ void SpriteBatch::begin(ore::RenderFrame& frame, const ore::Mat4& view_projectio
     cmd_->bind_index_buffer(*index_buffer_, VK_INDEX_TYPE_UINT32);
 }
 
+void SpriteBatch::set_white_texel(const Vec2& uv) {
+    white_u_ = uv.x;
+    white_v_ = uv.y;
+}
+
 void SpriteBatch::draw_quad(const Aabb2& rect, const Aabb2& uv_rect, u32 color) {
     if (vertices_ == nullptr) return;
     if (quad_count_ >= max_quads_) {

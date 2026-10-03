@@ -8,6 +8,7 @@
 #include <mine/session.h>
 
 #include <t2d/core/types.h>
+#include <t2d/text/locale.h>
 
 namespace mine {
 
@@ -20,19 +21,21 @@ enum class MenuAction : u8 { None, StartSession, Quit };
 /// One key press, translated from the platform so the model never sees a window.
 enum class MenuKey : u8 { Up, Down, Left, Right, Confirm, Back, Randomise };
 
-enum class RowKind : u8 { World, Seed, Action };
+enum class RowKind : u8 { World, Language, Seed, Action };
 
 struct MenuRow {
     RowKind kind = RowKind::Action;
     MenuAction action = MenuAction::None;
     Role role = Role::Single;
-    const char* label = "";
+    /// Locale id of the row's text ("row.start"), never the text itself: the same row has to render in
+    /// every language the game ships.
+    const char* id = "";
 };
 
 class MenuModel {
 public:
-    /// World, seed (endless only) and four actions.
-    static constexpr usize kMaxRows = 6;
+    /// World, language, seed (endless only) and four actions.
+    static constexpr usize kMaxRows = 7;
     /// Seeds are kept in a range that stays readable on screen.
     static constexpr u32 kMinSeed = 1;
     static constexpr u32 kMaxSeed = 99999999u;
@@ -49,6 +52,10 @@ public:
 
     [[nodiscard]] Mode mode() const { return mode_; }
     void set_mode(Mode mode);
+    [[nodiscard]] t2d::Language language() const { return language_; }
+    void set_language(t2d::Language language);
+    /// Next language in the cycle, the way a left/right press walks it.
+    [[nodiscard]] t2d::Language next_language(i32 delta) const;
     [[nodiscard]] u32 seed() const { return seed_; }
     void set_seed(u32 seed);
     /// Next seed in a fixed pseudo random sequence (deterministic, so a test can assert it).
@@ -63,6 +70,7 @@ private:
     void rebuild_rows();
 
     Mode mode_ = Mode::Story;
+    t2d::Language language_ = t2d::Language::English;
     u32 seed_ = 1;
     usize selected_ = 0;
     usize row_count_ = 0;

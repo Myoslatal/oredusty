@@ -71,6 +71,9 @@ public:
                VkSampler sampler);
 
     void draw_quad(const Aabb2& rect, const Aabb2& uv_rect, u32 color);
+    /// Points draw_rect() at a texel of the currently bound texture that is opaque. The default is the
+    /// font atlas's reserved white cell; a glyph atlas has its own.
+    void set_white_texel(const Vec2& uv);
     /// Draws a filled rect using a single opaque texel of the atlas.
     void draw_rect(const Aabb2& rect, u32 color);
     void draw_rect_outline(const Aabb2& rect, f32 thickness, u32 color);

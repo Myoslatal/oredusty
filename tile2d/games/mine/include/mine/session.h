@@ -14,6 +14,7 @@ namespace mine {
 using t2d::f32;
 using t2d::u16;
 using t2d::u32;
+using t2d::u64;
 using t2d::u8;
 using t2d::usize;
 

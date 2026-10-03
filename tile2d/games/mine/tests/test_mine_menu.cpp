@@ -9,7 +9,7 @@ using namespace mine;
 
 namespace {
 
-[[nodiscard]] std::string label_of(const MenuModel& menu, usize index) { return menu.row(index).label; }
+[[nodiscard]] std::string id_of(const MenuModel& menu, usize index) { return menu.row(index).id; }
 
 [[nodiscard]] usize action_row(const MenuModel& menu, MenuAction action, Role role) {
     for (usize index = 0; index < menu.row_count(); ++index) {
@@ -25,8 +25,8 @@ T2D_TEST(the_story_screen_offers_the_actions_and_no_seed_row) {
     MenuModel menu;
     T2D_CHECK_EQ(menu.mode(), Mode::Story);
     T2D_CHECK_FALSE(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 5u); // world, single, host, join, quit
-    T2D_CHECK_EQ(label_of(menu, 0), std::string("WORLD"));
+    T2D_CHECK_EQ(menu.row_count(), 6u); // world, single, host, join, quit
+    T2D_CHECK_EQ(id_of(menu, 0), std::string("row.world"));
     T2D_CHECK_EQ(menu.selected(), 0u);
 
     T2D_CHECK(action_row(menu, MenuAction::StartSession, Role::Single) < menu.row_count());
@@ -41,20 +41,21 @@ T2D_TEST(selecting_endless_adds_the_seed_row_and_leaving_it_removes_it) {
     (void)menu.handle(MenuKey::Right);
     T2D_CHECK_EQ(menu.mode(), Mode::Endless);
     T2D_CHECK(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 6u);
-    T2D_CHECK_EQ(label_of(menu, 1), std::string("SEED"));
+    T2D_CHECK_EQ(menu.row_count(), 7u); // world, language, seed, single, host, join, quit
+    T2D_CHECK_EQ(id_of(menu, 1), std::string("row.language"));
+    T2D_CHECK_EQ(id_of(menu, 2), std::string("row.seed"));
 
     // Left/Right on the world row switches back, and the seed row goes away with it.
     menu.select(0);
     (void)menu.handle(MenuKey::Left);
     T2D_CHECK_EQ(menu.mode(), Mode::Story);
     T2D_CHECK_FALSE(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 5u);
+    T2D_CHECK_EQ(menu.row_count(), 6u);
 
     // Focus the seed row, then leave endless mode through the model: the focus must land on an
     // action, not on whatever slid into the seed row's place.
     menu.set_mode(Mode::Endless);
-    menu.select(1);
+    menu.select(2);
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Seed);
     menu.set_mode(Mode::Story);
     T2D_CHECK_FALSE(menu.seed_visible());
@@ -132,7 +133,7 @@ T2D_TEST(the_focused_row_decides_the_session) {
 T2D_TEST(the_seed_stays_readable_and_wraps_at_the_ends) {
     MenuModel menu;
     menu.set_mode(Mode::Endless);
-    menu.select(1); // the seed row
+    menu.select(2); // the seed row (world, language, seed)
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Seed);
 
     menu.set_seed(MenuModel::kMinSeed);

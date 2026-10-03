@@ -4,12 +4,14 @@ namespace mine {
 namespace {
 
 /// Labels are plain ASCII on purpose: the built-in bitmap font has no other glyphs.
-constexpr const char* kWorldLabel = "WORLD";
-constexpr const char* kSeedLabel = "SEED";
-constexpr const char* kStartLabel = "START SINGLE PLAYER";
-constexpr const char* kHostLabel = "HOST A GAME";
-constexpr const char* kJoinLabel = "JOIN A GAME";
-constexpr const char* kQuitLabel = "QUIT";
+// Locale ids (see assets/text/ui.ecfg), not display text.
+constexpr const char* kWorldLabel = "row.world";
+constexpr const char* kLanguageLabel = "row.language";
+constexpr const char* kSeedLabel = "row.seed";
+constexpr const char* kStartLabel = "row.start";
+constexpr const char* kHostLabel = "row.host";
+constexpr const char* kJoinLabel = "row.join";
+constexpr const char* kQuitLabel = "row.quit";
 
 /// Keeps a seed inside the readable range: values that already fit are untouched, anything else is
 /// folded back in (so a seed typed on the command line can be any u32).
@@ -39,6 +41,7 @@ void MenuModel::select(usize index) {
 void MenuModel::rebuild_rows() {
     usize count = 0;
     rows_[count++] = MenuRow{RowKind::World, MenuAction::None, Role::Single, kWorldLabel};
+    rows_[count++] = MenuRow{RowKind::Language, MenuAction::None, Role::Single, kLanguageLabel};
     if (seed_visible()) rows_[count++] = MenuRow{RowKind::Seed, MenuAction::None, Role::Single, kSeedLabel};
     rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Single, kStartLabel};
     rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Host, kHostLabel};
@@ -55,7 +58,19 @@ void MenuModel::set_mode(Mode mode) {
     rebuild_rows();
     // Leaving endless mode removes the seed row; land on the first action instead of on whatever
     // slid into its place.
-    if (was_seed_row && !seed_visible()) select(1);
+    if (was_seed_row && !seed_visible()) select(row_count_ - 4);
+}
+
+void MenuModel::set_language(t2d::Language language) {
+    const usize index = static_cast<usize>(language);
+    if (index < t2d::kLanguageCount) language_ = language;
+}
+
+t2d::Language MenuModel::next_language(i32 delta) const {
+    const i32 count = static_cast<i32>(t2d::kLanguageCount);
+    i32 index = static_cast<i32>(language_) + delta;
+    index = ((index % count) + count) % count; // wrap in both directions
+    return static_cast<t2d::Language>(index);
 }
 
 void MenuModel::set_seed(u32 seed) { seed_ = wrap_seed(seed); }
@@ -77,6 +92,8 @@ MenuAction MenuModel::handle(MenuKey key) {
             const MenuRow& current = rows_[selected_];
             if (current.kind == RowKind::World) {
                 set_mode(forward ? Mode::Endless : Mode::Story);
+            } else if (current.kind == RowKind::Language) {
+                set_language(next_language(forward ? 1 : -1));
             } else if (current.kind == RowKind::Seed) {
                 // Stepping wraps at the ends instead of clamping, so the row always responds.
                 if (forward) set_seed(seed_ >= kMaxSeed ? kMinSeed : seed_ + 1u);

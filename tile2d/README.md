@@ -179,7 +179,35 @@ written with.
 `test_content_loader` walks the whole path: config file -> registry -> the table a save stores ->
 loading it back with a registry whose ids have moved, resolving every reference by name.
 
-## Protocol
+## Text and languages
+
+The engine renders text with its own font engine — no FreeType, no stb_truetype, no new dependency —
+and shows it through string tables, so adding a language means adding a table, not touching code.
+
+    ./build/debug/games/mine/mine_game --lang en
+    ./build/debug/games/mine/mine_game --lang zh-Hans
+    ./build/debug/games/mine/mine_game --lang zh-Hant
+
+![English](games/mine/docs/images/ui_en.png)
+
+![Simplified Chinese](games/mine/docs/images/ui_zh_hans.png)
+
+![Traditional Chinese](games/mine/docs/images/ui_zh_hant.png)
+
+* **Both outline formats**, because the fonts a game needs are split that way: Latin text ships as
+  TrueType (`glyf`) and the CJK families ship as **CID keyed CFF**. An engine that only reads
+  `glyf` cannot draw Chinese at all on a normal Linux system.
+* **Coverage is computed analytically**, not by supersampling: the exact area of every pixel an edge
+  covers is integrated, so CJK strokes stay crisp instead of banding at a sampling grid.
+* **The face follows the language**: Noto Sans CJK carries ten faces, and Simplified and Traditional
+  Chinese really do draw some characters differently (矿/礦, 语/語). `Font::face_names()` reads only
+  the name tables, so choosing a face costs no outline parsing.
+* **Strings are looked up by id** from `assets/text/ui.ecfg`, with an English fallback and the id
+  itself as the last resort. A half translated file fails `test_text` instead of shipping.
+* Simplified and Traditional are separate tables: converting between them properly needs a character
+  mapping table (data the designer can supply), not a runtime guess.
+
+Details, limits and how to add a language: [docs/TEXT.md](docs/TEXT.md).
 
 Every message is `[u16 size][u8 type][payload]`. Types: `Hello`, `Welcome`, `Reject`, `Command`,
 `Snapshot`, `MapData`, `PlayerJoined`, `PlayerLeft`, `Ping`, `Pong`, `Disconnect`,

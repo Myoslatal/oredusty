@@ -74,6 +74,11 @@ public:
     void upload_texture(Texture& texture, const Image& image, bool generate_mipmaps = false);
     /// Records a full mip chain generation into \p cmd (blit based, requires TRANSFER_SRC/DST + SAMPLED).
     void generate_mipmaps(CommandBuffer& cmd, Texture& texture);
+    /// Uploads \p image into the rectangle at (\p x, \p y) of \p texture and leaves the image in
+    /// VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. A glyph atlas grows a few pixels at a time, and
+    /// re-uploading the whole page per glyph would be both slow and unnecessary. The texture must
+    /// already be in SHADER_READ_ONLY_OPTIMAL (which is where create_texture leaves it).
+    void update_texture_region(Texture& texture, const Image& image, u32 x, u32 y);
 
     [[nodiscard]] Scope<Texture> create_texture(const Image& image, bool generate_mipmaps = true,
                                                std::string_view debug_name = {});

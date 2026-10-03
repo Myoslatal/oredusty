@@ -25,6 +25,20 @@ add_library(t2d::sim ALIAS t2d_sim)
 t2d_apply_settings(t2d_sim)
 target_link_libraries(t2d_sim PUBLIC t2d::core)
 
+# ------------------------------------------------------------------ t2d_text --
+# The font engine (TrueType and CFF outlines, rasterising, layout) and the localisation tables. No
+# graphics: a dedicated server can measure and lay out text without a GPU.
+add_library(t2d_text STATIC
+    text/cff.cpp
+    text/font.cpp
+    text/locale.cpp
+    text/raster.cpp
+    text/utf8.cpp
+)
+add_library(t2d::text ALIAS t2d_text)
+t2d_apply_settings(t2d_text)
+target_link_libraries(t2d_text PUBLIC t2d::core)
+
 # ------------------------------------------------------------------- t2d_net --
 add_library(t2d_net STATIC
     net/kcp.cpp
@@ -63,11 +77,13 @@ target_link_libraries(t2d_test_support PUBLIC t2d::core)
 if(T2D_WITH_RENDERER)
     add_library(t2d_render STATIC
         render/atlas.cpp
+        render/glyph_atlas.cpp
         render/sprite_batch.cpp
+        render/text_renderer.cpp
         render/tilemap_renderer.cpp
         render/game_app.cpp
     )
     add_library(t2d::render ALIAS t2d_render)
     t2d_apply_settings(t2d_render)
-    target_link_libraries(t2d_render PUBLIC t2d::engine ore::ore)
+    target_link_libraries(t2d_render PUBLIC t2d::engine t2d::text ore::ore)
 endif()

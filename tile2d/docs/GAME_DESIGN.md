@@ -186,6 +186,10 @@
   `--headless`、`--frames`、`--screenshot`）。
 * `[已实现]` 配置读取器 `t2d/core/ecfg.h`（`.ecfg` 格式，严格报错带行列号）与内容加载器
   `mine_core/content_loader.h`；单测 `test_ecfg`、`test_content_loader`。
+* `[已实现]` **字体引擎与多语言**：自研 TrueType/CFF 解析 + 解析式抗锯齿栅格化 + 字形图集 +
+  排版（`t2d/text/*`、`t2d/render/{glyph_atlas,text_renderer}`），界面字符串按 id 从
+  `assets/text/ui.ecfg` 取，支持 `en / zh-Hans / zh-Hant` 并可运行时切换；中文界面截图见
+  `docs/TEXT.md`。单测 `test_font`、`test_cff`、`test_text`。
 * M2：`MineWorld`（俯视移动/碰撞）+ 层数据加载/生成 + 世界渲染。
 * M3：需求与提交渠道、物流与加工（按设计者清单）。
 * M4：内容数据、存档、联机回归。
@@ -220,3 +224,4 @@
 | M1 | 初版。仅记录设计者已确认的九条需求与工程约束；删除此前草稿中自行预设的资源、结构、配方、建筑、剧情与数值内容 |
 | M1.1 | 新增 §6：内容注册与存档 id 策略（注册按名字、存档存数字 id、每存档自带 name→id 表、缺失内容报告而非重映射）；里程碑与术语顺延 |
 | M1.2 | 新增 `.ecfg` 配置读取器（格式由仓库根 `example.ecfg` 定义）与内容加载器（配置文件 → 注册表）；§6 与 §9 相应更新 |
+| M1.3 | 新增字体引擎（TrueType + CFF 轮廓、解析式抗锯齿、字形图集、UTF-8 排版）与多语言界面（`en / zh-Hans / zh-Hant`，运行时切换，语言决定 CJK 字面）；界面文案全部走字符串表，代码中无硬编码文案 |

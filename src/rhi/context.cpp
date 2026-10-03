@@ -213,6 +213,43 @@ void GraphicsContext::generate_mipmaps(CommandBuffer& cmd, Texture& texture) {
     cmd.end_label();
 }
 
+void GraphicsContext::update_texture_region(Texture& texture, const Image& image, u32 x, u32 y) {
+    if (image.empty()) return;
+    const VkExtent3D extent = texture.extent();
+    if (x >= extent.width || y >= extent.height) return;
+    if (image.width > extent.width - x || image.height > extent.height - y) {
+        ORE_ERROR("update_texture_region: {}x{} at ({}, {}) does not fit in a {}x{} texture", image.width,
+                  image.height, x, y, extent.width, extent.height);
+        return;
+    }
+    const u64 byte_size = image.byte_size();
+    auto staging = create_staging_buffer(byte_size, "texture region staging");
+    if (staging == nullptr) return;
+    staging->write(ConstSpan<u8>(image.pixels.data(), image.pixels.size()), 0);
+
+    immediate_->run([&](CommandBuffer& cmd) {
+        cmd.begin_label("update texture region");
+        // A texture that went through create_texture/upload_texture is in SHADER_READ_ONLY_OPTIMAL, so
+        // the region is moved to TRANSFER_DST and back instead of from UNDEFINED - the page keeps its
+        // earlier glyphs.
+        cmd.transition_image(texture.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, texture.full_range());
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageOffset = {static_cast<i32>(x), static_cast<i32>(y), 0};
+        region.imageExtent = {image.width, image.height, 1};
+        cmd.copy_buffer_to_image(staging->handle(), texture.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 ConstSpan<VkBufferImageCopy>(&region, 1));
+        cmd.transition_image(texture.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, texture.full_range());
+        cmd.end_label();
+    });
+    upload_bytes_ += byte_size;
+}
+
 void GraphicsContext::upload_texture(Texture& texture, const Image& image, bool generate_mipmaps_requested) {
     if (image.empty()) return;
     const u64 byte_size = image.byte_size();

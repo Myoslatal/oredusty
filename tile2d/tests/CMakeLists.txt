@@ -2,6 +2,14 @@
 t2d_add_test(test_tilemap test_tilemap.cpp)
 # The .ecfg configuration reader (format: example.ecfg in the repository root).
 t2d_add_test(test_ecfg test_ecfg.cpp)
+
+# The font engine: containers, cmaps, metrics and TrueType outlines (CFF has its own suite).
+t2d_add_test(test_font test_font.cpp)
+target_link_libraries(test_font PRIVATE t2d::text)
+
+# UTF-8, the language tables and the interface strings that ship with the shell.
+t2d_add_test(test_text test_text.cpp)
+target_link_libraries(test_text PRIVATE t2d::text)
 # Pure simulation and wire format: no threads, no sleeps, no wall clock.
 t2d_add_test(test_snapshot test_snapshot.cpp)
 t2d_add_test(test_kcp test_kcp.cpp)
@@ -11,6 +19,11 @@ t2d_add_test(test_protocol test_protocol.cpp)
 # format checker for that one file instead of slowing the protocol work down.
 target_compile_options(test_kcp PRIVATE -Wno-format)
 t2d_add_test(test_integration_local test_integration_local.cpp)
+
+# CFF Type 2 outlines: synthetic charstrings for every operator, and every glyph of the CID keyed
+# Noto CJK collections that ship with the machine.
+t2d_add_test(test_cff test_cff.cpp)
+target_link_libraries(test_cff PRIVATE t2d::text)
 
 # Renderer maths that needs no GPU, so it runs even where no Vulkan device exists.
 if(T2D_WITH_RENDERER)
