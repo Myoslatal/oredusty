@@ -11,6 +11,51 @@ namespace {
 
 constexpr u64 kClientToken = 0x7E57C0DEull;
 
+/// Compares the world against the snapshot it was just built from, field by field. Returns an empty
+/// string when they agree; otherwise it names the first divergence, which turns a "checksum
+/// mismatch" into a concrete bug report.
+[[nodiscard]] std::string diagnose_mismatch(const World& world, const Snapshot& snapshot) {
+    if (world.tick() != snapshot.tick) {
+        return std::format("tick: world {} vs snapshot {}", world.tick(), snapshot.tick);
+    }
+    if (world.players().size() != snapshot.players.size()) {
+        return std::format("player count: world {} vs snapshot {}", world.players().size(),
+                           snapshot.players.size());
+    }
+    for (usize i = 0; i < world.players().size(); ++i) {
+        const PlayerState& a = world.players()[i];
+        const PlayerState& b = snapshot.players[i];
+        const auto check = [&](const char* field, auto lhs, auto rhs) -> std::string {
+            if (lhs == rhs) return {};
+            return std::format("player {} field {}: world {} vs snapshot {}", a.id, field, lhs, rhs);
+        };
+        for (const std::string& message :
+             {check("id", a.id, b.id), check("x", a.position.x, b.position.x), check("y", a.position.y, b.position.y),
+              check("vx", a.velocity.x, b.velocity.x), check("vy", a.velocity.y, b.velocity.y),
+              check("coins", a.coins, b.coins), check("flags", static_cast<u32>(a.flags), static_cast<u32>(b.flags)),
+              check("coyote", static_cast<u32>(a.coyote_ticks), static_cast<u32>(b.coyote_ticks)),
+              check("jump_buffer", static_cast<u32>(a.jump_buffer_ticks), static_cast<u32>(b.jump_buffer_ticks)),
+              check("respawn", static_cast<u32>(a.respawn_ticks), static_cast<u32>(b.respawn_ticks))}) {
+            if (!message.empty()) return message;
+        }
+    }
+    if (world.pickups().size() != snapshot.pickups.size()) {
+        return std::format("pickup count: world {} vs snapshot {}", world.pickups().size(),
+                           snapshot.pickups.size());
+    }
+    for (usize i = 0; i < world.pickups().size(); ++i) {
+        const Pickup& a = world.pickups()[i];
+        const Pickup& b = snapshot.pickups[i];
+        if (a.id != b.id) return std::format("pickup {} id: world {} vs snapshot {}", i, a.id, b.id);
+        if (a.alive != b.alive) return std::format("pickup {} alive: world {} vs snapshot {}", a.id, a.alive, b.alive);
+        if (a.position.x != b.position.x || a.position.y != b.position.y) {
+            return std::format("pickup {} position: world ({},{}) vs snapshot ({},{})", a.id, a.position.x,
+                               a.position.y, b.position.x, b.position.y);
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 Scope<LocalClient> LocalClient::create(const ClientConfig& config, net::ILink* link) {
@@ -249,9 +294,15 @@ void LocalClient::handle_snapshot(ConstSpan<const u8> payload, u64 now_ms) {
     const u64 local_checksum = capture_snapshot(*world_, resolved.acked_command_tick, now_ms).checksum;
     if (local_checksum != resolved.checksum) {
         ++stats_.desyncs;
-        T2D_WARN("client: state checksum mismatch after applying {} (local 0x{:016x}, server 0x{:016x}, tick {})",
-                 resolved.kind == SnapshotKind::Full ? "a full snapshot" : "a delta", local_checksum,
-                 resolved.checksum, resolved.tick);
+        const std::string difference = diagnose_mismatch(*world_, resolved);
+        T2D_WARN("client: state mismatch at tick {} (local 0x{:016x}, server 0x{:016x}) - {}",
+                 resolved.tick, local_checksum, resolved.checksum,
+                 difference.empty() ? "checksums differ but every compared field agrees" : difference);
+        // Recovery: drop the (now suspect) baseline and ask for a full snapshot, so a single bad
+        // delta cannot keep the client drifting forever.
+        baseline_ = Snapshot{};
+        const std::vector<u8> framed = net::encode_message(net::MessageType::NeedFullSnapshot, {});
+        link_->send(framed);
     }
 
     snapshot_buffer_.push(resolved);
