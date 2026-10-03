@@ -9,10 +9,29 @@
 namespace ore::rhi {
 namespace {
 
+/// Picks the swapchain format.
+///
+/// A non-sRGB format is preferred by default so that a colour authored as an sRGB byte triple (2D
+/// art, a UI palette, a procedural atlas) reaches the screen exactly as authored, and so that the
+/// window shows the same thing as an offscreen screenshot: an _SRGB target re-encodes whatever the
+/// fragment shader writes, which turns a panel authored as (22, 26, 34) into (82, 89, 101) on screen
+/// while the offscreen target - UNORM - keeps showing (22, 26, 34). Pass an _SRGB format in
+/// Renderer::Desc::color_format when physically correct lighting and blending matter more than
+/// exact colour reproduction (3D scenes with mid tones).
 [[nodiscard]] VkSurfaceFormatKHR choose_format(ConstSpan<VkSurfaceFormatKHR> formats, VkFormat preferred) {
     if (preferred != VK_FORMAT_UNDEFINED) {
         for (const VkSurfaceFormatKHR& format : formats) {
             if (format.format == preferred) return format;
+        }
+    }
+    for (const VkSurfaceFormatKHR& format : formats) {
+        if (format.format == VK_FORMAT_B8G8R8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return format;
+        }
+    }
+    for (const VkSurfaceFormatKHR& format : formats) {
+        if (format.format == VK_FORMAT_R8G8B8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return format;
         }
     }
     for (const VkSurfaceFormatKHR& format : formats) {

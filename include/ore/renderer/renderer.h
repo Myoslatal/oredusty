@@ -57,6 +57,10 @@ public:
         u32 height = 720;
         bool vsync = true;
         /// VK_FORMAT_UNDEFINED selects the surface format (or R8G8B8A8_UNORM offscreen).
+        /// Requested colour format for the swapchain and the offscreen target. Left undefined, the
+        /// swapchain prefers a non-sRGB format: colours are then reproduced exactly as authored and
+        /// the window matches an offscreen screenshot. Name an _SRGB format for physically correct
+        /// lighting instead (see choose_format in swapchain.cpp).
         VkFormat color_format = VK_FORMAT_UNDEFINED;
         VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
         u32 frames_in_flight = 2;

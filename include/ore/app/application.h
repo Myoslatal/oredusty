@@ -35,6 +35,9 @@ struct AppConfig {
     /// When set, the first frame (or the last one with --frames) is written to this PNG path.
     std::string screenshot_path;
     u32 frames_in_flight = 2;
+    /// Colour format for the swapchain and the offscreen target. The default (undefined) resolves to
+    /// a non-sRGB format, so colours authored as sRGB bytes appear exactly as authored and a window
+    /// looks like an offscreen screenshot; name an _SRGB format when correct 3D lighting matters more.
     VkFormat color_format = VK_FORMAT_UNDEFINED;
     VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
     bool offscreen_sampled = false;

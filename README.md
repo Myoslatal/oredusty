@@ -389,6 +389,12 @@ pipeline layout），用 `rhi::GraphicsPipeline::create()`。注意**颜色/深�
 - `GpuAllocator` 不会整理碎片（可 `trim()` 释放空块），超大资源走独立 `VkDeviceMemory`
 - 交换链重建目前是"重建目标 + 重建管线外的所有附属资源"，因此尺寸变化时应用需要
   在 `on_resize()` 中重建依赖尺寸的资源（深度/RT 由框架处理）
+- **颜色格式的默认选择**：交换链默认取**非 sRGB** 格式（离屏目标本来就是 UNORM），这样
+  "按 sRGB 字节写下的颜色"在窗口里和离屏截图里完全一致；若默认取 `_SRGB` 交换链，同一个
+  面板色 (22,26,34) 在窗口里会被重新编码成 (82,89,101)，而截图仍是 (22,26,34)——同场景两条
+  路径不一致。需要物理正确的光照/混合（3D 中间调）时，把 `AppConfig::color_format` /
+  `Renderer::Desc::color_format` 指成 `_SRGB` 格式即可（见 `src/rhi/swapchain.cpp` 的
+  `choose_format` 注释）。
 - **窗口模式已在真实硬件上实测**：验证机是 Intel Arc Pro 130T/140T（Arrow Lake-P）核显 +
   Mesa 26.2.3 + Wayland，`ore_example_01/02/03` 与 Tile2D 客户端都能开窗渲染、经真实交换链
   呈现并截图（2133x1200、DPI 缩放 1.67、vsync 开启），`docs/images/` 里的参考截图即来自
