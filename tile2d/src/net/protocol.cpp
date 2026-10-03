@@ -43,6 +43,13 @@ const char* message_type_name(MessageType type) {
 }
 
 std::vector<u8> encode_message(MessageType type, ConstSpan<const u8> payload) {
+    if (payload.size() > kMaxMessageSize) {
+        // The frame header carries a 16 bit size, so a larger payload would be truncated on the wire
+        // and decoded as garbage. Refusing it is the only honest answer.
+        T2D_ERROR("protocol: a {} byte payload does not fit in a message ({} byte limit)", payload.size(),
+                  kMaxMessageSize);
+        return {};
+    }
     std::vector<u8> message;
     message.reserve(kMessageHeaderSize + payload.size());
     message.push_back(static_cast<u8>(type));

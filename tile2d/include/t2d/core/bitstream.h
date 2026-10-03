@@ -52,6 +52,7 @@ public:
         push(reinterpret_cast<const u8*>(text.data()), text.size());
     }
     /// Fixed point helpers: 1/16 pixel precision is plenty for a 2D game and keeps snapshots small.
+    /// The value is rounded to the nearest sixteenth, with ties away from zero.
     void write_fixed_16(f32 value) { write_i32(static_cast<i32>(value * 16.0f + (value >= 0.0f ? 0.5f : -0.5f))); }
 
     [[nodiscard]] usize size() const { return external_ != nullptr ? cursor_ : buffer_->size(); }

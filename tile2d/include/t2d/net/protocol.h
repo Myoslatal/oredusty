@@ -42,7 +42,8 @@ enum class MessageType : u8 {
 
 [[nodiscard]] const char* message_type_name(MessageType type);
 
-/// Wraps a payload into one framed message.
+/// Wraps a payload into one framed message. Returns an empty vector when the payload exceeds
+/// kMaxMessageSize, which the 16 bit frame header could not describe.
 [[nodiscard]] std::vector<u8> encode_message(MessageType type, ConstSpan<const u8> payload);
 /// Splits a framed message. Returns false for truncated/invalid frames.
 [[nodiscard]] bool decode_message(ConstSpan<const u8> message, MessageType& type, ConstSpan<const u8>& payload);

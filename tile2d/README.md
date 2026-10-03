@@ -85,6 +85,7 @@ second player: `LINK KCP`, `SNAP 147 (5 FULL 142 DELTA)`, `DROP 0`, `DESYNC 0`.*
 
     tests/test_tilemap            chunked storage, collision, serialisation, hazards, one-way platforms
     tests/test_snapshot           full/delta wire format, delta merge, a 360 tick reconstruction stream
+    tests/test_protocol           framing, every message payload, byte stream limits, the shared channel
     tests/test_kcp                reliability over a lossy/reordering link, 1 MiB transfer, ikcp wire format
     tests/test_atlas              built-in tileset, atlases and the shipped level must agree (CPU only)
     tests/test_sprite_projection  the 2D projection, without a GPU
@@ -127,11 +128,11 @@ is estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 8/8 tests green |
-| `release` | 8/8 tests green |
-| `asan` (Address + UB sanitizers) | 8/8 tests green |
-| `tsan` (ThreadSanitizer) | 8/8 tests green |
-| `server-only` | 5/5 tests green, `ldd tile2d_server` links no Vulkan/GLFW/X11/Wayland |
+| `debug` | 9/9 tests green (3.0 s) |
+| `release` | 9/9 tests green (2.6 s) |
+| `asan` (Address + UB sanitizers) | 9/9 tests green (3.0 s) |
+| `tsan` (ThreadSanitizer) | 9/9 tests green (4.0 s) |
+| `server-only` | 6/6 tests green, `ldd tile2d_server` links no Vulkan/GLFW/X11/Wayland |
 
 * ThreadSanitizer found a real data race (`SharedLink::close()` writing the link state while the
   server thread polled `wait_for_data()`); the state is an atomic now. SwiftShader's own internal

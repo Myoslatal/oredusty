@@ -3,6 +3,8 @@ t2d_add_test(test_tilemap test_tilemap.cpp)
 # Pure simulation and wire format: no threads, no sleeps, no wall clock.
 t2d_add_test(test_snapshot test_snapshot.cpp)
 t2d_add_test(test_kcp test_kcp.cpp)
+# Protocol framing, byte streams and the shared memory channel, without threads or a GPU.
+t2d_add_test(test_protocol test_protocol.cpp)
 # The KCP suite prints diagnostics with printf; the %zu/%u mixups are cosmetic, so silence the
 # format checker for that one file instead of slowing the protocol work down.
 target_compile_options(test_kcp PRIVATE -Wno-format)
