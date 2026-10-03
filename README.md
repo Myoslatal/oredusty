@@ -38,6 +38,7 @@ Ore 是一个紧凑、可读、依赖极少的现代 C++ 游戏开发框架：�
 **平台与窗口**
 - GLFW 窗口（X11 / Wayland / Win32 / Cocoa），窗口尺寸变化、DPI 缩放、光标模式、标题
 - 输入状态（按下 / 本帧按下 / 本帧抬起、鼠标增量、滚轮、文本输入）+ 可命名绑定的 `InputMap`
+- 指针坐标在平台层换算成**帧缓冲像素**（`PixelScale`）：缩放显示器上命中测试与绘制用同一套坐标
 - 无显示器环境自动降级：`--headless` 走离屏渲染，不创建窗口也不需要 surface
 
 **渲染后端（自己实现的 RHI，无第三方 Vulkan 封装）**
@@ -311,7 +312,7 @@ ctest --test-dir build/debug --output-on-failure        # 全部
 | `test_core_image` | PNG 编码/解码往返（含 1×1 与奇数尺寸）、非法输入拒绝、文件读写 |
 | `test_core_cli` | 命令行解析：`--k=v` / `--k v` / 短选项 / 重复项 / 布尔字面量 / help |
 | `test_core_time` | 固定步长累加器、帧计时统计 |
-| `test_input_map` | 输入边沿、鼠标增量、动作/轴绑定、重复绑定与解绑 |
+| `test_input_map` | 输入边沿、鼠标增量、动作/轴绑定、重复绑定与解绑、缩放显示器上的指针换算（2 倍 / 1.6667 倍 / 退化尺寸） |
 | `test_shader_compile` | 运行期编译仓库内全部 GLSL、错误诊断、`#include` 解析、热重载轮询 |
 | `test_scene` | ECS：句柄代际回收、稀疏集一致性、`each<>` 组合、层级矩阵、5000 实体压力 |
 | `test_camera` | 投影/视图矩阵的 Vulkan 约定、AABB、飞行与轨道相机行为 |

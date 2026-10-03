@@ -92,6 +92,15 @@ Application::run()
 空白但程序正常退出”。一屏四边形多的应用要把它调大：mine 的沙盒用 4 MiB（两批各最多 16k 四边形
 × 20 字节）。
 
+**输入坐标与绘制坐标是同一套：帧缓冲像素。** 窗口系统报告的指针位置是 *screen coordinates*
+（窗口内容区大小，例如 512×384），而应用绘制与命中测试用的是 *framebuffer pixels*（同一个窗口在 2 倍
+缩放的屏幕上就是 1024×768）。`Window` 在平台边界上换算一次
+（`PixelScale::of(窗口尺寸, 帧缓冲尺寸)` → `InputState::add_pointer_event()`），所以
+`mouse_x()/mouse_y()/mouse_delta_*()` 全是帧缓冲像素；窗口尺寸或帧缓冲尺寸一变（改大小、拖到另一块
+缩放的显示器）就重算这个因子。少了这一步，缩放显示器上指针会整体偏向左上：1024×768 的界面里指针
+永远到不了右下角，点击命中的是另一格——1.6667 倍缩放的 GNOME/Wayland 会话（窗口 2133×1200、
+帧缓冲 3555×2000）就是这样。应用若自己从 GLFW 取指针，必须用 `Window::pixel_scale()` 同样换算。
+
 **resize 与 swapchain 重建**：窗口回调只设置 `resize_pending_`；真正的重建发生在下一帧
 `begin_frame()` 开头（先 `wait_idle()`，再销毁并重建 swapchain、图像视图与每个交换链图像的
 `RenderTarget`）。`VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` 同样走这条路径。

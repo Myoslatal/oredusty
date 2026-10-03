@@ -33,9 +33,6 @@ void glfw_error_callback(int code, const char* description) {
 
 struct Window::Impl {
     GLFWwindow* handle = nullptr;
-    f64 last_cursor_x = 0.0;
-    f64 last_cursor_y = 0.0;
-    bool first_cursor_event = true;
 };
 
 Scope<Window> Window::create(const WindowDesc& desc) {
@@ -84,8 +81,16 @@ Scope<Window> Window::create(const WindowDesc& desc) {
         if (self == nullptr) return;
         self->width_ = static_cast<u32>(std::max(width, 0));
         self->height_ = static_cast<u32>(std::max(height, 0));
+        self->refresh_pixel_scale();
         self->resized_ = true;
         if (self->resize_callback_) self->resize_callback_(self->width_, self->height_);
+    });
+    // The content size in screen coordinates: the other half of the pointer's conversion factor. It
+    // changes on its own when a window moves to a monitor with a different scale.
+    glfwSetWindowSizeCallback(handle, [](GLFWwindow* source, int, int) {
+        auto* self = static_cast<Window*>(glfwGetWindowUserPointer(source));
+        if (self == nullptr) return;
+        self->refresh_pixel_scale();
     });
     glfwSetKeyCallback(handle, [](GLFWwindow* source, int key, int, int action, int) {
         auto* self = static_cast<Window*>(glfwGetWindowUserPointer(source));
@@ -120,23 +125,17 @@ Scope<Window> Window::create(const WindowDesc& desc) {
         if (self == nullptr || button < 0 || button >= static_cast<int>(MouseButton::Count)) return;
         self->input_.set_mouse_button(static_cast<MouseButton>(button), action == GLFW_PRESS);
     });
+    // GLFW reports the pointer in screen coordinates (the content size), so this is where the two
+    // spaces meet: the state stores framebuffer pixels, like everything else the app draws.
     glfwSetCursorPosCallback(handle, [](GLFWwindow* source, double x, double y) {
         auto* self = static_cast<Window*>(glfwGetWindowUserPointer(source));
         if (self == nullptr) return;
-        if (!self->impl_->first_cursor_event) {
-            self->input_.add_mouse_delta(static_cast<f32>(x - self->impl_->last_cursor_x),
-                                         static_cast<f32>(y - self->impl_->last_cursor_y));
-        }
-        self->impl_->first_cursor_event = false;
-        self->impl_->last_cursor_x = x;
-        self->impl_->last_cursor_y = y;
-        self->input_.set_mouse_position(static_cast<f32>(x), static_cast<f32>(y));
+        self->input_.add_pointer_event(static_cast<f32>(x), static_cast<f32>(y), self->pixel_scale_);
     });
     glfwSetCursorEnterCallback(handle, [](GLFWwindow* source, int entered) {
         auto* self = static_cast<Window*>(glfwGetWindowUserPointer(source));
         if (self == nullptr) return;
         self->input_.set_cursor_inside(entered == GLFW_TRUE);
-        self->impl_->first_cursor_event = true;
     });
     glfwSetScrollCallback(handle, [](GLFWwindow* source, double dx, double dy) {
         auto* self = static_cast<Window*>(glfwGetWindowUserPointer(source));
@@ -172,10 +171,27 @@ Scope<Window> Window::create(const WindowDesc& desc) {
     float scale_y = 1.0f;
     glfwGetWindowContentScale(handle, &scale_x, &scale_y);
     window->dpi_scale_ = std::max(scale_x, 0.5f);
+    window->refresh_pixel_scale();
 
-    ORE_INFO("window: \"{}\" {}x{} (dpi scale {:.2f})", desc.title, window->width_, window->height_,
-             static_cast<f64>(window->dpi_scale_));
+    ORE_INFO("window: \"{}\" {}x{} (dpi scale {:.2f}, {:.4f}x{:.4f} framebuffer pixels per screen "
+             "unit)",
+             desc.title, window->width_, window->height_, static_cast<f64>(window->dpi_scale_),
+             static_cast<f64>(window->pixel_scale_.x), static_cast<f64>(window->pixel_scale_.y));
     return window;
+}
+
+void Window::refresh_pixel_scale() {
+    if (impl_ == nullptr || impl_->handle == nullptr) return;
+    int window_width = 0;
+    int window_height = 0;
+    int framebuffer_width = 0;
+    int framebuffer_height = 0;
+    glfwGetWindowSize(impl_->handle, &window_width, &window_height);
+    glfwGetFramebufferSize(impl_->handle, &framebuffer_width, &framebuffer_height);
+    pixel_scale_ = PixelScale::of(static_cast<u32>(std::max(window_width, 0)),
+                                  static_cast<u32>(std::max(window_height, 0)),
+                                  static_cast<u32>(std::max(framebuffer_width, 0)),
+                                  static_cast<u32>(std::max(framebuffer_height, 0)));
 }
 
 Window::~Window() {

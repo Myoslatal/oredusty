@@ -40,6 +40,23 @@ enum class MouseButton : u8 { Left = 0, Right = 1, Middle = 2, Button4 = 3, Butt
 
 enum class CursorMode : u8 { Normal, Hidden, Disabled };
 
+/// The window system reports the pointer in *screen coordinates* (the window's content size, e.g.
+/// 512x384), while an Ore app draws and hit-tests in *framebuffer pixels* (1024x768 for that same
+/// window on a 2x display). This is the factor between the two, one per axis because a fractional
+/// scale rounds the width and the height independently.
+struct PixelScale {
+    f32 x = 1.0f;
+    f32 y = 1.0f;
+
+    /// The factor from the two sizes the window layer knows. A window with no size (minimised) or no
+    /// framebuffer yields 1.0 instead of dividing by zero.
+    [[nodiscard]] static PixelScale of(u32 window_width, u32 window_height, u32 framebuffer_width,
+                                       u32 framebuffer_height);
+    [[nodiscard]] bool identity() const { return x == 1.0f && y == 1.0f; }
+    [[nodiscard]] f32 to_pixels_x(f32 screen_x) const { return screen_x * x; }
+    [[nodiscard]] f32 to_pixels_y(f32 screen_y) const { return screen_y * y; }
+};
+
 class InputState {
 public:
     static constexpr usize kKeyCount = static_cast<usize>(Key::Count);
@@ -57,6 +74,9 @@ public:
     [[nodiscard]] bool alt_down() const;
 
     // --- mouse ---
+    // Every pointer value is a framebuffer pixel, never a screen coordinate: a game lays out its UI
+    // and its hit tests in the same pixels the renderer draws in, so a scaled display cannot shift
+    // the pointer away from what is under it.
     [[nodiscard]] bool mouse_down(MouseButton button) const;
     [[nodiscard]] bool mouse_pressed(MouseButton button) const;
     [[nodiscard]] bool mouse_released(MouseButton button) const;
@@ -75,7 +95,12 @@ public:
     void set_mouse_button(MouseButton button, bool down);
     void set_mouse_position(f32 x, f32 y);
     void add_mouse_delta(f32 dx, f32 dy);
+    /// One pointer event from the window layer, in screen coordinates. Stores the position and the
+    /// delta in framebuffer pixels; the first event after the pointer entered the window carries no
+    /// delta, so a pointer that reappears somewhere else does not drag the view with it.
+    void add_pointer_event(f32 screen_x, f32 screen_y, PixelScale scale);
     void add_scroll(f32 x, f32 y);
+    /// Leaving the content area clears the pointer tracking, so the next event starts a fresh delta.
     void set_cursor_inside(bool inside);
     void add_text(std::string_view utf8);
 
@@ -88,6 +113,9 @@ private:
     std::array<bool, kMouseButtonCount> mouse_released_{};
     f32 mouse_x_ = 0.0f;
     f32 mouse_y_ = 0.0f;
+    f32 pointer_x_ = 0.0f;  ///< the last pointer event, in framebuffer pixels
+    f32 pointer_y_ = 0.0f;
+    bool pointer_tracked_ = false;
     f32 mouse_dx_ = 0.0f;
     f32 mouse_dy_ = 0.0f;
     f32 scroll_x_ = 0.0f;

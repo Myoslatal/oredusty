@@ -60,7 +60,13 @@ public:
     [[nodiscard]] CursorMode cursor_mode() const { return cursor_mode_; }
     [[nodiscard]] bool vsync() const { return vsync_; }
     void set_vsync(bool enabled) { vsync_ = enabled; }
+    /// The display's content scale (1.0, 1.5, 2.0, ...): what a layout unit or a font size is
+    /// multiplied by. For converting the pointer, use pixel_scale() instead - it is the exact factor
+    /// between the two spaces, not a rounded scale factor.
     [[nodiscard]] f32 dpi_scale() const { return dpi_scale_; }
+    /// The factor between the pointer's screen coordinates and framebuffer pixels. InputState already
+    /// applies it; an app that reads a pointer position from the window system itself must too.
+    [[nodiscard]] PixelScale pixel_scale() const { return pixel_scale_; }
     [[nodiscard]] f64 time() const;
 
     [[nodiscard]] const InputState& input() const { return input_; }
@@ -72,12 +78,18 @@ public:
 private:
     Window() = default;
 
+    /// Recomputes pixel_scale_ from the sizes GLFW reports. Called whenever either can have changed:
+    /// the content size (moving to another monitor, a resize) or the framebuffer size (a scale
+    /// change, a resize).
+    void refresh_pixel_scale();
+
     struct Impl;
     Scope<Impl> impl_;
     InputState input_{};
     u32 width_ = 0;
     u32 height_ = 0;
     f32 dpi_scale_ = 1.0f;
+    PixelScale pixel_scale_{};
     bool resized_ = false;
     bool vsync_ = true;
     CursorMode cursor_mode_ = CursorMode::Normal;

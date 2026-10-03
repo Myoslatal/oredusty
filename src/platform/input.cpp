@@ -12,6 +12,18 @@ namespace {
 
 } // namespace
 
+PixelScale PixelScale::of(u32 window_width, u32 window_height, u32 framebuffer_width,
+                          u32 framebuffer_height) {
+    PixelScale scale;
+    // A minimised window reports a zero content size and a hidden one can report a zero framebuffer;
+    // there is no factor to compute then, and 1.0 keeps every caller's arithmetic finite.
+    if (window_width == 0 || window_height == 0) return scale;
+    if (framebuffer_width == 0 || framebuffer_height == 0) return scale;
+    scale.x = static_cast<f32>(framebuffer_width) / static_cast<f32>(window_width);
+    scale.y = static_cast<f32>(framebuffer_height) / static_cast<f32>(window_height);
+    return scale;
+}
+
 void InputState::begin_frame() {
     key_pressed_.fill(false);
     key_released_.fill(false);
@@ -90,12 +102,28 @@ void InputState::add_mouse_delta(f32 dx, f32 dy) {
     mouse_dy_ += dy;
 }
 
+void InputState::add_pointer_event(f32 screen_x, f32 screen_y, PixelScale scale) {
+    const f32 x = scale.to_pixels_x(screen_x);
+    const f32 y = scale.to_pixels_y(screen_y);
+    // A delta is only meaningful between two positions the pointer actually travelled through: the
+    // first event after entering the window would otherwise look like a jump from wherever the
+    // pointer was last seen.
+    if (pointer_tracked_) add_mouse_delta(x - pointer_x_, y - pointer_y_);
+    pointer_tracked_ = true;
+    pointer_x_ = x;
+    pointer_y_ = y;
+    set_mouse_position(x, y);
+}
+
 void InputState::add_scroll(f32 x, f32 y) {
     scroll_x_ += x;
     scroll_y_ += y;
 }
 
-void InputState::set_cursor_inside(bool inside) { cursor_inside_ = inside; }
+void InputState::set_cursor_inside(bool inside) {
+    cursor_inside_ = inside;
+    pointer_tracked_ = false;
+}
 
 void InputState::add_text(std::string_view utf8) { text_.append(utf8); }
 

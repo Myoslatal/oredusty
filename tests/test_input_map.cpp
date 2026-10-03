@@ -63,6 +63,54 @@ ORE_TEST(input_state_mouse_and_text) {
     ORE_CHECK(state.text_input().empty());
 }
 
+ORE_TEST(pointer_events_arrive_in_framebuffer_pixels) {
+    // A 2x display: the window system reports the pointer in screen coordinates (512x384), the
+    // framebuffer it draws into is twice that. A hit test in framebuffer pixels must see the doubled
+    // position, or the pointer lands on whatever is up and to the left of it.
+    const PixelScale doubled = PixelScale::of(512, 384, 1024, 768);
+    ORE_CHECK_EQ(doubled.x, 2.0f);
+    ORE_CHECK_EQ(doubled.y, 2.0f);
+
+    InputState state;
+    state.begin_frame();
+    state.set_cursor_inside(true);
+    state.add_pointer_event(400.0f, 300.0f, doubled);
+    ORE_CHECK_EQ(state.mouse_x(), 800.0f);
+    ORE_CHECK_EQ(state.mouse_y(), 600.0f);
+    ORE_CHECK_EQ(state.mouse_delta_x(), 0.0f); // appearing over the window is not a movement
+    ORE_CHECK_EQ(state.mouse_delta_y(), 0.0f);
+
+    state.begin_frame();
+    state.add_pointer_event(410.0f, 290.0f, doubled);
+    ORE_CHECK_EQ(state.mouse_x(), 820.0f);
+    ORE_CHECK_EQ(state.mouse_y(), 580.0f);
+    ORE_CHECK_EQ(state.mouse_delta_x(), 20.0f);
+    ORE_CHECK_EQ(state.mouse_delta_y(), -20.0f);
+
+    // Leaving and re-entering: the pointer reappears somewhere else, which is not a movement either.
+    state.begin_frame();
+    state.set_cursor_inside(false);
+    state.set_cursor_inside(true);
+    state.add_pointer_event(10.0f, 10.0f, doubled);
+    ORE_CHECK_EQ(state.mouse_x(), 20.0f);
+    ORE_CHECK_EQ(state.mouse_delta_x(), 0.0f);
+
+    // A fractional scale: a 2133x1200 window is a 3555x2000 framebuffer (the two ratios differ in the
+    // last digits because the sizes are rounded independently), so the corner of the window is the
+    // corner of the framebuffer.
+    const PixelScale fractional = PixelScale::of(2133, 1200, 3555, 2000);
+    state.begin_frame();
+    state.add_pointer_event(2133.0f, 1200.0f, fractional);
+    ORE_CHECK_NEAR(state.mouse_x(), 3555.0f, 0.5f);
+    ORE_CHECK_NEAR(state.mouse_y(), 2000.0f, 0.5f);
+
+    // An unscaled display is the identity, and a minimised window (no size to divide by) cannot
+    // produce a scale at all.
+    ORE_CHECK(PixelScale::of(1280, 720, 1280, 720).identity());
+    ORE_CHECK(PixelScale::of(0, 0, 1024, 768).identity());
+    ORE_CHECK(PixelScale::of(1280, 720, 0, 0).identity());
+}
+
 ORE_TEST(input_map_actions_and_axes) {
     InputMap map;
     map.bind("jump", Key::Space);
