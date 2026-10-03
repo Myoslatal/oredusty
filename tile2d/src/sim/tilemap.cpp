@@ -108,6 +108,14 @@ bool TileMap::empty() const { return width_ <= 0 || height_ <= 0; }
 
 bool TileMap::in_bounds(i32 x, i32 y) const { return x >= 0 && x < width_ && y >= 0 && y < height_; }
 
+usize TileMap::allocated_chunks() const {
+    usize allocated = 0;
+    for (const Chunk& chunk : chunks_) {
+        if (!chunk.tiles.empty()) ++allocated;
+    }
+    return allocated;
+}
+
 u32 TileMap::chunks_per_layer() const {
     return static_cast<u32>(chunks_x_) * static_cast<u32>(chunks_y_);
 }

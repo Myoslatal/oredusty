@@ -773,4 +773,36 @@ T2D_TEST(ascii_art_stamps_into_one_layer) {
     T2D_CHECK_EQ(built->at(2, 2), kPlatform);
 }
 
+T2D_TEST(a_big_map_only_pays_for_the_chunks_it_uses) {
+    // 512x512 is 16x16 chunks per layer: 256 chunk headers, four layers, and no cell storage at all
+    // until something is written. This is what "hundreds of cells per side" rests on.
+    TileMap map(512, 512, 16.0f, false, 4);
+    T2D_CHECK_EQ(map.allocated_chunks(), 0u);
+    T2D_CHECK_EQ(map.count_tiles(kEmptyTile), 512u * 512u * 4u);
+    T2D_CHECK_EQ(map.at(3, 511, 511), kEmptyTile);
+
+    // One cell on the top layer allocates that layer's chunk and nothing else: the other three layers
+    // still hold no storage, and the cells around the one written read as empty, not as garbage.
+    map.set(2, 500, 500, 7);
+    T2D_CHECK_EQ(map.allocated_chunks(), 1u);
+    T2D_CHECK_EQ(map.count_tiles(7), 1u);
+    T2D_CHECK_EQ(map.at(2, 500, 500), 7u);
+    T2D_CHECK_EQ(map.at(2, 480, 480), kEmptyTile);   // same chunk, never written
+    T2D_CHECK_EQ(map.at(2, 499, 500), kEmptyTile);
+    T2D_CHECK_EQ(map.count_tiles(0, kEmptyTile), 512u * 512u);
+
+    // A 40x40 fill touches four chunks on every layer: the one already allocated plus four more on
+    // its own layer, and four on each of the others.
+    map.fill_rect(TileRect{0, 0, 40, 40}, 1);
+    T2D_CHECK_EQ(map.allocated_chunks(), 17u);
+    T2D_CHECK_EQ(map.count_tiles(1), 40u * 40u * 4u);
+    T2D_CHECK_EQ(map.count_tiles(7), 1u);
+
+    // Filling a layer with empty tiles releases every chunk of it (that is what fill() does with
+    // kEmptyTile), so an emptied layer costs nothing again: 17 chunks minus the five of layer 2.
+    map.fill(2, kEmptyTile);
+    T2D_CHECK_EQ(map.count_tiles(7), 0u);
+    T2D_CHECK_EQ(map.allocated_chunks(), 12u);
+}
+
 T2D_TEST_MAIN

@@ -1,6 +1,7 @@
 // End to end rendering tests for the 2D renderer: they draw offscreen on whatever Vulkan device is
 // available and assert on the pixels that come back, so "the renderer reported draw calls but the
 // screen stayed empty" can never happen again. Skips (instead of failing) where there is no device.
+#include <t2d/core/camera2d.h>
 #include <t2d/render/atlas.h>
 #include <t2d/render/image_atlas.h>
 #include <t2d/render/sprite_batch.h>
@@ -39,11 +40,11 @@ struct Fixture {
     return fixture;
 }
 
-[[nodiscard]] Scope<SpriteBatch> make_batch(const Fixture& fixture) {
+[[nodiscard]] Scope<SpriteBatch> make_batch(const Fixture& fixture, u32 max_quads = 64) {
     SpriteBatch::Options options;
     options.color_format = fixture.renderer->color_format();
     options.depth_format = fixture.renderer->depth_format();
-    options.max_quads = 64;
+    options.max_quads = max_quads;
     options.vertex_shader_path = std::string(T2D_TEST_SHADER_DIR) + "/sprite.vert.spv";
     options.fragment_shader_path = std::string(T2D_TEST_SHADER_DIR) + "/sprite.frag.spv";
     return SpriteBatch::create(*fixture.context, options);
@@ -439,6 +440,80 @@ T2D_TEST(images_packed_into_one_page_draw_with_one_texture) {
     // And nothing is drawn outside the quads.
     const ore::Color outside = ore::Color::from_packed(shot.pixel(48, 48));
     T2D_CHECK_EQ(outside.r + outside.g + outside.b, 0);
+}
+
+T2D_TEST(the_tile_renderer_walks_the_view_and_not_the_map) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 2048);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    // A map of hundreds of cells per side with every cell of four layers filled: 1M tiles, the size the
+    // game is built for. Drawing it has to cost what the viewport covers, not what the map holds.
+    TileMap big(512, 512, 16.0f, false, 4);
+    for (i32 layer = 0; layer < 4; ++layer) big.fill(layer, 1);
+
+    const Vec2 viewport{128.0f, 128.0f};
+    // World units are pixels here, so the camera is a plain 1:1 view centred inside the map.
+    Camera2D camera(viewport, 1.0f, Vec2{1024.0f, 1024.0f});
+    const Aabb2 view = camera.visible_world();
+    const TileRect cells = camera.visible_cells(16.0f);
+    T2D_CHECK_EQ(cells.width, 8);
+    T2D_CHECK_EQ(cells.height, 8);
+    // The renderer's own culling range is the camera's: two implementations, one answer. If they ever
+    // disagree, one of them is wrong and the map is drawn (or skipped) in the wrong place.
+    const TileRect map_cells = big.visible_tiles(view);
+    T2D_CHECK_EQ(map_cells.x, cells.x);
+    T2D_CHECK_EQ(map_cells.y, cells.y);
+    T2D_CHECK_EQ(map_cells.width, cells.width);
+    T2D_CHECK_EQ(map_cells.height, cells.height);
+
+    const auto draw = [&](const TileMap& map, TilemapRenderer& renderer) {
+        VkClearValue clear{};
+        clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+        fixture.renderer->begin_pass(clear, 1.0f);
+        batch->begin(frame, camera.centre(), viewport, *tiles, sampler->handle());
+        // The view comes from the camera on every draw, so moving the camera moves what is walked.
+        renderer.draw_map(*batch, map, test_tileset(), camera.visible_world());
+        batch->end();
+        fixture.renderer->end_pass();
+        fixture.renderer->end_frame();
+        fixture.renderer->wait_idle();
+    };
+
+    TilemapRenderer renderer;
+    draw(big, renderer);
+    const u32 visible_cells = 8u * 8u;
+    T2D_CHECK_EQ(renderer.stats().map_layers, 4u);
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, visible_cells * 4u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, visible_cells * 4u);
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 0u);
+
+    // Something actually reached the screen: a culling bug that skipped everything would still pass
+    // the counts above.
+    const ore::Image shot = fixture.context->read_render_target(fixture.renderer->target());
+    T2D_REQUIRE(!shot.empty());
+    T2D_CHECK_GT(count_lit_pixels(shot, 20), 1000u);
+
+    // The same view over a map a sixteenth of the size walks exactly as many cells: the cost follows
+    // the screen, not the map.
+    TileMap small(128, 128, 16.0f, false, 4);
+    for (i32 layer = 0; layer < 4; ++layer) small.fill(layer, 1);
+    renderer.reset_stats();
+    draw(small, renderer);
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, visible_cells * 4u);
+
+    // A view that runs off the edge of the map counts the cells that exist and no others.
+    camera.set_centre(Vec2{8.0f, 8.0f});
+    renderer.reset_stats();
+    draw(small, renderer);
+    T2D_CHECK_LT(renderer.stats().tiles_considered, visible_cells * 4u);
+    T2D_CHECK_GT(renderer.stats().tiles_considered, 0u);
 }
 
 T2D_TEST_MAIN

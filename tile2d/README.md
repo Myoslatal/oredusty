@@ -42,7 +42,7 @@ milliseconds, and the slowest suite is the CFF interpreter comparing every glyph
 collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
 without Vulkan, GLFW or the game — the split that lets a dedicated server exist later.
 
-    tests/test_tilemap            16 cases / 345 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
+    tests/test_tilemap            17 cases / 359 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
     tests/test_camera2d            7 cases /1986 checks  screen/world mapping, zooming about an anchor, fitting a 512² map, bounding the view
     tests/test_ecfg               12 cases / 128 checks  the configuration format, including the shipped example.ecfg
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
@@ -52,7 +52,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases / 1265 checks framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
-    tests/test_render_offscreen    8 cases /  51 checks  real rendering with pixel readback (skips without a device)
+    tests/test_render_offscreen    9 cases /  65 checks  real rendering with pixel readback, and a 512² map culled to the view (skips without a device)
     games/mine/tests/test_mine_menu      10 cases / 137 checks  the start screen as a state machine
     games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
@@ -65,7 +65,9 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
 
 Storage is chunked (32 x 32) and allocated lazily: a 4096 x 4096 map costs one empty vector per chunk
 until something is written into that chunk, and chunks belong to a layer, so a layer nothing was
-written into costs those headers and nothing else.
+written into costs those headers and nothing else. `allocated_chunks()` says how many chunks really
+hold storage — a 512×512×4 map that nobody wrote to reports 0, one written cell reports 1, and filling
+a layer with `kEmptyTile` gives them all back (`test_tilemap` asserts exactly that).
 
 * **Layers.** A map holds 1..32 tile layers, each an independent grid of the same size, drawn bottom to
   top. What a layer *means* — ground, ore, structures, logistics — is the game's business; the map only
@@ -123,6 +125,10 @@ Measured on the real device (Intel Arc Pro 130T/140T, debug build, headless, 128
 | 1024×1024, 8 layers, scatter | 8.4M | 32768 KiB | ~9 ms |
 
 The frame cost stops following the map size because nothing walks the map: it follows the *screen*.
+The framework's own tile path is held to the same rule by
+`test_render_offscreen::the_tile_renderer_walks_the_view_and_not_the_map`: a 512×512×4 map and a
+128×128×4 map, drawn through the same camera, walk the same 256 cells, the camera's `visible_cells()`
+and the renderer's `visible_tiles()` agree cell for cell, and pixels come back lit.
 (These are CPU-bound debug numbers with the frame paced to 60 Hz; the ring peak for the 512² case is
 682 KiB of the 4 MiB the game asks for.)
 

@@ -110,6 +110,10 @@ public:
     [[nodiscard]] std::vector<u8> serialize() const;
     [[nodiscard]] static std::optional<TileMap> deserialize(ConstSpan<const u8> data);
     [[nodiscard]] u64 checksum() const;                        ///< every layer, bottom to top
+    /// How many chunks hold storage. A map nobody wrote to has none, and writing one cell allocates
+    /// exactly one chunk (kChunkSize x kChunkSize cells) on that layer. This is the number that makes
+    /// a map of hundreds of cells per side cheap, and it is what a test can assert.
+    [[nodiscard]] usize allocated_chunks() const;
     [[nodiscard]] usize count_tiles(TileId id) const;           ///< every layer
     [[nodiscard]] usize count_tiles(i32 layer, TileId id) const;
 
