@@ -1,6 +1,28 @@
-# Build outputs
+# Build outputs (the presets write to build/, use those instead of an in-source cmake .)
 build/
 out/
+/CMakeCache.txt
+/CMakeFiles/
+/CTestTestfile.cmake
+/Makefile
+/cmake_install.cmake
+/oreConfig.cmake
+/oreConfigVersion.cmake
+/generated/
+**/CMakeFiles/
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+**/Makefile
+**/*.a
+/examples/ore_example_*
+/tests/test_*
+/Testing/
+/examples/shaders/
+/examples/embedded/
+
+# Compiled shaders are build outputs (the sources are .vert/.frag/.comp)
+*.spv
+*.d
 .cache/
 compile_commands.json
 imgui.ini

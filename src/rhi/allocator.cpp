@@ -87,6 +87,12 @@ Allocation GpuAllocator::allocate(const VkMemoryRequirements& requirements, VkMe
     const bool split_kinds = buffer_image_granularity() > 1;
     const MemoryKind pool_kind = split_kinds ? kind : MemoryKind::Linear;
 
+    // A request for host visible memory must never be served from a block that was created for
+    // device local use: on integrated GPUs both requests resolve to the same memory type, but only
+    // the block created for the host visible request was mapped. Serving the unmapped block makes
+    // Buffer::write() fail (or, worse, write to no mapping at all).
+    const bool needs_mapping = is_host_visible(properties);
+
     auto try_block = [&](Block* block) -> Allocation {
         const auto allocation = block->allocator.allocate(static_cast<usize>(requirements.size),
                                                           static_cast<usize>(alignment));
@@ -97,6 +103,7 @@ Allocation GpuAllocator::allocate(const VkMemoryRequirements& requirements, VkMe
         out.size = allocation->size;
         out.mapped = block->mapped;
         out.block_index = static_cast<u32>(block->index);
+        out.memory_type = block->memory_type;
         return out;
     };
 
@@ -104,6 +111,7 @@ Allocation GpuAllocator::allocate(const VkMemoryRequirements& requirements, VkMe
         Block* best = nullptr;
         for (const Scope<Block>& block : blocks_) {
             if (block->memory_type != *memory_type || block->kind != pool_kind || block->dedicated) continue;
+            if (needs_mapping && block->mapped == nullptr) continue;
             if (block->allocator.largest_free_block() < requirements.size) continue;
             if (best == nullptr || block->allocator.available() > best->allocator.available()) best = block.get();
         }
@@ -122,6 +130,17 @@ Allocation GpuAllocator::allocate(const VkMemoryRequirements& requirements, VkMe
     Allocation allocation = try_block(block);
     if (!allocation.valid()) {
         ORE_ERROR("freshly created block could not satisfy a {} byte allocation", requirements.size);
+        return allocation;
+    }
+    if (needs_mapping && allocation.mapped == nullptr) {
+        // Never hand out an unmappable allocation for a host visible request: report it instead of
+        // letting the caller write into a null mapping.
+        ORE_ERROR("allocator: host visible allocation of {} bytes could not be mapped "
+                  "(memory type {}, properties 0x{:x})",
+                  requirements.size, block->memory_type, properties);
+        block->allocator.free(BlockAllocator::Allocation{static_cast<usize>(allocation.offset),
+                                                         static_cast<usize>(allocation.size)});
+        return {};
     }
     return allocation;
 }

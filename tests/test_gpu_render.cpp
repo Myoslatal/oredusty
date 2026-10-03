@@ -159,6 +159,45 @@ ORE_TEST(gpu_draw_fullscreen_triangle_with_push_constants) {
     ORE_CHECK_NE(red.pixel(16, 16), green.pixel(16, 16));
 }
 
+ORE_TEST(gpu_host_visible_staging_is_always_mappable) {
+    // A context without a renderer: no upload ring exists, so the *first* allocation is a
+    // device-local buffer. On many drivers (integrated GPUs) the device-local and host-visible
+    // memory types overlap, and a naive allocator then hands that unmapped block to the staging
+    // buffer below - which used to abort in Buffer::write("upload staging").
+    rhi::ContextDesc context_desc;
+    context_desc.application_name = "ore_test_gpu_render";
+    context_desc.enable_validation = false;
+    context_desc.headless = true;
+    auto context = rhi::GraphicsContext::create(context_desc);
+    if (context == nullptr) ORE_SKIP("no Vulkan device available");
+
+    rhi::BufferDesc device_desc;
+    device_desc.size = 4096;
+    device_desc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::TransferDst;
+    device_desc.host_visible = false;
+    device_desc.debug_name = "test.device_local";
+    auto device_buffer = rhi::Buffer::create(context->allocator(), device_desc);
+    ORE_REQUIRE(device_buffer != nullptr);
+
+    rhi::BufferDesc staging_desc;
+    staging_desc.size = 4096;
+    staging_desc.usage = rhi::BufferUsage::TransferSrc;
+    staging_desc.host_visible = true;
+    staging_desc.debug_name = "test.staging";
+    auto staging = rhi::Buffer::create(context->allocator(), staging_desc);
+    ORE_REQUIRE(staging != nullptr);
+    ORE_CHECK_MSG(staging->mapped(), "host visible staging buffer is not mapped (block reuse bug)");
+
+    const std::vector<u8> payload(4096, 0xAB);
+    staging->write(payload);            // would abort when the block is not mapped
+    staging->flush();
+    ORE_CHECK(staging->mapped_data() != nullptr);
+
+    // And the whole upload path has to work with that ordering too.
+    context->upload_buffer(*device_buffer, payload);
+    ORE_CHECK_EQ(context->allocator().stats().live_allocations >= 2u, true);
+}
+
 ORE_TEST(gpu_buffer_upload_round_trip) {
     Fixture fixture = make_fixture(16);
     if (!fixture.valid()) ORE_SKIP("no Vulkan device available");

@@ -19,8 +19,11 @@ struct Allocation {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
+    /// Host pointer for the whole block, already offset by nothing (use mapped_at()).
     void* mapped = nullptr;
     u32 block_index = kInvalidIndex;
+    /// Memory type the block was allocated from (index into VkPhysicalDeviceMemoryProperties).
+    u32 memory_type = kInvalidIndex;
 
     [[nodiscard]] bool valid() const { return memory != VK_NULL_HANDLE; }
     [[nodiscard]] void* mapped_at(VkDeviceSize extra = 0) const {
@@ -30,6 +33,28 @@ struct Allocation {
 
 /// Distinguishes buffer-style (linear) from image-style (optimal tiling) allocations.
 enum class MemoryKind : u8 { Linear, NonLinear };
+
+/// A host flush / invalidate range that satisfies VUID-VkMappedMemoryRange-size-01390:
+/// the offset must be a multiple of nonCoherentAtomSize and size either VK_WHOLE_SIZE or a
+/// multiple of it, clamped to the allocation. Graphics drivers used to be forgiving about this;
+/// non-coherent memory (common on integrated GPUs) is not.
+struct FlushRange {
+    VkDeviceSize offset = 0;
+    VkDeviceSize size = VK_WHOLE_SIZE;
+};
+
+[[nodiscard]] constexpr FlushRange align_flush_range(VkDeviceSize offset, VkDeviceSize size,
+                                                     VkDeviceSize allocation_size,
+                                                     VkDeviceSize atom_size) noexcept {
+    if (size == VK_WHOLE_SIZE) return FlushRange{0, VK_WHOLE_SIZE};
+    if (atom_size == 0 || allocation_size == 0) return FlushRange{offset, size};
+
+    const VkDeviceSize start = align_down(offset < allocation_size ? offset : allocation_size, atom_size);
+    VkDeviceSize end = align_up(offset + size > allocation_size ? allocation_size : offset + size, atom_size);
+    if (end > allocation_size) end = allocation_size;
+    if (end <= start) return FlushRange{start, 0};
+    return FlushRange{start, end - start};
+}
 
 struct GpuAllocatorDesc {
     VkDeviceSize block_size = 16ull * 1024 * 1024;

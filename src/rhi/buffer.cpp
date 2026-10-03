@@ -57,14 +57,14 @@ Scope<Buffer> Buffer::create(GpuAllocator& allocator, const BufferDesc& desc) {
     ORE_VK_CHECK(vkBindBufferMemory(allocator.device().handle(), buffer->buffer_, buffer->allocation_.memory,
                                     buffer->allocation_.offset));
 
-    // Tag the allocation as coherent when the chosen memory type allows skipping flushes.
+    // Coherence depends on the memory type that was actually handed out, not on what was asked for.
     const auto& memory_properties = allocator.device().memory_properties();
-    for (u32 i = 0; i < memory_properties.memoryTypeCount; ++i) {
-        if ((requirements.memoryTypeBits & (1u << i)) != 0u &&
-            memory_properties.memoryTypes[i].propertyFlags == properties) {
-            buffer->coherent_ = (properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0u;
-            break;
-        }
+    if (buffer->allocation_.memory_type < memory_properties.memoryTypeCount) {
+        const VkMemoryPropertyFlags actual =
+            memory_properties.memoryTypes[buffer->allocation_.memory_type].propertyFlags;
+        buffer->coherent_ = (actual & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0u;
+    } else {
+        buffer->coherent_ = false; // flush conservatively rather than silently skipping it
     }
 
     if (!desc.debug_name.empty()) {
@@ -88,21 +88,35 @@ void Buffer::write(ConstSpan<u8> data, u64 offset) const {
     if (!coherent_) flush(offset, data.size());
 }
 
+namespace {
+
+/// VkMappedMemoryRange covers a sub-range of the *whole* VkDeviceMemory, so the allocation offset
+/// and the atom alignment both have to be taken into account.
+[[nodiscard]] VkMappedMemoryRange make_mapped_range(const Allocation& allocation, u64 offset, u64 size,
+                                                   VkDeviceSize atom_size) {
+    const FlushRange aligned = align_flush_range(offset, size, allocation.size, atom_size);
+    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+    range.memory = allocation.memory;
+    range.offset = allocation.offset + aligned.offset;
+    range.size = aligned.size == VK_WHOLE_SIZE ? VK_WHOLE_SIZE : aligned.size;
+    return range;
+}
+
+} // namespace
+
 void Buffer::flush(u64 offset, u64 size) const {
     if (coherent_ || !mapped()) return;
-    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-    range.memory = allocation_.memory;
-    range.offset = allocation_.offset + offset;
-    range.size = size == VK_WHOLE_SIZE ? VK_WHOLE_SIZE : size;
+    const VkDeviceSize atom = allocator_->device().properties().limits.nonCoherentAtomSize;
+    const VkMappedMemoryRange range = make_mapped_range(allocation_, offset, size, atom);
+    if (range.size == 0) return;
     ORE_VK_CHECK(vkFlushMappedMemoryRanges(allocator_->device().handle(), 1, &range));
 }
 
 void Buffer::invalidate(u64 offset, u64 size) const {
     if (coherent_ || !mapped()) return;
-    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-    range.memory = allocation_.memory;
-    range.offset = allocation_.offset + offset;
-    range.size = size == VK_WHOLE_SIZE ? VK_WHOLE_SIZE : size;
+    const VkDeviceSize atom = allocator_->device().properties().limits.nonCoherentAtomSize;
+    const VkMappedMemoryRange range = make_mapped_range(allocation_, offset, size, atom);
+    if (range.size == 0) return;
     ORE_VK_CHECK(vkInvalidateMappedMemoryRanges(allocator_->device().handle(), 1, &range));
 }
 

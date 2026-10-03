@@ -7,6 +7,7 @@ ore_add_test(test_input_map test_input_map.cpp)
 ore_add_test(test_shader_compile test_shader_compile.cpp)
 ore_add_test(test_scene test_scene.cpp)
 ore_add_test(test_camera test_camera.cpp)
+ore_add_test(test_rhi_helpers test_rhi_helpers.cpp)
 
 # GPU tests run against whatever Vulkan device the machine exposes; they self-skip when no
 # device is available (CI containers, for example). They render offscreen and assert on pixels.

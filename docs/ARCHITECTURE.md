@@ -110,6 +110,18 @@ VkDeviceMemory 块 (默认 16 MiB device-local / 4 MiB host-visible)
   非 coherent 内存由 `Buffer::flush()/invalidate()` 处理。
 - **不整理碎片**：`trim()` 释放完全空闲的块（关卡切换时调用），运行期不搬迁资源——
   搬迁需要重写所有描述符，代价与复杂度都不划算。
+- **块复用必须匹配"是否需要映射"**：在核显上 `find_memory_type(DEVICE_LOCAL)` 与
+  `find_memory_type(HOST_VISIBLE|HOST_COHERENT)` 常常返回同一个内存类型，但为 device-local
+  请求创建的块并没有映射。若复用它来满足 host-visible 请求，就会拿到空映射指针
+  （`Buffer::write` 直接断言失败）。因此选择复用块时会额外要求 `block->mapped != nullptr`，
+  并且一旦 host-visible 分配拿不到映射就报错返回而不是把空指针交给调用方。
+  回归测试：`test_gpu_render` 的 `gpu_host_visible_staging_is_always_mappable`。
+- **flush/invalidate 必须按 `nonCoherentAtomSize` 对齐**：规范要求
+  `VkMappedMemoryRange` 的 offset 是该值的整数倍、size 是它整数倍或 `VK_WHOLE_SIZE`，
+  并夹在分配范围内；非 coherent 内存（核显常见）不会替你兜底。范围换算被抽成纯函数
+  `align_flush_range()` 并由 `test_rhi_helpers` 覆盖。
+- **coherent 与否取自实际拿到的内存类型**，而不是"申请时写了 HOST_COHERENT 就当它 coherent"——
+  否则在非 coherent 类型上会静默跳过 flush。
 - 分配算法（`BlockAllocator`）是**纯主机逻辑**，与 Vulkan 无关，因此可以在没有 GPU 的
   机器上完整单测（见 `tests/test_core_block_allocator.cpp`）。
 
