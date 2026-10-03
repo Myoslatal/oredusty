@@ -97,14 +97,17 @@ The suite is built to be fast: the deterministic parts run in milliseconds with 
 GPU, and the two threaded integration tests run at `--tick-rate 240` so the same number of simulated
 ticks is covered in a quarter of the wall clock time. The whole suite takes about 2.5 s.
 
-### Rendering without a display
+### Rendering
 
-    VK_ICD_FILENAMES=/usr/lib/cef/vk_swiftshader_icd.json \
-      ./build/debug/apps/game/tile2d_game --headless --frames 300 --mode single \
-      --screenshot shot.png --size 1280x720
+    ./build/debug/apps/game/tile2d_game --mode single --frames 300 --screenshot shot.png
+    ./build/debug/apps/game/tile2d_game --headless --frames 300 --mode single --screenshot shot.png
 
-`--headless` renders offscreen and `--frames` makes the run reproducible; headless frames are paced to
-60 Hz so the simulation (which advances in wall clock time) actually gets somewhere.
+`--headless` renders offscreen (no window at all) and `--frames` makes the run reproducible; headless
+frames are paced to 60 Hz so the simulation, which advances in wall clock time, actually gets
+somewhere. On a machine without a hardware Vulkan device, point the loader at a software
+implementation:
+
+    VK_ICD_FILENAMES=/usr/lib/cef/vk_swiftshader_icd.json ./build/debug/apps/game/tile2d_game --headless ...
 
 ## Protocol
 
@@ -134,20 +137,30 @@ is estimated.
 | `tsan` (ThreadSanitizer) | 9/9 tests green (4.0 s) |
 | `server-only` | 6/6 tests green, `ldd tile2d_server` links no Vulkan/GLFW/X11/Wayland |
 
+Hardware: **Intel Arc Pro 130T/140T (Arrow Lake-P), Mesa 26.2.3, Wayland**. The windowed path is
+verified there, not only offscreen: `tile2d_game --mode single` and `--mode join` both open a real
+window (2133x1200 at DPI scale 1.67, vsync on, ~165 fps), present through a real swapchain and render
+the world correctly - the two screenshots above come from that run. The same suites also pass with a
+software ICD.
+
 * ThreadSanitizer found a real data race (`SharedLink::close()` writing the link state while the
-  server thread polled `wait_for_data()`); the state is an atomic now. SwiftShader's own internal
-  races are suppressed through `tests/tsan.supp` so the remaining signal is about Tile2D's threads.
-* Rendering is verified by pixel readback on SwiftShader: an opaque quad, a coloured atlas cell, a
-  font glyph and the solid "white texel" of the font atlas are each asserted on the pixels that come
-  back — the renderer reporting draw calls is not accepted as evidence that anything was drawn.
+  server thread polled `wait_for_data()`); the state is an atomic now. Races inside the Vulkan
+  implementation and the loader (SwiftShader's worker threads, for instance) are third party noise
+  and are suppressed through `tests/tsan.supp`, so the remaining signal is about Tile2D's threads.
+* Rendering is verified by pixel readback on the real GPU and on a software ICD: an opaque quad, a
+  coloured atlas cell, a font glyph and the solid "white texel" of the font atlas are each asserted
+  on the pixels that come back - the renderer reporting draw calls is not accepted as evidence that
+  anything was drawn.
 * End to end over real sockets: a dedicated server, two bots and a joining client stay in sync
   (0 desyncs, 0 dropped snapshots) and the joining client renders both players.
 
 ## Known gaps
 
-* **Windowed rendering is untested here.** This machine has no GPU; the only Vulkan implementation is
-  SwiftShader, which crashes inside `vkGetPhysicalDeviceSurfaceSupportKHR` for Wayland surfaces.
-  Everything above was verified offscreen (`VK_EXT_headless_surface`).
+* **Software Vulkan cannot open a window here.** On a machine whose only Vulkan implementation is the
+  SwiftShader build Electron ships, `vkGetPhysicalDeviceSurfaceSupportKHR` crashes inside the ICD for
+  Wayland surfaces (reproduced with a minimal C probe, unrelated to this framework). Windowed
+  verification therefore needs a real driver; the fallback is offscreen rendering, which the tests
+  cover.
 * **No validation layers are installed**, so the GPU paths are covered by readback and tests rather
   than by `VK_LAYER_KHRONOS_validation`.
 * The bot's health check counts "did not reach half of `--ticks`" as a failure, so it reports

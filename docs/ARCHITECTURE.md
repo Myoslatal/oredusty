@@ -217,8 +217,10 @@ World
 3. **参考截图**——三个示例在软件 Vulkan 上渲染真实 PNG（`docs/images/`），
    用于人工确认视觉结果没有回归。
 
-**已知的环境限制**：开发容器里没有 GPU，只有 Electron 打包的 SwiftShader。它的 Wayland WSI
-会在 `vkGetPhysicalDeviceSurfaceSupportKHR` 内部解引用空指针而崩溃（最小 C 探针即可复现，
-与框架无关），因此窗口 + 交换链的组合无法在该环境验证；交换链代码改由上面的
-`VK_EXT_headless_surface` 测试覆盖。`AppConfig::allow_headless_fallback` 会在窗口上下文
-创建失败时退化成离屏渲染并告警。
+**验证环境**：验证机是 Intel Arc Pro 130T/140T（Arrow Lake-P）核显 + Mesa 26.2.3 + Wayland，
+窗口 + 交换链路径已实测（示例与 Tile2D 客户端均开窗、经真实交换链呈现并截图，
+`docs/images/` 的参考截图来自该硬件）。若在没有硬件 GPU 的机器上只能退回软件实现，
+注意 Electron 打包的 SwiftShader 的 Wayland WSI 会在
+`vkGetPhysicalDeviceSurfaceSupportKHR` 内部崩溃（最小 C 探针即可复现，与框架无关）：
+这类环境下交换链代码由上面的 `VK_EXT_headless_surface` 测试覆盖，
+`AppConfig::allow_headless_fallback` 也会在窗口上下文创建失败时退化成离屏渲染并告警。

@@ -389,13 +389,15 @@ pipeline layout），用 `rhi::GraphicsPipeline::create()`。注意**颜色/深�
 - `GpuAllocator` 不会整理碎片（可 `trim()` 释放空块），超大资源走独立 `VkDeviceMemory`
 - 交换链重建目前是"重建目标 + 重建管线外的所有附属资源"，因此尺寸变化时应用需要
   在 `on_resize()` 中重建依赖尺寸的资源（深度/RT 由框架处理）
-- **窗口模式的验证依赖环境**：本仓库的开发容器没有 GPU，只有 Electron 自带的
-  SwiftShader 软件实现，而它的 Wayland WSI 在 `vkGetPhysicalDeviceSurfaceSupportKHR`
-  里就会崩溃（用最小 C 探针复现，与框架代码无关）。因此仓库内的自动化验证全部走
-  **离屏 + `VK_EXT_headless_surface` 交换链**（两者都真实执行了呈现路径）；
-  在有正常驱动的机器上窗口模式按标准 WSI 流程工作。若创建窗口上下文失败，
-  `AppConfig::allow_headless_fallback`（默认开启）会退化为离屏渲染并打印警告，
-  而不是直接退出。
+- **窗口模式已在真实硬件上实测**：验证机是 Intel Arc Pro 130T/140T（Arrow Lake-P）核显 +
+  Mesa 26.2.3 + Wayland，`ore_example_01/02/03` 与 Tile2D 客户端都能开窗渲染、经真实交换链
+  呈现并截图（2133x1200、DPI 缩放 1.67、vsync 开启），`docs/images/` 里的参考截图即来自
+  该硬件。若在没有硬件 GPU 的机器上只能退回软件实现（lavapipe / SwiftShader），注意 Electron
+  打包的 SwiftShader 的 Wayland WSI 会在 `vkGetPhysicalDeviceSurfaceSupportKHR` 里崩溃
+  （最小 C 探针可复现，与框架代码无关）——这类环境下自动化验证走
+  **离屏 + `VK_EXT_headless_surface` 交换链**（同样真实执行呈现路径）。
+  `AppConfig::allow_headless_fallback`（默认开启）会在窗口上下文创建失败时退化为离屏渲染
+  并打印警告，而不是直接退出。
 
 后续可加：compute 管线示例、`VK_EXT_descriptor_buffer`、间接绘制与 GPU 剔除、
 glTF 加载、渲染图（render graph）自动屏障、时间戳查询。

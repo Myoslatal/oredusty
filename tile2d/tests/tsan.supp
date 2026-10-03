@@ -1,9 +1,9 @@
 # ThreadSanitizer suppressions for Tile2D.
 #
-# The only Vulkan implementation available in this container is SwiftShader, a software rasterizer
-# that runs its own worker threads. ThreadSanitizer reports races inside its code (and inside the
-# Vulkan loader) that say nothing about Tile2D: they appear with or without our renderer, and the
-# library is not built with instrumentation. Suppressing them keeps the signal on our own threads -
-# the server thread, the client thread and the shared memory channel.
+# Vulkan implementations run their own worker threads (SwiftShader, a software rasterizer, is the
+# noisiest one; the loader adds a few more). ThreadSanitizer reports races inside that code which say
+# nothing about Tile2D: they appear with or without our renderer, and those libraries are not built
+# with instrumentation. Suppressing them keeps the signal on our own threads - the server thread, the
+# client thread and the shared memory channel.
 race:libvk_swiftshader
 race:libvulkan
