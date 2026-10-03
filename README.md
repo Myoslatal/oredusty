@@ -316,7 +316,8 @@ ctest --test-dir build/debug --output-on-failure        # 全部
 | `test_scene` | ECS：句柄代际回收、稀疏集一致性、`each<>` 组合、层级矩阵、5000 实体压力 |
 | `test_camera` | 投影/视图矩阵的 Vulkan 约定、AABB、飞行与轨道相机行为 |
 | `test_gpu_smoke` | 设备可用性（无设备时 SKIP） |
-| `test_gpu_render` | **真实渲染并断言像素**：清屏回读、push constant 变色的全屏三角形、缓冲上传往返、纹理上传往返、mip 链、离屏尺寸变更、分配器统计 |
+| `test_gpu_render` | **离屏渲染并断言像素**：清屏回读、push constant 变色的全屏三角形、缓冲上传往返、纹理上传往返、mip 链、离屏尺寸变更、分配器统计 |
+| `test_gpu_swapchain` | **真实交换链的呈现路径**：借助 `VK_EXT_headless_surface` 创建无窗口交换链，验证 acquire → 渲染 → submit → present、呈现图像截图、resize 后重建交换链；驱动不支持该扩展时整组 SKIP |
 
 `test_gpu_render` 全流程走的是真实 Vulkan 设备（独显、核显或 SwiftShader 等软件实现），
 因此只要机器上有任意 Vulkan 1.3 实现，就能验证"渲染结果对不对"，而不只是"编译过没过"。
@@ -388,6 +389,13 @@ pipeline layout），用 `rhi::GraphicsPipeline::create()`。注意**颜色/深�
 - `GpuAllocator` 不会整理碎片（可 `trim()` 释放空块），超大资源走独立 `VkDeviceMemory`
 - 交换链重建目前是"重建目标 + 重建管线外的所有附属资源"，因此尺寸变化时应用需要
   在 `on_resize()` 中重建依赖尺寸的资源（深度/RT 由框架处理）
+- **窗口模式的验证依赖环境**：本仓库的开发容器没有 GPU，只有 Electron 自带的
+  SwiftShader 软件实现，而它的 Wayland WSI 在 `vkGetPhysicalDeviceSurfaceSupportKHR`
+  里就会崩溃（用最小 C 探针复现，与框架代码无关）。因此仓库内的自动化验证全部走
+  **离屏 + `VK_EXT_headless_surface` 交换链**（两者都真实执行了呈现路径）；
+  在有正常驱动的机器上窗口模式按标准 WSI 流程工作。若创建窗口上下文失败，
+  `AppConfig::allow_headless_fallback`（默认开启）会退化为离屏渲染并打印警告，
+  而不是直接退出。
 
 后续可加：compute 管线示例、`VK_EXT_descriptor_buffer`、间接绘制与 GPU 剔除、
 glTF 加载、渲染图（render graph）自动屏障、时间戳查询。

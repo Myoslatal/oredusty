@@ -158,16 +158,30 @@ int Application::run(int argc, char** argv) {
     context_desc.headless = config_.headless;
     context_desc.instance_extensions = instance_extensions;
     context_desc.device_index = config_.device_index;
+    if (!config_.headless) {
+        // The surface needs the instance the context is about to create, and the device choice
+        // needs the surface, so the context calls back into the window here.
+        context_desc.surface_factory = [this](VkInstance instance) -> VkSurfaceKHR {
+            return window_ != nullptr ? window_->create_surface(instance) : VK_NULL_HANDLE;
+        };
+    }
     context_ = rhi::GraphicsContext::create(context_desc);
+    if (context_ == nullptr && !config_.headless && config_.allow_headless_fallback) {
+        ORE_WARN("no windowed Vulkan context (drivers without presentation support, or a broken "
+                 "window system integration); continuing with offscreen rendering - the window only "
+                 "provides input now");
+        rhi::ContextDesc offscreen_desc = context_desc;
+        offscreen_desc.headless = true;
+        offscreen_desc.surface = VK_NULL_HANDLE;
+        offscreen_desc.surface_factory = nullptr;
+        context_ = rhi::GraphicsContext::create(offscreen_desc);
+        config_.headless = true;
+    }
     if (context_ == nullptr) {
         ORE_ERROR("failed to create the Vulkan context");
         return 3;
     }
-
-    if (!config_.headless) {
-        surface_ = window_->create_surface(context_->instance().handle());
-        if (surface_ == VK_NULL_HANDLE) return 3;
-    }
+    surface_ = context_->surface();
 
     // ----------------------------------------------------------- renderer ---
     Renderer::Desc renderer_desc;
@@ -186,7 +200,7 @@ int Application::run(int argc, char** argv) {
         return 4;
     }
 
-    if (config_.headless && config_.frames == 0) {
+    if (config_.headless && config_.frames == 0 && window_ == nullptr) {
         config_.frames = 1;
         ORE_INFO("headless run without --frames: rendering a single frame");
     }

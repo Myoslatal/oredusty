@@ -40,6 +40,9 @@ struct AppConfig {
     bool offscreen_sampled = false;
     bool enable_hot_reload = ORE_ENABLE_HOT_RELOAD != 0;
     bool quit_on_escape = true;
+    /// When the windowed Vulkan context cannot be created (no presentation support, broken WSI),
+    /// keep the window for input but render offscreen instead of exiting.
+    bool allow_headless_fallback = true;
     u32 device_index = 0;
     bool dump_gpu_memory = false;
     /// Seconds between automatic log lines with frame statistics (0 disables them).

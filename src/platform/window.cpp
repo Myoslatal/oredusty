@@ -150,7 +150,11 @@ Scope<Window> Window::create(const WindowDesc& desc) {
     window->width_ = static_cast<u32>(std::max(framebuffer_width, 1));
     window->height_ = static_cast<u32>(std::max(framebuffer_height, 1));
 
-    if (desc.center) {
+    // Wayland compositors decide window placement themselves and GLFW errors out if asked.
+    const bool platform_supports_positioning = glfwGetPlatform() == GLFW_PLATFORM_X11 ||
+                                               glfwGetPlatform() == GLFW_PLATFORM_WIN32 ||
+                                               glfwGetPlatform() == GLFW_PLATFORM_COCOA;
+    if (desc.center && platform_supports_positioning) {
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         if (monitor != nullptr) {
             const GLFWvidmode* mode = glfwGetVideoMode(monitor);

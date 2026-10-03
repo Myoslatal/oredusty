@@ -73,8 +73,9 @@ Scope<GraphicsContext> GraphicsContext::create(const ContextDesc& desc) {
     Scope<GraphicsContext> context(new GraphicsContext());
     context->surface_ = desc.headless ? VK_NULL_HANDLE : desc.surface;
 
-    if (!desc.headless && desc.surface == VK_NULL_HANDLE) {
-        ORE_ERROR("GraphicsContext::create: a surface is required unless the context is headless");
+    if (!desc.headless && desc.surface == VK_NULL_HANDLE && !desc.surface_factory) {
+        ORE_ERROR("GraphicsContext::create: a surface or a surface_factory is required unless the "
+                  "context is headless");
         return nullptr;
     }
 
@@ -84,6 +85,17 @@ Scope<GraphicsContext> GraphicsContext::create(const ContextDesc& desc) {
     instance_desc.extensions = desc.instance_extensions;
     context->instance_ = Instance::create(instance_desc);
     if (context->instance_ == nullptr) return nullptr;
+
+    // The surface (when built by the platform layer) needs the instance, and the device choice
+    // needs the surface, so it is created here rather than by the caller.
+    if (!desc.headless && context->surface_ == VK_NULL_HANDLE) {
+        context->surface_ = desc.surface_factory(context->instance_->handle());
+        if (context->surface_ == VK_NULL_HANDLE) {
+            ORE_ERROR("GraphicsContext::create: the surface factory returned no surface");
+            return nullptr;
+        }
+        context->owns_surface_ = true;
+    }
 
     DeviceDesc device_desc;
     device_desc.surface = context->surface_;
@@ -113,6 +125,11 @@ GraphicsContext::~GraphicsContext() {
         immediate_.reset();
         allocator_.reset();
         device_.reset();
+    }
+    // Surfaces created through surface_factory belong to the context; the instance must outlive them.
+    if (owns_surface_ && surface_ != VK_NULL_HANDLE && instance_ != nullptr) {
+        vkDestroySurfaceKHR(instance_->handle(), surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
     }
     instance_.reset();
 }

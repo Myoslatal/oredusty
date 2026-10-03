@@ -195,8 +195,18 @@ World
 框架自身用三层验证，且都能在无显示器环境运行：
 
 1. **纯逻辑单测**（分配器、PNG、命令行、ECS、相机、输入映射）——不碰 GPU。
-2. **真实 GPU 端到端测试**（`test_gpu_render`）——离屏渲染后回读像素并与期望值比较：
-   清屏颜色、push constant 变色、缓冲/纹理上传往返、mip 链、目标尺寸变更、分配器统计。
-   没有 Vulkan 设备时整组自动 SKIP，不会把 CI 拖红。
+2. **真实 GPU 端到端测试**——两条独立路径：
+   - `test_gpu_render`：离屏渲染后回读像素并与期望值比较（清屏颜色、push constant 变色、
+     缓冲/纹理上传往返、mip 链、目标尺寸变更、分配器统计）。
+   - `test_gpu_swapchain`：用 `VK_EXT_headless_surface` 建一个**真实交换链**，
+     完整跑 acquire → 渲染 → submit → present、从呈现图像截图、以及 resize 后重建交换链。
+     这条路径覆盖了窗口模式下的同一份代码，却不需要窗口系统。
+   没有 Vulkan 设备时两组都自动 SKIP，不会把 CI 拖红。
 3. **参考截图**——三个示例在软件 Vulkan 上渲染真实 PNG（`docs/images/`），
    用于人工确认视觉结果没有回归。
+
+**已知的环境限制**：开发容器里没有 GPU，只有 Electron 打包的 SwiftShader。它的 Wayland WSI
+会在 `vkGetPhysicalDeviceSurfaceSupportKHR` 内部解引用空指针而崩溃（最小 C 探针即可复现，
+与框架无关），因此窗口 + 交换链的组合无法在该环境验证；交换链代码改由上面的
+`VK_EXT_headless_surface` 测试覆盖。`AppConfig::allow_headless_fallback` 会在窗口上下文
+创建失败时退化成离屏渲染并告警。

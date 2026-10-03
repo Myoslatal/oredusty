@@ -13,3 +13,6 @@ ore_add_test(test_camera test_camera.cpp)
 ore_add_test(test_gpu_smoke test_gpu_smoke.cpp)
 ore_add_test(test_gpu_render test_gpu_render.cpp)
 ore_add_shaders(test_gpu_render SHADERS shaders/solid.vert shaders/solid.frag)
+
+# Presentation path: a real swapchain through VK_EXT_headless_surface (skips when unavailable).
+ore_add_test(test_gpu_swapchain test_gpu_swapchain.cpp)

@@ -16,6 +16,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <string_view>
 #include <vector>
 
 namespace ore::rhi {
@@ -29,8 +30,14 @@ struct ContextDesc {
     bool enable_validation = ORE_ENABLE_VALIDATION != 0;
     /// Headless contexts do not require presentation support; they render offscreen only.
     bool headless = false;
-    /// Surface to present to (ignored when headless). Obtained from the window layer.
+    /// Surface to present to (ignored when headless). **The caller keeps ownership** and must
+    /// destroy it with vkDestroySurfaceKHR after the context is gone.
     VkSurfaceKHR surface = VK_NULL_HANDLE;
+    /// Alternative to \p surface: called with the freshly created instance so the platform layer can
+    /// create the surface (it needs a valid VkInstance). Required when \p headless is false and
+    /// \p surface is VK_NULL_HANDLE. A surface created here is **owned and destroyed** by the
+    /// context, because the caller never sees the instance it was created from.
+    std::function<VkSurfaceKHR(VkInstance)> surface_factory;
     std::vector<std::string> instance_extensions;
     std::vector<std::string> device_extensions;
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -92,6 +99,7 @@ private:
     Scope<GpuAllocator> allocator_;
     Scope<ImmediateCommands> immediate_;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+    bool owns_surface_ = false;   ///< true when surface_factory created it
     u64 upload_bytes_ = 0;
 };
 
