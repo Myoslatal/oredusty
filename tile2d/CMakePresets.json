@@ -1,0 +1,75 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "displayName": "Debug + Address/UB sanitizers",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "T2D_ENABLE_SANITIZERS": "ON",
+        "T2D_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "Debug + ThreadSanitizer (shared memory link / server threads)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "T2D_ENABLE_THREAD_SANITIZER": "ON",
+        "T2D_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "server-only",
+      "inherits": "base",
+      "displayName": "Dedicated server build without any graphics dependency",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "T2D_BUILD_GAME": "OFF",
+        "T2D_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "server-only", "configurePreset": "server-only" }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

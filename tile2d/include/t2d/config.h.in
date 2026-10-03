@@ -1,0 +1,26 @@
+// Tile2D - build configuration. Generated from include/t2d/config.h.in.
+#pragma once
+
+#define T2D_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define T2D_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define T2D_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define T2D_VERSION_STRING "@PROJECT_VERSION@"
+
+#cmakedefine01 T2D_WITH_RENDERER
+
+#if defined(NDEBUG)
+#define T2D_DEBUG_BUILD 0
+#else
+#define T2D_DEBUG_BUILD 1
+#endif
+
+#if defined(_WIN32)
+#define T2D_PLATFORM_WINDOWS 1
+#else
+#define T2D_PLATFORM_WINDOWS 0
+#endif
+#if defined(__linux__)
+#define T2D_PLATFORM_LINUX 1
+#else
+#define T2D_PLATFORM_LINUX 0
+#endif
