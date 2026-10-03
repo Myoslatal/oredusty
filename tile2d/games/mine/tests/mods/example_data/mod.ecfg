@@ -1,0 +1,6 @@
+# A data only mod package: content, no code. This is the shape most mods will have.
+id:"example_data"
+name:"Example (data only)"
+version:"1.0"
+description:"Registers placeholder structures, so the loader has data to load."
+content:["content/structures.ecfg"]

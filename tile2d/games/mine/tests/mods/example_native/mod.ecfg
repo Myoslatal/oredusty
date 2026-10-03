@@ -1,0 +1,14 @@
+# A native mod: it ships code, so it declares which mod API it was built against.
+id:"example_native"
+name:"Example (native)"
+version:"1.0"
+description:"Registers content generated from its own parameters: a mod's logic, not just its data."
+api:1
+requires:["example_data"]
+native:"libexample_native.so"
+
+# Everything under "data" is the mod's own business. The host parses it and hands it back through
+# mod_value()/mod_int(), so a mod can be parameterised without writing a parser.
+data::
+    tiers:3
+    label:"generated"

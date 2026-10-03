@@ -16,6 +16,14 @@ target_link_libraries(test_text PRIVATE t2d::text)
 t2d_add_test(test_cff test_cff.cpp)
 target_link_libraries(test_cff PRIVATE t2d::text)
 
+# The dynamic loader: a MODULE library built from tests/fixtures, loaded at run time.
+add_library(t2d_test_module MODULE fixtures/module_fixture.cpp)
+t2d_apply_settings(t2d_test_module)
+t2d_add_test(test_module test_module.cpp)
+target_compile_definitions(test_module PRIVATE T2D_TEST_MODULE_PATH="$<TARGET_FILE:t2d_test_module>")
+# The path is baked in at configure time, so the library has to exist before the test runs.
+add_dependencies(test_module t2d_test_module)
+
 # The transports: KCP reliability over a lossy link, framing, the session handshake, the map chunk
 # transfer and the shared memory rings. No game rides them yet - that is the point of the split.
 t2d_add_test(test_kcp test_kcp.cpp)

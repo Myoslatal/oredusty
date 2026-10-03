@@ -65,6 +65,10 @@ en::
     sandbox.no.content:"NO CONTENT FILE GIVEN: THE LAYER WILL STAY EMPTY"
     sandbox.layer:"TILE LAYER"
     sandbox.layer.filled:"LAYER FILLED"
+    sandbox.mods:"MODS"
+    sandbox.mods.none:"NONE (--mods)"
+    sandbox.mods.value:"{} MOD(S), {} NATIVE, {} CONTENT"
+    sandbox.mods.loaded:"   MODS: {} LOADED, {} NATIVE, {} CONTENT"
     sandbox.fill.unknown:"UNKNOWN FILL '{}' (none, bands, scatter)"
 
 zh-Hans::
@@ -126,6 +130,10 @@ zh-Hans::
     sandbox.no.content:"未给出内容文件：网格将保持为空"
     sandbox.layer:"瓦片层"
     sandbox.layer.filled:"本层已放置"
+    sandbox.mods:"模组"
+    sandbox.mods.none:"无（--mods）"
+    sandbox.mods.value:"{} 个模组，{} 个原生，{} 项内容"
+    sandbox.mods.loaded:"   模组：已加载 {}，原生 {}，内容 {}"
     sandbox.fill.unknown:"未知的填充方式 '{}'（none、bands、scatter）"
 
 zh-Hant::
@@ -187,4 +195,8 @@ zh-Hant::
     sandbox.no.content:"未給出內容檔案：網格將保持為空"
     sandbox.layer:"瓦片層"
     sandbox.layer.filled:"本層已放置"
+    sandbox.mods:"模組"
+    sandbox.mods.none:"無（--mods）"
+    sandbox.mods.value:"{} 個模組，{} 個原生，{} 項內容"
+    sandbox.mods.loaded:"   模組：已載入 {}，原生 {}，內容 {}"
     sandbox.fill.unknown:"未知的填充方式 '{}'（none、bands、scatter）"

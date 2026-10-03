@@ -14,6 +14,7 @@
 #pragma once
 
 #include <mine/menu.h>
+#include <mine/mod_package.h>
 #include <mine/registry.h>
 #include <mine/sandbox.h>
 #include <mine/session.h>
@@ -60,6 +61,9 @@ struct MineOptions {
     std::string fill;
     /// Which tile layers --fill writes into: "" (the active layer), "all", or a layer number.
     std::string fill_layer;
+    /// Directories of mod packages (repeated --mods). Their content joins the registry after the
+    /// game's own, and their native modules are loaded into this process.
+    std::vector<std::string> mod_directories;
     /// Write the layer as text to the log at shutdown (a scripted run has no keyboard for F4).
     bool dump_layer = false;
 };
@@ -124,6 +128,8 @@ private:
     ContentRegistry registry_{};
     /// The single layer the sandbox screen paints on, and the message the last action left behind.
     SandboxModel sandbox_{};
+    /// The mod packages that are loaded. Owns their libraries, so it outlives every call into them.
+    ModHost mods_{};
     std::string status_{};
     bool status_is_error_ = false;
 

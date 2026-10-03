@@ -2,6 +2,7 @@
 add_library(t2d_core STATIC
     core/ecfg.cpp
     core/log.cpp
+    core/module.cpp
     core/rng.cpp
     core/time.cpp
 )
@@ -11,7 +12,8 @@ target_include_directories(t2d_core
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"
         "${PROJECT_BINARY_DIR}/generated")
-target_link_libraries(t2d_core PUBLIC Threads::Threads)
+# ${CMAKE_DL_LIBS} is where dlopen lives on this platform (empty on glibc 2.34+ and on Windows).
+target_link_libraries(t2d_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_definitions(t2d_core PUBLIC T2D_SOURCE_DIR="${T2D_SOURCE_DIR}")
 
 # ------------------------------------------------------------------- t2d_sim --

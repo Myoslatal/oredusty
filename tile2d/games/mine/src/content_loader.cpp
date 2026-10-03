@@ -4,8 +4,9 @@
 
 namespace mine {
 
-ContentLoadReport register_content_from_ecfg(ContentRegistry& registry, const t2d::EcfgDocument& document) {
-    ContentLoadReport report;
+std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
+                                               std::vector<std::string>* unknown_tables) {
+    std::vector<ContentEntry> declared;
     for (const t2d::EcfgValue& table : document.root().children()) {
         ContentKind kind = ContentKind::Count;
         bool known = false;
@@ -18,7 +19,9 @@ ContentLoadReport register_content_from_ecfg(ContentRegistry& registry, const t2
             }
         }
         if (!known) {
-            report.unknown_tables.emplace_back(table.key());
+            // A table that is not named after a content kind is reported, never ignored: it is almost
+            // always a typo in the data file.
+            if (unknown_tables != nullptr) unknown_tables->emplace_back(table.key());
             continue;
         }
         if (!table.is_table()) {
@@ -26,12 +29,20 @@ ContentLoadReport register_content_from_ecfg(ContentRegistry& registry, const t2
             continue;
         }
         for (const t2d::EcfgValue& entry : table.children()) {
-            const ContentId before = registry.find(kind, entry.key());
-            const ContentId id = registry.register_content(kind, entry.key());
-            if (id == kNoContent) continue; // the registry already reported why
-            if (before == kNoContent) ++report.registered;
-            else ++report.already_present;
+            declared.push_back(ContentEntry{kind, kNoContent, std::string(entry.key())});
         }
+    }
+    return declared;
+}
+
+ContentLoadReport register_content_from_ecfg(ContentRegistry& registry, const t2d::EcfgDocument& document) {
+    ContentLoadReport report;
+    for (const ContentEntry& entry : content_declarations(document, &report.unknown_tables)) {
+        const ContentId before = registry.find(entry.kind, entry.name);
+        const ContentId id = registry.register_content(entry.kind, entry.name);
+        if (id == kNoContent) continue; // the registry already reported why
+        if (before == kNoContent) ++report.registered;
+        else ++report.already_present;
     }
     if (!report.unknown_tables.empty()) {
         T2D_WARN("content: {} table(s) are not content kinds (first: '{}')", report.unknown_tables.size(),

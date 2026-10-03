@@ -1,0 +1,8 @@
+# Placeholder content for the mod loader's own tests: these names are invented for that purpose and
+# are NOT game content. The real tables come from the designer (docs/GAME_DESIGN.md section 7).
+structure::
+    mod_wall::
+        note:"a data only mod's structure"
+    mod_floor::
+machine::
+    mod_pump::

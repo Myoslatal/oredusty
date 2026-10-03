@@ -158,6 +158,7 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"layer", "<n>", "which tile layer the sandbox starts on (default 0)"},
         {"fill", "<none|bands|scatter>", "sandbox debug fill: the palette laid out, never content"},
         {"fill-layer", "<n|all>", "which tile layers the fill writes into (default: the active one)"},
+        {"mods", "<dir>", "directory of mod packages to load; repeatable"},
         {"layout", "<path>", "sandbox layout file: loaded at startup, written by F2"},
         {"save-layout", "<path>", "write the sandbox layout once at shutdown (scripted runs)"},
         {"dump-layer", "<0|1>", "write the sandbox layer as text to the log at shutdown"},
@@ -480,7 +481,7 @@ t2d::Aabb2 MineApp::sandbox_status_area() const {
     const f32 padding = 8.0f * unit_;
     const f32 line = static_cast<f32>(body_px_) * 1.45f;
     // Four label rows, the message and two hint lines.
-    const f32 status_height = std::min(height * 0.45f, padding * 2.0f + line * 7.0f);
+    const f32 status_height = std::min(height * 0.5f, padding * 2.0f + line * 8.0f);
     return t2d::Aabb2{t2d::Vec2{0.0f, height - status_height}, t2d::Vec2{width, height}};
 }
 
@@ -520,7 +521,7 @@ void MineApp::open_sandbox() {
     }
     sandbox_.set_active_layer(options_.start_layer);
     sandbox_.set_content_paths(options_.content_paths);
-    if (options_.content_paths.empty()) {
+    if (options_.content_paths.empty() && options_.mod_directories.empty()) {
         sandbox_.rebuild_palette(registry_);
         set_status(locale_.text("sandbox.no.content"), true);
     } else {
@@ -573,6 +574,22 @@ void MineApp::reload_content() {
     if (!report.unknown_tables.empty()) {
         message += format_localized(locale_.text("sandbox.reload.unknown"), report.unknown_tables.size(),
                                     report.unknown_tables.front());
+    }
+
+    // Mods come after the game's own content, so a mod that redefines one of its names is reported
+    // instead of quietly taking the id over. load() unloads whatever was loaded before, which is what
+    // makes F5 a reload of the mods too.
+    const ModLoadReport& mods = mods_.load(options_.mod_directories, registry_);
+    // One rebind after the last source of names, so a single pass sees the whole registry.
+    sandbox_.rebind(registry_);
+    if (!mods.empty()) {
+        message += format_localized(locale_.text("sandbox.mods.loaded"), mods_.count(), mods.native_modules,
+                                    mods.content_registered);
+    }
+    if (!mods.clean()) {
+        const std::string first = mods.errors.empty() ? std::string("-") : mods.errors.front();
+        set_status(std::format("{}   {}", message, first), true);
+        return;
     }
     set_status(std::move(message));
 }
@@ -813,7 +830,7 @@ void MineApp::draw_sandbox_screen() {
 
     f32 label_width = 0.0f;
     for (const char* id : {"sandbox.cursor", "sandbox.cell", "sandbox.grid", "sandbox.filled", "sandbox.content",
-                           "sandbox.layout", "sandbox.layer", "sandbox.layer.filled"}) {
+                           "sandbox.layout", "sandbox.layer", "sandbox.layer.filled", "sandbox.mods"}) {
         label_width = std::max(label_width, text_->measure(locale_.text(id), fonts_, measure_style).width);
     }
     const f32 left = status.min.x + padding;
@@ -843,6 +860,11 @@ void MineApp::draw_sandbox_screen() {
     }
     const std::string layout_text =
         options_.layout_path.empty() ? std::string(locale_.text("sandbox.layout.none")) : options_.layout_path;
+    const std::string mods_text =
+        options_.mod_directories.empty()
+            ? std::string(locale_.text("sandbox.mods.none"))
+            : format_localized(locale_.text("sandbox.mods.value"), mods_.count(),
+                               mods_.report().native_modules, mods_.report().content_registered);
 
     // A long path or a long content name is clipped at the column boundary: wrapping it would land
     // on the line below and make the status bar unreadable exactly when something went wrong.
@@ -878,6 +900,11 @@ void MineApp::draw_sandbox_screen() {
               kPalette.text, left_width);
     draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.layout"), layout_text, kPalette.text_dim,
               kPalette.text, right_width);
+    y += line;
+    // Mods get a row of their own: they are a second source of content, and a designer needs to see at
+    // a glance whether the packages they are working on actually loaded.
+    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.mods"), mods_text, kPalette.text_dim,
+              mods_.report().clean() ? kPalette.text : kPalette.error, left_width);
     y += line + 4.0f;
     if (!status_.empty()) {
         draw_fitted(left, y, body_px_, status_is_error_ ? kPalette.error : kPalette.warning, status_, full_width);

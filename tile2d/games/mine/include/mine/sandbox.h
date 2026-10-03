@@ -206,6 +206,11 @@ public:
     /// The same, over texts already in memory (\p names are used in the error messages).
     SandboxReloadReport reload_texts(ContentRegistry& registry, const std::vector<std::string>& texts,
                                      const std::vector<std::string>& names);
+    /// Re-points every placed cell at its content by name and rebuilds the palette, without touching
+    /// the registry. A caller that fills the registry from more than one source (the game's own
+    /// content, then its mods) calls this once, after the last source, so a single pass sees the whole
+    /// picture.
+    SandboxReloadReport rebind(const ContentRegistry& registry);
     [[nodiscard]] const std::vector<std::string>& content_paths() const { return content_paths_; }
     void set_content_paths(std::vector<std::string> paths) { content_paths_ = std::move(paths); }
 

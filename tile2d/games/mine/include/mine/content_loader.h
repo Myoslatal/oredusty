@@ -33,6 +33,13 @@ struct ContentLoadReport {
     std::vector<std::string> unknown_tables;
 };
 
+/// Every piece of content \p document declares, in file order (ids are kNoContent: nothing is
+/// registered). register_content_from_ecfg() is this walk plus registration; a mod loader needs the
+/// list *before* it registers anything, so a name another mod already took can be reported instead of
+/// silently merged.
+[[nodiscard]] std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
+                                                             std::vector<std::string>* unknown_tables = nullptr);
+
 /// Registers every content name found in \p document. Tables that are not named after a content kind
 /// are listed in the report and skipped.
 [[nodiscard]] ContentLoadReport register_content_from_ecfg(ContentRegistry& registry,

@@ -392,8 +392,19 @@ SandboxReloadReport SandboxModel::reload_texts(ContentRegistry& registry,
         if (before.find_id(entry.kind, entry.name) == kNoContent) ++report.added;
     }
 
+    // The remap is the same pass a caller that filled the registry from several sources runs later;
+    // here it happens once, right after this file's content was registered.
+    const SandboxReloadReport remapped = rebind(registry);
+    report.remapped_cells = remapped.remapped_cells;
+    report.lost_cells = remapped.lost_cells;
+    report.palette_size = remapped.palette_size;
+    return report;
+}
+
+SandboxReloadReport SandboxModel::rebind(const ContentRegistry& registry) {
+    SandboxReloadReport report;
     // Re-point every placed cell at its content by name. This is the step that makes reloading safe:
-    // inserting an entry in the middle of a file shifts every id after it, and without this the layer
+    // inserting an entry in the middle of a file shifts every id after it, and without this the map
     // would quietly turn one structure into another.
     for (SandboxCell& value : cells_) {
         if (value.empty()) continue;
@@ -406,7 +417,6 @@ SandboxReloadReport SandboxModel::reload_texts(ContentRegistry& registry,
         if (current != value.id) ++report.remapped_cells;
         value.id = current;
     }
-
     report.palette_size = rebuild_palette(registry);
     return report;
 }

@@ -14,12 +14,12 @@ that direction. What is left is what the game actually uses, and it is all teste
 
 | Module | What it does | Tested by |
 |---|---|---|
-| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, byte streams with varints, the `.ecfg` reader, CLI | `test_ecfg` |
+| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, byte streams with varints, the `.ecfg` reader, the dynamic loader, CLI | `test_ecfg`, `test_module` |
 | `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring) and the tileset (what a tile id means for physics, where it lives in an atlas) | `test_tilemap` |
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, and the single layer sandbox | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_sandbox` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the sandbox, and the mod host (manifests, load order, the native ABI) | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_sandbox`, `test_mod_package` |
 
 ## Layout
 
@@ -47,6 +47,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
     tests/test_text                8 cases / 205 checks  UTF-8, language tables, the shipped interface strings
+    tests/test_module             5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases / 1265 checks framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
@@ -55,6 +56,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_sandbox        22 cases / 650 checks  the sandbox: grid, palette, reload by name, layouts
+    games/mine/tests/test_mod_package     9 cases / 102 checks  mod manifests, dependency order, collisions, a native module
 
 ## The tile map
 
@@ -179,6 +181,36 @@ written with.
 `test_content_loader` walks the whole path: config file -> registry -> the table a save stores ->
 loading it back with a registry whose ids have moved, resolving every reference by name.
 
+## Mod packages
+
+Content — definitions *and* logic — can live outside the game. A mod is a directory with a manifest:
+
+    mods/example_native/
+        mod.ecfg                 id, name, version, api, requires, content, native, data
+        libexample_native.so     a shared library exporting mine_mod_entry()
+
+    ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+        --content games/mine/tests/data/placeholder_content.ecfg --mods mods
+
+![Content from the game and from two mods](games/mine/docs/images/sandbox_mods_en.png)
+
+* **Data first.** A package's content files go into the same registry the game's own content does, so
+  ids, saves and the name → id table work the same. The game's content registers first, so its ids stay
+  stable and a mod can only append. A name two packages both declare is **reported, never merged**.
+* **Code second, and optional.** A native mod is a shared library that exports one symbol. It compiles
+  against `mine/mod_api.h` and **links nothing of the game** — nothing but plain data and function
+  pointers crosses the line, and the interface grows by appending fields behind a `struct_size` and a
+  version number. A module that was built against another ABI, is missing, or whose `on_load` says no is
+  reported and skipped while the game keeps running.
+* **What it is for.** In the screenshot above `mod_tier_1_drill`…`mod_tier_3_drill` are not written in any
+  data file: the native mod generated them from its own parameter (`data:: tiers:3`). Definitions *and*
+  logic, outside the binary.
+* **Order is a dependency graph.** `requires` is honoured (a missing or cyclic requirement is refused, not
+  guessed at), and the order is deterministic, so ids do not move between runs.
+
+Guide, ABI and limits: [docs/MODS.md](docs/MODS.md). Loading a library is not a sandbox: a native mod
+runs with the game's privileges.
+
 ## The game on top of the framework
 
 `games/mine` is a sandbox/industrial-automation game in progress: a top-down 2D mine of stacked
@@ -242,11 +274,11 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 13/13 tests green |
-| `release` | 13/13 tests green |
-| `asan` (Address + UB sanitizers) | 13/13 tests green |
-| `tsan` (ThreadSanitizer) | 13/13 tests green |
-| `no-renderer` | 7/7 tests green, no Vulkan, GLFW or game binary |
+| `debug` | 15/15 tests green |
+| `release` | 15/15 tests green |
+| `asan` (Address + UB sanitizers) | 15/15 tests green |
+| `tsan` (ThreadSanitizer) | 15/15 tests green |
+| `no-renderer` | 8/8 tests green, no Vulkan, GLFW or game binary |
 
 Hardware: **Intel Arc Pro 130T/140T (Arrow Lake-P), Mesa 26.2.3, Wayland**. The windowed path is
 verified by real screenshots, and the offscreen path is what the render test asserts on.
