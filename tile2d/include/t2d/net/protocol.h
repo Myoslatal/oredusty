@@ -6,11 +6,7 @@
 #pragma once
 
 #include <t2d/core/bitstream.h>
-#include <t2d/core/math2d.h>
 #include <t2d/core/types.h>
-#include <t2d/sim/command.h>
-#include <t2d/sim/snapshot.h>
-#include <t2d/sim/world.h>
 
 #include <string>
 #include <string_view>
@@ -19,25 +15,29 @@
 namespace t2d::net {
 
 inline constexpr u16 kProtocolVersion = 1;
+
+/// Identity of a player inside one session: the server assigns it during the handshake and never
+/// reuses it while the session lives. kInvalidId (core/types.h) means "no player".
+using PlayerId = u32;
 inline constexpr usize kMessageHeaderSize = 3;
 /// Map transfers are chunked so a big level never blocks the snapshot stream.
 inline constexpr usize kMapChunkSize = 8 * 1024;
 
+/// The vocabulary every link shares. It is deliberately about the *session*, not about a game: how a
+/// player moves, what a snapshot contains and what a command means belong to the game that rides the
+/// link, which is why there is no input or state message here.
 enum class MessageType : u8 {
     None = 0,
     Hello = 1,        ///< client -> server: protocol version + player name
-    Welcome = 2,      ///< server -> client: assigned id, tick rate, spawn, level size
+    Welcome = 2,      ///< server -> client: assigned id, tick rate and map geometry
     Reject = 3,       ///< server -> client: handshake refused
     PlayerJoined = 4, ///< server -> all
     PlayerLeft = 5,   ///< server -> all
-    Command = 6,      ///< client -> server: one tick of input (+ snapshot ack)
-    Snapshot = 7,     ///< server -> client: encoded full or delta snapshot
-    Ping = 8,
-    Pong = 9,
-    Disconnect = 10,
-    MapData = 11,     ///< server -> client: one chunk of the serialised tile map
-    ServerStats = 12, ///< server -> client: tick/time/load for the HUD
-    NeedFullSnapshot = 13, ///< client -> server: my baseline is stale, send a full one
+    Ping = 6,
+    Pong = 7,
+    Disconnect = 8,
+    MapData = 9,      ///< server -> client: one chunk of the serialised tile map
+    ServerStats = 10, ///< server -> client: tick/time/load for a HUD
 };
 
 [[nodiscard]] const char* message_type_name(MessageType type);
@@ -60,7 +60,8 @@ struct WelcomeMessage {
     PlayerId player_id = kInvalidId;
     u32 tick = 0;
     u16 tick_rate = 60;
-    Vec2 spawn{};
+    /// Map geometry, so the client can read the MapData chunks that follow. Where a player starts is
+    /// the game's business, not the handshake's.
     i32 map_width = 0;
     i32 map_height = 0;
     f32 tile_size = 16.0f;
@@ -87,17 +88,6 @@ struct PlayerJoinedMessage {
 struct PlayerLeftMessage {
     PlayerId player_id = kInvalidId;
     u8 reason = 0;
-};
-
-struct CommandMessage {
-    PlayerCommand command{};
-    /// Tick of the newest snapshot this client applied - the server uses it as the delta baseline.
-    u32 last_snapshot_tick = 0;
-};
-
-struct SnapshotMessage {
-    /// Already encoded (full or delta) - the protocol layer never re-encodes it.
-    ConstSpan<const u8> encoded{};
 };
 
 struct PingMessage {
@@ -145,9 +135,6 @@ struct ServerStatsMessage {
 
 [[nodiscard]] std::vector<u8> encode_player_left(const PlayerLeftMessage& message);
 [[nodiscard]] bool decode_player_left(ConstSpan<const u8> payload, PlayerLeftMessage& out);
-
-[[nodiscard]] std::vector<u8> encode_command(const CommandMessage& message);
-[[nodiscard]] bool decode_command(ConstSpan<const u8> payload, CommandMessage& out);
 
 [[nodiscard]] std::vector<u8> encode_ping(const PingMessage& message);
 [[nodiscard]] bool decode_ping(ConstSpan<const u8> payload, PingMessage& out);

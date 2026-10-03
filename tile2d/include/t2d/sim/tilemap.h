@@ -128,10 +128,6 @@ public:
                                                     char unknown = '?') const;   ///< base layer
     [[nodiscard]] std::vector<std::string> to_ascii(i32 layer, const std::unordered_map<TileId, char>& legend,
                                                     char unknown = '?') const;
-    /// The legend used by from_ascii()/to_ascii() for the built-in tileset
-    /// ('.' empty, '#' stone, '=' one-way, '^' spikes, 'o' coin, ':' background, 'H' ladder, '~' water, 'C' crate).
-    [[nodiscard]] static const std::unordered_map<char, TileId>& default_legend();
-    [[nodiscard]] static const std::unordered_map<TileId, char>& default_reverse_legend();
 
 private:
     struct Chunk {

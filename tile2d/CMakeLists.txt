@@ -9,16 +9,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(GNUInstallDirs)
 
 # ---------------------------------------------------------------- options -----
-option(T2D_BUILD_SERVER "Build the dedicated server binary (no graphics dependency)" ON)
-option(T2D_BUILD_GAME "Build the playable client binary (needs the Ore rendering framework)" ON)
-option(T2D_BUILD_BOT "Build the headless bot client used for integration tests" ON)
-option(T2D_BUILD_MINE "Build the mine sandbox game (needs the renderer)" ON)
+option(T2D_BUILD_MINE "Build the mine game (needs the Ore rendering framework)" ON)
 option(T2D_BUILD_TESTS "Build the unit and integration tests" ON)
 option(T2D_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(T2D_ENABLE_SANITIZERS "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(T2D_ENABLE_THREAD_SANITIZER "Build with ThreadSanitizer" OFF)
 set(T2D_ORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." CACHE PATH
-    "Ore checkout to build the renderer against (only needed when T2D_BUILD_GAME=ON)")
+    "Ore checkout to build the renderer against (only needed when T2D_BUILD_MINE=ON)")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
@@ -27,10 +24,10 @@ endif()
 
 find_package(Threads REQUIRED)
 
-# The rendering framework is only needed by the client. The server, the simulation, the networking
-# and every test build and run without it - that is the whole point of the split.
+# The rendering framework is only needed by the game. The tile map, the text engine, the networking
+# and the graphics-free tests build and run without it - that is the whole point of the split.
 set(T2D_WITH_RENDERER OFF)
-if(T2D_BUILD_GAME)
+if(T2D_BUILD_MINE)
     find_package(ore 0.1 QUIET)
     if(NOT ore_FOUND AND EXISTS "${T2D_ORE_DIR}/CMakeLists.txt")
         message(STATUS "Tile2D: Ore package not installed, building it from ${T2D_ORE_DIR}")
@@ -42,9 +39,9 @@ if(T2D_BUILD_GAME)
     elseif(ore_FOUND)
         set(T2D_WITH_RENDERER ON)
     else()
-        message(WARNING "Tile2D: Ore was not found; building without the playable client "
-                        "(set T2D_ORE_DIR or install ore, or configure with -DT2D_BUILD_GAME=OFF)")
-        set(T2D_BUILD_GAME OFF)
+        message(WARNING "Tile2D: Ore was not found; building without the renderer "
+                        "(set T2D_ORE_DIR or install ore, or configure with -DT2D_BUILD_MINE=OFF)")
+        set(T2D_BUILD_MINE OFF)
     endif()
 endif()
 
@@ -55,15 +52,6 @@ configure_file(include/t2d/config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/t2
 
 add_subdirectory(src)
 
-if(T2D_BUILD_SERVER)
-    add_subdirectory(apps/server)
-endif()
-if(T2D_BUILD_GAME AND T2D_WITH_RENDERER)
-    add_subdirectory(apps/game)
-endif()
-if(T2D_BUILD_BOT)
-    add_subdirectory(apps/bot)
-endif()
 if(T2D_BUILD_TESTS)
     enable_testing()
 endif()
@@ -78,9 +66,7 @@ endif()
 
 message(STATUS "")
 message(STATUS "Tile2D ${PROJECT_VERSION}  (${CMAKE_BUILD_TYPE})")
-message(STATUS "  server binary : ${T2D_BUILD_SERVER}")
-message(STATUS "  game binary   : ${T2D_BUILD_GAME} (renderer: ${T2D_WITH_RENDERER})")
-message(STATUS "  bot binary    : ${T2D_BUILD_BOT}")
+message(STATUS "  mine game     : ${T2D_BUILD_MINE} (renderer: ${T2D_WITH_RENDERER})")
 message(STATUS "  tests         : ${T2D_BUILD_TESTS}")
 message(STATUS "  sanitizers    : asan=${T2D_ENABLE_SANITIZERS} tsan=${T2D_ENABLE_THREAD_SANITIZER}")
 message(STATUS "")

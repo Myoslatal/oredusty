@@ -843,20 +843,4 @@ std::vector<std::string> TileMap::to_ascii(i32 layer, const std::unordered_map<T
     return rows;
 }
 
-const std::unordered_map<char, TileId>& TileMap::default_legend() {
-    static const std::unordered_map<char, TileId> legend = {
-        {'.', kEmptyTile}, {'#', 1}, {'2', 2}, {'3', 3}, {'=', 4}, {'^', 5}, {'o', 6},
-        {':', 7}, {'H', 8}, {'~', 9}, {'C', 10},
-    };
-    return legend;
-}
-
-const std::unordered_map<TileId, char>& TileMap::default_reverse_legend() {
-    static const std::unordered_map<TileId, char> legend = {
-        {kEmptyTile, '.'}, {1, '#'}, {2, '2'}, {3, '3'}, {4, '='}, {5, '^'}, {6, 'o'},
-        {7, ':'}, {8, 'H'}, {9, '~'}, {10, 'C'},
-    };
-    return legend;
-}
-
 } // namespace t2d

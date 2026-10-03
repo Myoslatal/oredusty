@@ -30,14 +30,11 @@ const char* message_type_name(MessageType type) {
         case MessageType::Reject: return "reject";
         case MessageType::PlayerJoined: return "player_joined";
         case MessageType::PlayerLeft: return "player_left";
-        case MessageType::Command: return "command";
-        case MessageType::Snapshot: return "snapshot";
         case MessageType::Ping: return "ping";
         case MessageType::Pong: return "pong";
         case MessageType::Disconnect: return "disconnect";
         case MessageType::MapData: return "map_data";
         case MessageType::ServerStats: return "server_stats";
-        case MessageType::NeedFullSnapshot: return "need_full_snapshot";
     }
     return "unknown";
 }
@@ -96,8 +93,6 @@ std::vector<u8> encode_welcome(const WelcomeMessage& message) {
     writer.write_varint(message.player_id);
     writer.write_varint(message.tick);
     writer.write_u16(message.tick_rate);
-    writer.write_fixed_16(message.spawn.x);
-    writer.write_fixed_16(message.spawn.y);
     writer.write_i32(message.map_width);
     writer.write_i32(message.map_height);
     writer.write_f32(message.tile_size);
@@ -110,8 +105,6 @@ bool decode_welcome(ConstSpan<const u8> payload, WelcomeMessage& out) {
     out.player_id = reader.read_varint();
     out.tick = reader.read_varint();
     out.tick_rate = reader.read_u16();
-    out.spawn.x = reader.read_fixed_16();
-    out.spawn.y = reader.read_fixed_16();
     out.map_width = reader.read_i32();
     out.map_height = reader.read_i32();
     out.tile_size = reader.read_f32();
@@ -165,25 +158,6 @@ bool decode_player_left(ConstSpan<const u8> payload, PlayerLeftMessage& out) {
     ByteReader reader(payload);
     out.player_id = reader.read_varint();
     out.reason = reader.read_u8();
-    return payload_ok(reader);
-}
-
-// ----------------------------------------------------------------- command ---
-
-std::vector<u8> encode_command(const CommandMessage& message) {
-    std::vector<u8> payload;
-    ByteWriter writer(payload);
-    writer.write_varint(message.command.tick);
-    writer.write_u8(message.command.buttons);
-    writer.write_varint(message.last_snapshot_tick);
-    return payload;
-}
-
-bool decode_command(ConstSpan<const u8> payload, CommandMessage& out) {
-    ByteReader reader(payload);
-    out.command.tick = reader.read_varint();
-    out.command.buttons = reader.read_u8();
-    out.last_snapshot_tick = reader.read_varint();
     return payload_ok(reader);
 }
 

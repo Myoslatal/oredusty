@@ -15,11 +15,11 @@ target_link_libraries(t2d_core PUBLIC Threads::Threads)
 target_compile_definitions(t2d_core PUBLIC T2D_SOURCE_DIR="${T2D_SOURCE_DIR}")
 
 # ------------------------------------------------------------------- t2d_sim --
+# The tile map and the tileset: storage, collision queries, serialisation, ASCII authoring. What a
+# tile means is the game's data; the framework only knows how to store and query it.
 add_library(t2d_sim STATIC
     sim/tilemap.cpp
     sim/tileset.cpp
-    sim/world.cpp
-    sim/snapshot.cpp
 )
 add_library(t2d::sim ALIAS t2d_sim)
 t2d_apply_settings(t2d_sim)
@@ -40,6 +40,8 @@ t2d_apply_settings(t2d_text)
 target_link_libraries(t2d_text PUBLIC t2d::core)
 
 # ------------------------------------------------------------------- t2d_net --
+# The semi-separated channel: shared memory rings for a local client, KCP over UDP for remote ones,
+# the framing and the session handshake every link shares. It carries bytes and sessions, not a game.
 add_library(t2d_net STATIC
     net/kcp.cpp
     net/socket.cpp
@@ -49,20 +51,7 @@ add_library(t2d_net STATIC
 )
 add_library(t2d::net ALIAS t2d_net)
 t2d_apply_settings(t2d_net)
-target_link_libraries(t2d_net PUBLIC t2d::core t2d::sim)
-
-# ---------------------------------------------------------------- t2d_engine --
-# Server host + local client. No rendering, no window: the dedicated server and the tests link
-# exactly this and nothing else.
-add_library(t2d_engine STATIC
-    server/server_host.cpp
-    client/local_client.cpp
-    client/predictor.cpp
-    client/snapshot_buffer.cpp
-)
-add_library(t2d::engine ALIAS t2d_engine)
-t2d_apply_settings(t2d_engine)
-target_link_libraries(t2d_engine PUBLIC t2d::core t2d::sim t2d::net)
+target_link_libraries(t2d_net PUBLIC t2d::core)
 
 # --------------------------------------------------------------- test_support --
 add_library(t2d_test_support STATIC ../tests/support/test_support.cpp)
@@ -72,8 +61,8 @@ target_include_directories(t2d_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(t2d_test_support PUBLIC t2d::core)
 
 # ----------------------------------------------------------------- t2d_render --
-# The 2D renderer and the playable client. Only built when the Ore framework is available: the
-# server, the simulation, the networking and every test build without it.
+# The 2D renderer. Only built when the Ore framework is available: the simulation, the networking and
+# every graphics-free test build without it.
 if(T2D_WITH_RENDERER)
     add_library(t2d_render STATIC
         render/atlas.cpp
@@ -81,9 +70,8 @@ if(T2D_WITH_RENDERER)
         render/sprite_batch.cpp
         render/text_renderer.cpp
         render/tilemap_renderer.cpp
-        render/game_app.cpp
     )
     add_library(t2d::render ALIAS t2d_render)
     t2d_apply_settings(t2d_render)
-    target_link_libraries(t2d_render PUBLIC t2d::engine t2d::text ore::ore)
+    target_link_libraries(t2d_render PUBLIC t2d::net t2d::text ore::ore)
 endif()

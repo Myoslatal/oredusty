@@ -42,12 +42,12 @@
       }
     },
     {
-      "name": "server-only",
+      "name": "no-renderer",
       "inherits": "base",
-      "displayName": "Dedicated server build without any graphics dependency",
+      "displayName": "Tile map, text, networking and tests without any graphics dependency",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "T2D_BUILD_GAME": "OFF",
+        "T2D_BUILD_MINE": "OFF",
         "T2D_BUILD_TESTS": "ON"
       }
     }
@@ -57,7 +57,7 @@
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
-    { "name": "server-only", "configurePreset": "server-only" }
+    { "name": "no-renderer", "configurePreset": "no-renderer" }
   ],
   "testPresets": [
     {

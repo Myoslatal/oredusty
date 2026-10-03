@@ -88,6 +88,40 @@ template <class Draw>
     return count;
 }
 
+/// A two by two atlas of flat colours, and the tileset that indexes it. The framework ships no art
+/// any more, so a render test brings its own: what is under test is the uv mapping, not the pixels.
+[[nodiscard]] ore::Image make_test_atlas() {
+    ore::Image image = ore::Image::create(8, 8, 0u);
+    image.fill_rect(0, 0, 4, 4, ore::make_rgba(200, 40, 40));    // cell (0,0) red
+    image.fill_rect(4, 0, 4, 4, ore::make_rgba(40, 200, 40));    // cell (1,0) green
+    image.fill_rect(0, 4, 4, 4, ore::make_rgba(40, 40, 200));    // cell (0,1) blue
+    image.fill_rect(4, 4, 4, 4, ore::make_rgba(200, 200, 40));   // cell (1,1) yellow
+    return image;
+}
+
+[[nodiscard]] const Tileset& test_tileset() {
+    static const Tileset tileset = [] {
+        Tileset built;
+        built.set_atlas_grid(2, 2);
+        built.add(TileDef{kEmptyTile, TileFlag::None, 0, 0});
+        built.add(TileDef{1, TileFlag::Solid, 1, 0});   // green
+        built.add(TileDef{2, TileFlag::Solid, 0, 1});   // blue
+        return built;
+    }();
+    return tileset;
+}
+
+[[nodiscard]] bool same_color(const ore::Color& a, const ore::Color& b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+/// Draws one full view quad with \p uv and returns the middle pixel.
+template <class Draw>
+[[nodiscard]] ore::Color render_uv(Fixture& fixture, SpriteBatch& batch, ore::rhi::Texture& atlas,
+                                   ore::rhi::Sampler& sampler, Draw&& draw) {
+    return render_and_read_center(fixture, batch, atlas, sampler, draw);
+}
+
 } // namespace
 
 T2D_TEST(an_opaque_quad_actually_reaches_the_framebuffer) {
@@ -138,26 +172,35 @@ T2D_TEST(a_coloured_atlas_cell_arrives_with_its_colour) {
     if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
     Scope<SpriteBatch> batch = make_batch(fixture);
     T2D_REQUIRE(batch != nullptr);
-    // Exactly what the game does: the tileset atlas is created with a mip chain.
-    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_tileset_atlas(), true, "test.tiles");
+    // Exactly what a game does: the tileset atlas is created with a mip chain.
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
     T2D_REQUIRE(tiles != nullptr);
     Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
     T2D_REQUIRE(sampler != nullptr);
 
-    // The dirt tile: a filled brown cell. Sampling it must return brown, not white and not the
-    // clear colour - a texture that arrives without its RGB would still show the right silhouette.
-    const TileDef dirt = Tileset::default_platformer().atlas_of(2);
-    const f32 cell = 1.0f / static_cast<f32>(kTileAtlasColumns);
-    const Aabb2 uv{Vec2{static_cast<f32>(dirt.atlas_x) * cell, static_cast<f32>(dirt.atlas_y) * cell},
-                   Vec2{static_cast<f32>(dirt.atlas_x + 1) * cell, static_cast<f32>(dirt.atlas_y + 1) * cell}};
-    const ore::Color center = render_and_read_center(
-        fixture, *batch, *tiles, *sampler, [uv](SpriteBatch& target) {
+    // tile_uv_rect() turns a tile id into the atlas cell its definition names, through the grid the
+    // tileset declared. Sampling that cell must return its colour, not white and not the clear colour.
+    const auto sample = [&](TileId id) {
+        const Aabb2 uv = tile_uv_rect(test_tileset(), id);
+        return render_and_read_center(fixture, *batch, *tiles, *sampler, [uv](SpriteBatch& target) {
             target.draw_quad(Aabb2{Vec2{0.0f, 0.0f}, Vec2{64.0f, 64.0f}}, uv, 0xFFFFFFFFu);
         });
-    T2D_CHECK_MSG(center.r > 60, "the red channel was {}", center.r);
-    T2D_CHECK_MSG(center.r > center.g && center.g > center.b, "the dirt tile was not brown: ({}, {}, {})",
-                  center.r, center.g, center.b);
-    T2D_CHECK_EQ(center.a, 255);
+    };
+    const ore::Color green = sample(1);
+    const ore::Color blue = sample(2);
+    T2D_CHECK_MSG(green.g > 150 && green.r < 90, "tile 1 came out ({}, {}, {})", green.r, green.g, green.b);
+    T2D_CHECK_MSG(blue.b > 150 && blue.r < 90, "tile 2 came out ({}, {}, {})", blue.r, blue.g, blue.b);
+    T2D_CHECK_FALSE(same_color(green, blue));
+    T2D_CHECK_EQ(green.a, 255);
+
+    // A tileset that never declared a grid is one cell: the whole atlas is that tile's cell.
+    Tileset single;
+    single.add(TileDef{1, TileFlag::Solid, 0, 0});
+    const Aabb2 whole = tile_uv_rect(single, 1);
+    T2D_CHECK_EQ(whole.min.x, 0.0f);
+    T2D_CHECK_EQ(whole.min.y, 0.0f);
+    T2D_CHECK_EQ(whole.max.x, 1.0f);
+    T2D_CHECK_EQ(whole.max.y, 1.0f);
 }
 
 T2D_TEST(font_glyphs_are_actually_visible) {
@@ -271,7 +314,7 @@ namespace {
     fixture.renderer->begin_pass(clear, 1.0f);
     batch.begin(frame, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, atlas, sampler.handle());
     TilemapRenderer renderer;
-    renderer.draw_map(batch, map, Tileset::default_platformer(), Aabb2{Vec2{0.0f, 0.0f}, Vec2{64.0f, 64.0f}}, mask);
+    renderer.draw_map(batch, map, test_tileset(), Aabb2{Vec2{0.0f, 0.0f}, Vec2{64.0f, 64.0f}}, mask);
     batch.end();
     fixture.renderer->end_pass();
     fixture.renderer->end_frame();
@@ -281,10 +324,6 @@ namespace {
     return ore::Color::from_packed(shot.pixel(pixel_x, pixel_y));
 }
 
-[[nodiscard]] bool same_color(const ore::Color& a, const ore::Color& b) {
-    return a.r == b.r && a.g == b.g && a.b == b.b;
-}
-
 } // namespace
 
 T2D_TEST(the_higher_map_layer_is_drawn_over_the_lower_one) {
@@ -292,27 +331,27 @@ T2D_TEST(the_higher_map_layer_is_drawn_over_the_lower_one) {
     if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
     Scope<SpriteBatch> batch = make_batch(fixture);
     T2D_REQUIRE(batch != nullptr);
-    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_tileset_atlas(), true, "test.tiles");
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
     T2D_REQUIRE(tiles != nullptr);
     Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
     T2D_REQUIRE(sampler != nullptr);
 
-    // The same cell on two map layers: stone on the ground layer, dirt on the structures layer. Cell
-    // (1,1) covers world 16..32, so its centre lands on pixel (24,24) of a 64x64 target.
+    // The same cell on two map layers: the green tile on the ground layer, the blue one on the
+    // structures layer. Cell (1,1) covers world 16..32, so its centre lands on pixel (24,24).
     TileMap both(4, 4, 16.0f, false, 2);
-    both.set(0, 1, 1, 1);
-    both.set(1, 1, 1, 2);
-    TileMap stone_only(4, 4, 16.0f, false, 1);
-    stone_only.set(0, 1, 1, 1);
-    TileMap dirt_only(4, 4, 16.0f, false, 1);
-    dirt_only.set(0, 1, 1, 2);
+    both.set(0, 1, 1, 1);   // green
+    both.set(1, 1, 1, 2);   // blue
+    TileMap lower_only(4, 4, 16.0f, false, 1);
+    lower_only.set(0, 1, 1, 1);
+    TileMap upper_only(4, 4, 16.0f, false, 1);
+    upper_only.set(0, 1, 1, 2);
 
-    const ore::Color stone =
-        render_map_pixel(fixture, *batch, stone_only, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
-    const ore::Color dirt =
-        render_map_pixel(fixture, *batch, dirt_only, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
+    const ore::Color lower_tile =
+        render_map_pixel(fixture, *batch, lower_only, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
+    const ore::Color upper_tile =
+        render_map_pixel(fixture, *batch, upper_only, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
     // Two different tiles, or nothing below proves anything.
-    T2D_CHECK_FALSE(same_color(stone, dirt));
+    T2D_CHECK_FALSE(same_color(lower_tile, upper_tile));
 
     const ore::Color layered =
         render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::kAllLayers, 24, 24);
@@ -322,10 +361,13 @@ T2D_TEST(the_higher_map_layer_is_drawn_over_the_lower_one) {
         render_map_pixel(fixture, *batch, both, *tiles, *sampler, TileMap::layer_mask(1), 24, 24);
 
     // Both layers drawn: the higher one covers the lower one. One layer at a time: exactly that tile.
-    T2D_CHECK_MSG(same_color(layered, dirt), "the layered cell was ({}, {}, {}), the top tile ({}, {}, {})",
-                  layered.r, layered.g, layered.b, dirt.r, dirt.g, dirt.b);
-    T2D_CHECK_MSG(same_color(lower, stone), "the ground layer cell was ({}, {}, {})", lower.r, lower.g, lower.b);
-    T2D_CHECK_MSG(same_color(upper, dirt), "the structure layer cell was ({}, {}, {})", upper.r, upper.g, upper.b);
+    T2D_CHECK_MSG(same_color(layered, upper_tile),
+                  "the layered cell was ({}, {}, {}), the top tile ({}, {}, {})", layered.r, layered.g,
+                  layered.b, upper_tile.r, upper_tile.g, upper_tile.b);
+    T2D_CHECK_MSG(same_color(lower, lower_tile), "the ground layer cell was ({}, {}, {})", lower.r, lower.g,
+                  lower.b);
+    T2D_CHECK_MSG(same_color(upper, upper_tile), "the structure layer cell was ({}, {}, {})", upper.r, upper.g,
+                  upper.b);
 
     // An empty cell stays clear, and a mask that names no layer of this map draws nothing at all.
     const ore::Color empty =

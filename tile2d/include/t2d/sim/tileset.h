@@ -51,6 +51,13 @@ struct TileDef {
 class Tileset {
 public:
     void add(const TileDef& definition);
+
+    /// The atlas grid this tileset indexes: TileDef::atlas_x/atlas_y are cell indices into it, and a
+    /// renderer turns them into uv with these. Defaults to a single cell, which is what a tileset that
+    /// never declares a grid honestly is; call this before drawing anything.
+    void set_atlas_grid(u32 columns, u32 rows);
+    [[nodiscard]] u32 atlas_columns() const { return atlas_columns_; }
+    [[nodiscard]] u32 atlas_rows() const { return atlas_rows_; }
     [[nodiscard]] const TileDef* find(TileId id) const;
     [[nodiscard]] usize count() const;
     [[nodiscard]] ConstSpan<TileDef> definitions() const;
@@ -64,13 +71,10 @@ public:
     /// Atlas cell of a tile (0,0 when unknown).
     [[nodiscard]] TileDef atlas_of(TileId id) const;
 
-    /// The built-in set used by the demo level and the tests. Ids are stable:
-    ///   0 empty, 1 stone, 2 dirt, 3 grass top, 4 one-way platform, 5 spikes, 6 coin,
-    ///   7 background brick, 8 ladder, 9 water, 10 crate
-    [[nodiscard]] static const Tileset& default_platformer();
-
 private:
     std::vector<TileDef> definitions_;
+    u32 atlas_columns_ = 1;
+    u32 atlas_rows_ = 1;
 };
 
 } // namespace t2d

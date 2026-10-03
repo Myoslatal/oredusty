@@ -1,5 +1,5 @@
 // Tile2D - tileset and tilemap tests: storage, queries, collision resolution, serialisation and
-// ASCII authoring. Everything runs against the built-in platformer tileset.
+// ASCII authoring. Everything runs against the tileset fixture below.
 #include <support/test_support.h>
 
 #include <t2d/core/rng.h>
@@ -15,7 +15,42 @@ using namespace t2d;
 
 namespace {
 
-const Tileset& platformer() { return Tileset::default_platformer(); }
+/// A tileset for the tests: the flags the collision code cares about, on ids that mean nothing.
+/// Game tilesets are the game's data - the framework ships none.
+[[nodiscard]] const Tileset& test_tileset() {
+    static const Tileset tileset = [] {
+        Tileset built;
+        built.set_atlas_grid(4, 1);
+        built.add(TileDef{kEmptyTile, TileFlag::None, 0, 0});
+        built.add(TileDef{1, TileFlag::Solid, 1, 0});
+        built.add(TileDef{2, TileFlag::Solid, 2, 0});
+        built.add(TileDef{3, TileFlag::Solid, 3, 0});
+        built.add(TileDef{4, TileFlag::OneWay, 4, 0});
+        built.add(TileDef{5, TileFlag::Hazard, 5, 0});
+        built.add(TileDef{6, TileFlag::Decor, 6, 0});
+        built.add(TileDef{7, TileFlag::Decor, 7, 0});
+        built.add(TileDef{8, TileFlag::Ladder, 8, 0});
+        built.add(TileDef{9, TileFlag::Water, 9, 0});
+        built.add(TileDef{10, TileFlag::Solid, 10, 0});
+        return built;
+    }();
+    return tileset;
+}
+
+/// The legend the ASCII tests author with: a character per tile id, the caller's choice.
+[[nodiscard]] const std::unordered_map<char, TileId>& ascii_legend() {
+    static const std::unordered_map<char, TileId> legend = {
+        {'.', kEmptyTile}, {'#', 1}, {'2', 2}, {'=', 4}, {'^', 5}, {'o', 6}, {':', 7},
+    };
+    return legend;
+}
+
+[[nodiscard]] const std::unordered_map<TileId, char>& ascii_reverse_legend() {
+    static const std::unordered_map<TileId, char> legend = {
+        {kEmptyTile, '.'}, {1, '#'}, {2, '2'}, {4, '='}, {5, '^'}, {6, 'o'}, {7, ':'},
+    };
+    return legend;
+}
 
 [[nodiscard]] Aabb2 box_at(Vec2 top_left, Vec2 size) { return Aabb2::from_top_left(top_left, size); }
 
@@ -134,8 +169,8 @@ void push_u32(std::vector<u8>& out, u32 value) {
 
 // -------------------------------------------------------------------------------------- tileset --
 
-T2D_TEST(tileset_default_platformer) {
-    const Tileset& set = platformer();
+T2D_TEST(tileset_flags_and_lookup) {
+    const Tileset& set = test_tileset();
     T2D_CHECK_EQ(set.count(), 11u);
     T2D_CHECK_EQ(set.definitions().size(), 11u);
     T2D_CHECK(set.find(kEmptyTile) != nullptr);
@@ -143,7 +178,6 @@ T2D_TEST(tileset_default_platformer) {
     T2D_CHECK(set.find(11) == nullptr);
     T2D_CHECK(set.find(60000) == nullptr);
 
-    // documented ids: 1 stone, 2 dirt, 3 grass top and 10 crate are solid
     T2D_CHECK(set.is_solid(1) && set.is_solid(2) && set.is_solid(3) && set.is_solid(10));
     T2D_CHECK_FALSE(set.is_solid(kEmptyTile) || set.is_solid(4) || set.is_solid(5) || set.is_solid(6));
     T2D_CHECK(set.is_one_way(4));
@@ -181,7 +215,17 @@ T2D_TEST(tileset_default_platformer) {
     T2D_CHECK_EQ(tile_flag_name(TileFlag::Solid), std::string_view{"solid"});
     T2D_CHECK_EQ(tile_flag_name(TileFlag::OneWay), std::string_view{"oneway"});
     T2D_CHECK_EQ(tile_flag_name(TileFlag::None), std::string_view{"none"});
-    T2D_CHECK(&Tileset::default_platformer() == &set);
+
+    // The atlas grid decides what an atlas cell index means; a tileset that never declares one is a
+    // single cell, which is what tile_uv_rect() then has to work with.
+    T2D_CHECK_EQ(set.atlas_columns(), 4u);
+    T2D_CHECK_EQ(set.atlas_rows(), 1u);
+    Tileset undeclared;
+    T2D_CHECK_EQ(undeclared.atlas_columns(), 1u);
+    T2D_CHECK_EQ(undeclared.atlas_rows(), 1u);
+    undeclared.set_atlas_grid(0, 0);   // a zero grid is refused, not stored
+    T2D_CHECK_EQ(undeclared.atlas_columns(), 1u);
+    T2D_CHECK_EQ(undeclared.atlas_rows(), 1u);
 }
 
 T2D_TEST(tileset_add_replaces_same_id) {
@@ -272,50 +316,50 @@ T2D_TEST(map_bounds_and_oob_queries) {
     T2D_CHECK_EQ(TileMap().at_clamped(0, 0), kEmptyTile);
 
     // out of bounds is solid by default, never one-way or hazardous
-    T2D_CHECK(map.is_solid(-1, 0, platformer()));
-    T2D_CHECK(map.is_solid(0, -1, platformer()));
-    T2D_CHECK(map.is_solid(8, 0, platformer()));
-    T2D_CHECK(map.is_solid(0, 4, platformer()));
-    T2D_CHECK_FALSE(map.is_one_way(-1, 0, platformer()));
-    T2D_CHECK_FALSE(map.is_hazard(0, -1, platformer()));
-    T2D_CHECK_FALSE(map.is_hazard(0, 0, platformer()));
+    T2D_CHECK(map.is_solid(-1, 0, test_tileset()));
+    T2D_CHECK(map.is_solid(0, -1, test_tileset()));
+    T2D_CHECK(map.is_solid(8, 0, test_tileset()));
+    T2D_CHECK(map.is_solid(0, 4, test_tileset()));
+    T2D_CHECK_FALSE(map.is_one_way(-1, 0, test_tileset()));
+    T2D_CHECK_FALSE(map.is_hazard(0, -1, test_tileset()));
+    T2D_CHECK_FALSE(map.is_hazard(0, 0, test_tileset()));
 
     // per cell queries follow the tileset flags
     map.set(3, 1, 1);   // stone
     map.set(4, 1, 4);   // one-way platform
     map.set(5, 1, 5);   // spikes
     map.set(6, 1, 7);   // background brick (decor)
-    T2D_CHECK(map.is_solid(3, 1, platformer()));
-    T2D_CHECK_FALSE(map.is_one_way(3, 1, platformer()));
-    T2D_CHECK(map.is_one_way(4, 1, platformer()));
-    T2D_CHECK_FALSE(map.is_solid(4, 1, platformer()));
-    T2D_CHECK(map.is_hazard(5, 1, platformer()));
-    T2D_CHECK_FALSE(map.is_hazard(4, 1, platformer()));
-    T2D_CHECK_FALSE(map.is_solid(6, 1, platformer()));
+    T2D_CHECK(map.is_solid(3, 1, test_tileset()));
+    T2D_CHECK_FALSE(map.is_one_way(3, 1, test_tileset()));
+    T2D_CHECK(map.is_one_way(4, 1, test_tileset()));
+    T2D_CHECK_FALSE(map.is_solid(4, 1, test_tileset()));
+    T2D_CHECK(map.is_hazard(5, 1, test_tileset()));
+    T2D_CHECK_FALSE(map.is_hazard(4, 1, test_tileset()));
+    T2D_CHECK_FALSE(map.is_solid(6, 1, test_tileset()));
 
     // box queries: a box that ends exactly on a tile edge does not overlap the next cell
-    T2D_CHECK(map.overlaps_solid(box_at({48.0f, 16.0f}, {16.0f, 16.0f}), platformer()));
-    T2D_CHECK(map.overlaps_solid(box_at({32.0f, 16.0f}, {16.1f, 16.0f}), platformer()));
-    T2D_CHECK_FALSE(map.overlaps_solid(box_at({32.0f, 16.0f}, {16.0f, 16.0f}), platformer()));
-    T2D_CHECK_FALSE(map.overlaps_solid(box_at({48.0f, 0.0f}, {16.0f, 16.0f}), platformer()));
-    T2D_CHECK_FALSE(map.overlaps_solid(box_at({64.0f, 16.0f}, {16.0f, 16.0f}), platformer()));
-    T2D_CHECK(map.overlaps_hazard(box_at({80.0f, 16.0f}, {16.0f, 16.0f}), platformer()));
-    T2D_CHECK_FALSE(map.overlaps_hazard(box_at({96.0f, 16.0f}, {16.0f, 16.0f}), platformer()));
-    T2D_CHECK_FALSE(map.overlaps_solid(box_at({48.0f, 32.0f}, {16.0f, 16.0f}), platformer()));
+    T2D_CHECK(map.overlaps_solid(box_at({48.0f, 16.0f}, {16.0f, 16.0f}), test_tileset()));
+    T2D_CHECK(map.overlaps_solid(box_at({32.0f, 16.0f}, {16.1f, 16.0f}), test_tileset()));
+    T2D_CHECK_FALSE(map.overlaps_solid(box_at({32.0f, 16.0f}, {16.0f, 16.0f}), test_tileset()));
+    T2D_CHECK_FALSE(map.overlaps_solid(box_at({48.0f, 0.0f}, {16.0f, 16.0f}), test_tileset()));
+    T2D_CHECK_FALSE(map.overlaps_solid(box_at({64.0f, 16.0f}, {16.0f, 16.0f}), test_tileset()));
+    T2D_CHECK(map.overlaps_hazard(box_at({80.0f, 16.0f}, {16.0f, 16.0f}), test_tileset()));
+    T2D_CHECK_FALSE(map.overlaps_hazard(box_at({96.0f, 16.0f}, {16.0f, 16.0f}), test_tileset()));
+    T2D_CHECK_FALSE(map.overlaps_solid(box_at({48.0f, 32.0f}, {16.0f, 16.0f}), test_tileset()));
 
     // boxes that leave the map are solid while the flag is set
-    T2D_CHECK(map.overlaps_solid(box_at({-1.0f, 0.0f}, {8.0f, 8.0f}), platformer()));
-    T2D_CHECK(map.overlaps_solid(box_at({0.0f, 60.0f}, {8.0f, 8.0f}), platformer()));
-    T2D_CHECK_FALSE(map.overlaps_solid(box_at({-1.0f, 0.0f}, {1.0f, 1.0f}), platformer()) == false &&
-                    map.overlaps_solid(box_at({-1.0f, 0.0f}, {1.0f, 1.0f}), platformer()));
+    T2D_CHECK(map.overlaps_solid(box_at({-1.0f, 0.0f}, {8.0f, 8.0f}), test_tileset()));
+    T2D_CHECK(map.overlaps_solid(box_at({0.0f, 60.0f}, {8.0f, 8.0f}), test_tileset()));
+    T2D_CHECK_FALSE(map.overlaps_solid(box_at({-1.0f, 0.0f}, {1.0f, 1.0f}), test_tileset()) == false &&
+                    map.overlaps_solid(box_at({-1.0f, 0.0f}, {1.0f, 1.0f}), test_tileset()));
 
     TileMap open(8, 4, 16.0f, false);
-    T2D_CHECK_FALSE(open.overlaps_solid(box_at({-1.0f, 0.0f}, {8.0f, 8.0f}), platformer()));
-    T2D_CHECK_FALSE(open.overlaps_solid(box_at({0.0f, 60.0f}, {8.0f, 8.0f}), platformer()));
-    T2D_CHECK_FALSE(open.is_solid(-1, 0, platformer()));
-    T2D_CHECK_FALSE(open.is_solid(0, 4, platformer()));
-    T2D_CHECK_FALSE(open.overlaps_hazard(box_at({-100.0f, -100.0f}, {8.0f, 8.0f}), platformer()));
-    T2D_CHECK_FALSE(open.is_on_ground(box_at({0.0f, -16.0f}, {8.0f, 8.0f}), platformer()));
+    T2D_CHECK_FALSE(open.overlaps_solid(box_at({-1.0f, 0.0f}, {8.0f, 8.0f}), test_tileset()));
+    T2D_CHECK_FALSE(open.overlaps_solid(box_at({0.0f, 60.0f}, {8.0f, 8.0f}), test_tileset()));
+    T2D_CHECK_FALSE(open.is_solid(-1, 0, test_tileset()));
+    T2D_CHECK_FALSE(open.is_solid(0, 4, test_tileset()));
+    T2D_CHECK_FALSE(open.overlaps_hazard(box_at({-100.0f, -100.0f}, {8.0f, 8.0f}), test_tileset()));
+    T2D_CHECK_FALSE(open.is_on_ground(box_at({0.0f, -16.0f}, {8.0f, 8.0f}), test_tileset()));
 }
 
 T2D_TEST(map_chunk_boundaries) {
@@ -458,30 +502,30 @@ T2D_TEST(map_on_ground_probe) {
     TileMap map(10, 10);
     map.fill_rect(TileRect{0, 5, 10, 1}, 1);   // floor, top edge at y = 80
     const Vec2 size{12.0f, 16.0f};
-    T2D_CHECK(map.is_on_ground(box_at({0.0f, 64.0f}, size), platformer()));
-    T2D_CHECK(map.is_on_ground(box_at({0.0f, 63.9f}, size), platformer()));
-    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 63.0f}, size), platformer()));
-    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 0.0f}, size), platformer()));
-    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 30.0f}, size), platformer()));
+    T2D_CHECK(map.is_on_ground(box_at({0.0f, 64.0f}, size), test_tileset()));
+    T2D_CHECK(map.is_on_ground(box_at({0.0f, 63.9f}, size), test_tileset()));
+    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 63.0f}, size), test_tileset()));
+    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 0.0f}, size), test_tileset()));
+    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 30.0f}, size), test_tileset()));
 
     // one-way tiles support an entity, hazards and decor do not
     map.fill_rect(TileRect{0, 7, 10, 1}, 4);
-    T2D_CHECK(map.is_on_ground(box_at({0.0f, 96.0f}, size), platformer()));
+    T2D_CHECK(map.is_on_ground(box_at({0.0f, 96.0f}, size), test_tileset()));
     map.fill_rect(TileRect{0, 8, 10, 1}, 5);
-    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 112.0f}, size), platformer()));
+    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 112.0f}, size), test_tileset()));
     map.fill_rect(TileRect{0, 8, 10, 1}, 7);
-    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 112.0f}, size), platformer()));
+    T2D_CHECK_FALSE(map.is_on_ground(box_at({0.0f, 112.0f}, size), test_tileset()));
 
     // only the columns under the box matter
     TileMap narrow(10, 10);
     narrow.set(3, 5, 1);
-    T2D_CHECK(narrow.is_on_ground(box_at({48.0f, 64.0f}, {8.0f, 16.0f}), platformer()));
-    T2D_CHECK_FALSE(narrow.is_on_ground(box_at({64.0f, 64.0f}, {8.0f, 16.0f}), platformer()));
+    T2D_CHECK(narrow.is_on_ground(box_at({48.0f, 64.0f}, {8.0f, 16.0f}), test_tileset()));
+    T2D_CHECK_FALSE(narrow.is_on_ground(box_at({64.0f, 64.0f}, {8.0f, 16.0f}), test_tileset()));
 
     // leaving the map through the bottom rests on the wall, but only when the flag is set
     const TileMap open(10, 10, 16.0f, false);
-    T2D_CHECK(map.is_on_ground(box_at({0.0f, 144.0f}, size), platformer()));
-    T2D_CHECK_FALSE(open.is_on_ground(box_at({0.0f, 144.0f}, size), platformer()));
+    T2D_CHECK(map.is_on_ground(box_at({0.0f, 144.0f}, size), test_tileset()));
+    T2D_CHECK_FALSE(open.is_on_ground(box_at({0.0f, 144.0f}, size), test_tileset()));
 }
 
 // --------------------------------------------------------------------------------------- layers --
@@ -535,7 +579,7 @@ T2D_TEST(layer_masks_decide_what_blocks) {
     TileMap map(8, 4, 16.0f, true, 2);
     map.fill(0, 7);          // background brick: decor, never solid
     map.set(1, 3, 2, 1);     // stone on the structure layer, cell (3, 2)
-    const Tileset& set = platformer();
+    const Tileset& set = test_tileset();
     T2D_CHECK(set.is_decor(7));
     T2D_CHECK(set.is_solid(1));
 
@@ -692,7 +736,7 @@ T2D_TEST(a_map_blob_it_cannot_trust_is_refused) {
 T2D_TEST(ascii_art_stamps_into_one_layer) {
     TileMap map(6, 3, 16.0f, true, 2);
     const std::vector<std::string> art{"##..", "....", "..=="};
-    map.stamp_ascii(1, art, TileMap::default_legend(), 1, 0);
+    map.stamp_ascii(1, art, ascii_legend(), 1, 0);
 
     constexpr TileId kStone = 1;
     constexpr TileId kPlatform = 4;
@@ -705,24 +749,24 @@ T2D_TEST(ascii_art_stamps_into_one_layer) {
     T2D_CHECK_EQ(map.count_tiles(0, kStone), 0u);   // nothing leaked into the base layer
 
     // The art comes back out of the layer it went into, and the other layer stays empty.
-    const std::vector<std::string> rows = map.to_ascii(1, TileMap::default_reverse_legend());
+    const std::vector<std::string> rows = map.to_ascii(1, ascii_reverse_legend());
     T2D_REQUIRE(rows.size() == 3u);
     T2D_CHECK_EQ(rows[0], std::string(".##..."));
     T2D_CHECK_EQ(rows[1], std::string("......"));
     T2D_CHECK_EQ(rows[2], std::string("...==."));
-    const std::vector<std::string> base = map.to_ascii(TileMap::default_reverse_legend());
+    const std::vector<std::string> base = map.to_ascii(ascii_reverse_legend());
     T2D_CHECK_EQ(base[0], std::string("......"));
 
     // A layer that does not exist, and an offset that falls outside the map: reported, not applied.
     const u32 before = static_cast<u32>(map.count_tiles(kStone) + map.count_tiles(kPlatform));
-    map.stamp_ascii(2, art, TileMap::default_legend());
-    map.stamp_ascii(1, art, TileMap::default_legend(), 100, 100);
-    map.stamp_ascii(-1, art, TileMap::default_legend());
+    map.stamp_ascii(2, art, ascii_legend());
+    map.stamp_ascii(1, art, ascii_legend(), 100, 100);
+    map.stamp_ascii(-1, art, ascii_legend());
     T2D_CHECK_EQ(static_cast<u32>(map.count_tiles(kStone) + map.count_tiles(kPlatform)), before);
-    T2D_CHECK(map.to_ascii(2, TileMap::default_reverse_legend()).empty());
+    T2D_CHECK(map.to_ascii(2, ascii_reverse_legend()).empty());
 
     // from_ascii() is the one layer case of the same thing.
-    const std::optional<TileMap> built = TileMap::from_ascii(art, TileMap::default_legend(), 16.0f);
+    const std::optional<TileMap> built = TileMap::from_ascii(art, ascii_legend(), 16.0f);
     T2D_REQUIRE(built.has_value());
     T2D_CHECK_EQ(built->layer_count(), 1);
     T2D_CHECK_EQ(built->at(0, 0), kStone);

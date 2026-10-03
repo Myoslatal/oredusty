@@ -136,7 +136,6 @@ T2D_TEST(every_message_payload_round_trips) {
         message.player_id = 7;
         message.tick = 12345;
         message.tick_rate = 240;
-        message.spawn = Vec2{12.5f, -3.25f};
         message.map_width = 64;
         message.map_height = 32;
         message.tile_size = 16.0f;
@@ -146,8 +145,6 @@ T2D_TEST(every_message_payload_round_trips) {
         T2D_CHECK_EQ(out.player_id, message.player_id);
         T2D_CHECK_EQ(out.tick, message.tick);
         T2D_CHECK_EQ(out.tick_rate, message.tick_rate);
-        T2D_CHECK_EQ(out.spawn.x, message.spawn.x);
-        T2D_CHECK_EQ(out.spawn.y, message.spawn.y);
         T2D_CHECK_EQ(out.map_width, message.map_width);
         T2D_CHECK_EQ(out.tile_size, message.tile_size);
         T2D_CHECK_EQ(out.client_token, message.client_token);
@@ -172,17 +169,6 @@ T2D_TEST(every_message_payload_round_trips) {
         T2D_REQUIRE(net::decode_player_left(net::encode_player_left(message), out));
         T2D_CHECK_EQ(out.player_id, message.player_id);
         T2D_CHECK_EQ(out.reason, message.reason);
-    }
-    {
-        net::CommandMessage message;
-        message.command.tick = 4242;
-        message.command.buttons = kButtonRight | kButtonJumpPressed;
-        message.last_snapshot_tick = 4240;
-        net::CommandMessage out;
-        T2D_REQUIRE(net::decode_command(net::encode_command(message), out));
-        T2D_CHECK_EQ(out.command.tick, message.command.tick);
-        T2D_CHECK_EQ(static_cast<u32>(out.command.buttons), static_cast<u32>(message.command.buttons));
-        T2D_CHECK_EQ(out.last_snapshot_tick, message.last_snapshot_tick);
     }
     {
         net::PingMessage message{5, 123456};
@@ -235,13 +221,13 @@ T2D_TEST(every_message_payload_round_trips) {
 
 T2D_TEST(framing_rejects_truncated_and_mismatched_frames) {
     const std::vector<u8> payload = bytes_of("payload");
-    const std::vector<u8> frame = net::encode_message(net::MessageType::Snapshot, payload);
+    const std::vector<u8> frame = net::encode_message(net::MessageType::MapData, payload);
     T2D_CHECK_EQ(frame.size(), net::kMessageHeaderSize + payload.size());
 
     net::MessageType type = net::MessageType::None;
     ConstSpan<const u8> decoded;
     T2D_REQUIRE(net::decode_message(ConstSpan<const u8>(frame.data(), frame.size()), type, decoded));
-    T2D_CHECK_EQ(static_cast<u32>(type), static_cast<u32>(net::MessageType::Snapshot));
+    T2D_CHECK_EQ(static_cast<u32>(type), static_cast<u32>(net::MessageType::MapData));
     T2D_CHECK_EQ(decoded.size(), payload.size());
     T2D_CHECK(std::memcmp(decoded.data(), payload.data(), payload.size()) == 0);
 
@@ -258,12 +244,12 @@ T2D_TEST(framing_rejects_truncated_and_mismatched_frames) {
 
 T2D_TEST(oversized_payloads_are_refused_instead_of_being_truncated) {
     std::vector<u8> oversized(net::kMaxMessageSize + 1u, 0x11u);
-    const std::vector<u8> frame = net::encode_message(net::MessageType::Snapshot,
+    const std::vector<u8> frame = net::encode_message(net::MessageType::MapData,
                                                       ConstSpan<const u8>(oversized.data(), oversized.size()));
     T2D_CHECK(frame.empty());
 
     std::vector<u8> accepted(net::kMaxMessageSize, 0x22u);
-    const std::vector<u8> ok = net::encode_message(net::MessageType::Snapshot,
+    const std::vector<u8> ok = net::encode_message(net::MessageType::MapData,
                                                    ConstSpan<const u8>(accepted.data(), accepted.size()));
     T2D_CHECK_EQ(ok.size(), net::kMessageHeaderSize + net::kMaxMessageSize);
 }
