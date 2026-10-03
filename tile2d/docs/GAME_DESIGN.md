@@ -99,6 +99,16 @@
   绝不猜测。
 * `[已实现]` `mine_core/registry.h`：`ContentRegistry`、`ContentTable`、`ContentRemap`；
   单测 `test_registry`（10 用例 / 127 断言，纯 CPU）。
+* `[已实现]` **内容数据用 `.ecfg` 文件**（格式见仓库根的 `example.ecfg`，读取器 `t2d/core/ecfg.h`）。
+  文件里以 kind 名（item / structure / …）开表，表内每个键就是一个内容名，键下面的字段由设计者
+  定义、引擎不解释：
+  ```
+  item::
+      <名称>::
+          <设计者的字段>
+  ```
+  `mine_core/content_loader.h` 负责把名字灌进注册表；非 kind 的表会被**报告**而不是忽略（防拼写
+  错误）。单测 `test_content_loader` 走通"配置文件 → 注册表 → 存档表 → 用变化后的注册表重新加载"。
 
 ## 7. 需要设计者提供的内容清单（本清单就是"内容接口"）
 
@@ -174,6 +184,8 @@
 * `[已实现]` `mine_app`：Ore 应用外壳 + 界面状态机（开始界面 ⇄ 会话界面）+ 绘制。
 * `[已实现]` `mine_game`：可执行程序（`--world`、`--seed`、`--host`、`--connect`、`--start`、
   `--headless`、`--frames`、`--screenshot`）。
+* `[已实现]` 配置读取器 `t2d/core/ecfg.h`（`.ecfg` 格式，严格报错带行列号）与内容加载器
+  `mine_core/content_loader.h`；单测 `test_ecfg`、`test_content_loader`。
 * M2：`MineWorld`（俯视移动/碰撞）+ 层数据加载/生成 + 世界渲染。
 * M3：需求与提交渠道、物流与加工（按设计者清单）。
 * M4：内容数据、存档、联机回归。
@@ -207,3 +219,4 @@
 |---|---|
 | M1 | 初版。仅记录设计者已确认的九条需求与工程约束；删除此前草稿中自行预设的资源、结构、配方、建筑、剧情与数值内容 |
 | M1.1 | 新增 §6：内容注册与存档 id 策略（注册按名字、存档存数字 id、每存档自带 name→id 表、缺失内容报告而非重映射）；里程碑与术语顺延 |
+| M1.2 | 新增 `.ecfg` 配置读取器（格式由仓库根 `example.ecfg` 定义）与内容加载器（配置文件 → 注册表）；§6 与 §9 相应更新 |

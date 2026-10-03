@@ -1,5 +1,6 @@
 # ------------------------------------------------------------------ t2d_core --
 add_library(t2d_core STATIC
+    core/ecfg.cpp
     core/log.cpp
     core/rng.cpp
     core/time.cpp

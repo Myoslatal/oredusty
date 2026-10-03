@@ -1,5 +1,7 @@
 # Unit and integration tests.
 t2d_add_test(test_tilemap test_tilemap.cpp)
+# The .ecfg configuration reader (format: example.ecfg in the repository root).
+t2d_add_test(test_ecfg test_ecfg.cpp)
 # Pure simulation and wire format: no threads, no sleeps, no wall clock.
 t2d_add_test(test_snapshot test_snapshot.cpp)
 t2d_add_test(test_kcp test_kcp.cpp)

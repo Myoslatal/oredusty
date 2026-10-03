@@ -140,6 +140,45 @@ What exists today (M1) is the shell, deliberately free of any game content:
   data, the server thread and the client will be created once content exists.
 * No resource, structure, recipe or machine is hard coded anywhere: those are the designer's data.
 
+## Configuration files (.ecfg)
+
+Game content and settings are written in `.ecfg` files. The format is defined by
+[example.ecfg](../example.ecfg) in the repository root and implemented by `t2d/core/ecfg.h`:
+
+    number1:0                 integers, floats, true/false
+    string1:"aaa"             strings are always quoted
+    table1::                  "::" opens a table; nesting is indentation
+        subtable::
+            num1:1
+        array1:[1,1,1]        "[...]" arrays may span lines
+    text1:<<                  "<< ... >>" is a raw text block, verbatim until a line with only ">>"
+    title
+
+    content
+
+    end
+    >>
+
+The reader rejects what it cannot fully trust, with a line and column: a line without `:`, a bare
+word where a value belongs (`aaa` is not a string - quote it), a duplicate key, an indentation that
+matches no level, an unclosed array, string or text block, an unknown escape, an integer that does not
+fit. `test_ecfg` covers the format (12 cases / 128 checks, and it parses the shipped
+`example.ecfg` byte for byte).
+
+### From a config file to a save
+
+`mine_core` fills the content registry from such a file: the tables are named after the content kinds
+and every key inside one is a piece of content. The fields under a name are the designer's to define;
+the engine only needs the names, because a save stores numbers plus the name -> id table it was
+written with.
+
+    item::
+        <name>::
+            <the designer's fields>
+
+`test_content_loader` walks the whole path: config file -> registry -> the table a save stores ->
+loading it back with a registry whose ids have moved, resolving every reference by name.
+
 ## Protocol
 
 Every message is `[u16 size][u8 type][payload]`. Types: `Hello`, `Welcome`, `Reject`, `Command`,

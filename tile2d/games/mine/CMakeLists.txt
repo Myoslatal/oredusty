@@ -5,6 +5,7 @@
 # a dedicated server later.
 
 add_library(mine_core STATIC
+    src/content_loader.cpp
     src/menu.cpp
     src/registry.cpp
 )

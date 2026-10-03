@@ -1,0 +1,20 @@
+number1:0
+
+string1:"aaa"
+
+bool1:true
+
+#注释
+
+table1::
+    subtable::
+        num1:1
+    array1:[1,1,1]
+
+text1:<<
+title
+
+content
+
+end
+>>
