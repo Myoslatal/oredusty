@@ -17,9 +17,12 @@ inline constexpr u32 kTileAtlasSize = 256;
 inline constexpr u32 kTileCellSize = 16;
 inline constexpr u32 kTileAtlasColumns = kTileAtlasSize / kTileCellSize;
 
-/// Atlas geometry of the 5x7 bitmap font: 16 x 6 cells of 8 x 8 pixels (ASCII 32..127).
+/// Atlas geometry of the 5x7 bitmap font: 16 columns of 8 x 8 pixel cells. ASCII 32..127 needs 96
+/// cells, i.e. six full rows; a seventh row holds a single solid white cell that draw_rect()
+/// samples for filled shapes (a full atlas would have no opaque texel to point at).
 inline constexpr u32 kFontAtlasColumns = 16;
-inline constexpr u32 kFontAtlasRows = 6;
+inline constexpr u32 kFontAtlasRows = 7;
+inline constexpr u32 kFontGlyphCells = kFontAtlasColumns * 6;
 inline constexpr u32 kFontCellSize = 8;
 inline constexpr u32 kFontGlyphWidth = 5;
 inline constexpr u32 kFontGlyphHeight = 7;

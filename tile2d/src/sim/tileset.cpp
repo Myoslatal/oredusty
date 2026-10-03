@@ -59,21 +59,23 @@ TileDef Tileset::atlas_of(TileId id) const {
 }
 
 const Tileset& Tileset::default_platformer() {
-    // Built once: the atlas layout (8 columns) is part of the built-in content, ids 1..10 are laid
-    // out in registration order and the empty tile is never drawn.
+    // Built once: the atlas layout is part of the built-in content. The atlas is 16 columns wide and
+    // the tiles live in row 0, so tile id N is drawn in cell (N, 0); row 1 holds the player sprites
+    // and the empty tile is never drawn. A mismatch here draws the wrong tile, and layer_of()
+    // recognises the background brick by its column.
     static const Tileset tileset = [] {
         Tileset built;
-        built.add(TileDef{kEmptyTile, TileFlag::None, 0, 0});     //  0 empty
-        built.add(TileDef{1, TileFlag::Solid, 0, 0});             //  1 stone
-        built.add(TileDef{2, TileFlag::Solid, 1, 0});             //  2 dirt
-        built.add(TileDef{3, TileFlag::Solid, 2, 0});             //  3 grass top
-        built.add(TileDef{4, TileFlag::OneWay, 3, 0});            //  4 one-way platform
-        built.add(TileDef{5, TileFlag::Hazard, 4, 0});            //  5 spikes
-        built.add(TileDef{6, TileFlag::Decor, 5, 0});             //  6 coin
-        built.add(TileDef{7, TileFlag::Decor, 6, 0});             //  7 background brick
-        built.add(TileDef{8, TileFlag::Ladder, 7, 0});            //  8 ladder
-        built.add(TileDef{9, TileFlag::Water, 0, 1});             //  9 water
-        built.add(TileDef{10, TileFlag::Solid, 1, 1});            // 10 crate
+        built.add(TileDef{kEmptyTile, TileFlag::None, 0, 0});     //  0 empty (never drawn)
+        built.add(TileDef{1, TileFlag::Solid, 1, 0});             //  1 stone
+        built.add(TileDef{2, TileFlag::Solid, 2, 0});             //  2 dirt
+        built.add(TileDef{3, TileFlag::Solid, 3, 0});             //  3 grass top
+        built.add(TileDef{4, TileFlag::OneWay, 4, 0});            //  4 one-way platform
+        built.add(TileDef{5, TileFlag::Hazard, 5, 0});            //  5 spikes
+        built.add(TileDef{6, TileFlag::Decor, 6, 0});             //  6 coin
+        built.add(TileDef{7, TileFlag::Decor, 7, 0});             //  7 background brick
+        built.add(TileDef{8, TileFlag::Ladder, 8, 0});            //  8 ladder
+        built.add(TileDef{9, TileFlag::Water, 9, 0});             //  9 water
+        built.add(TileDef{10, TileFlag::Solid, 10, 0});           // 10 crate
         return built;
     }();
     return tileset;

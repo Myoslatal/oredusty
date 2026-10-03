@@ -217,7 +217,7 @@ ore::Image make_tileset_atlas() {
 ore::Image make_font_atlas() {
     ore::Image atlas = ore::Image::create(kFontAtlasWidth, kFontAtlasHeight, 0x00000000u);
     const u32 white = ore::make_rgba(255, 255, 255, 255);
-    for (u32 code = 32; code < 32 + kFontAtlasColumns * kFontAtlasRows; ++code) {
+    for (u32 code = 32; code < 32 + kFontGlyphCells; ++code) {
         const Glyph* glyph = find_glyph(static_cast<char>(code));
         if (glyph == nullptr) continue;
         const u32 cell_x = (code - 32) % kFontAtlasColumns;
@@ -231,12 +231,19 @@ ore::Image make_font_atlas() {
             }
         }
     }
+
+    // The last cell is deliberately left out of the glyph grid and filled solid: the sprite batch
+    // points its draw_rect() uvs at it, so it must be opaque white.
+    const u32 white_cell = kFontAtlasColumns * kFontAtlasRows - 1;
+    const i32 white_x = static_cast<i32>((white_cell % kFontAtlasColumns) * kFontCellSize);
+    const i32 white_y = static_cast<i32>((white_cell / kFontAtlasColumns) * kFontCellSize);
+    atlas.fill_rect(white_x, white_y, static_cast<i32>(kFontCellSize), static_cast<i32>(kFontCellSize), white);
     return atlas;
 }
 
 bool font_glyph_rect(char character, u32& out_x, u32& out_y) {
     const u32 code = static_cast<u32>(static_cast<u8>(character));
-    if (code < 32 || code >= 32 + kFontAtlasColumns * kFontAtlasRows) return false;
+    if (code < 32 || code >= 32 + kFontGlyphCells) return false;
     out_x = ((code - 32) % kFontAtlasColumns) * kFontCellSize;
     out_y = ((code - 32) / kFontAtlasColumns) * kFontCellSize;
     return true;

@@ -27,6 +27,11 @@ struct ServerConfig {
     /// UDP port to listen on. 0 disables networking entirely (pure single player).
     u16 port = 0;
     u32 max_players = 8;
+    /// How many simulation ticks are executed per real second. The *simulation* is always identical
+    /// per tick (a tick integrates kTickSeconds of movement), so this only changes how fast wall
+    /// clock time is consumed - tests raise it to finish in a fraction of the time, a netcode
+    /// experiment lowers it. Clients follow the rate the server announces in the welcome message.
+    u32 tick_rate = kTickRate;
     /// Snapshot every N ticks (2 => 30 Hz with a 60 Hz simulation).
     u32 snapshot_interval_ticks = 2;
     /// A full snapshot is sent this often even when deltas would do (recovery from packet loss).

@@ -224,15 +224,26 @@ RenderFrame& Renderer::begin_frame(f32 delta_seconds) {
 void Renderer::begin_pass(const VkClearValue& color_clear, f32 depth_clear, u32 stencil_clear) {
     ORE_ASSERT(current_target_ != nullptr);
     current_target_->begin(*frame_.cmd, color_clear, depth_clear, stencil_clear);
+    // Viewport and scissor are dynamic state: leaving them unset makes every draw disappear, which
+    // is a silent failure that costs hours. A pass starts covering its whole target; a caller that
+    // wants a different rectangle sets it again after this call.
+    set_default_viewport(*current_target_);
 }
 
 void Renderer::begin_pass_load() {
     ORE_ASSERT(current_target_ != nullptr);
     current_target_->begin_load(*frame_.cmd);
+    set_default_viewport(*current_target_);
 }
 
 void Renderer::begin_pass(rhi::RenderTarget& target, const VkClearValue& color_clear, f32 depth_clear) {
     target.begin(*frame_.cmd, color_clear, depth_clear);
+    set_default_viewport(target);
+}
+
+void Renderer::set_default_viewport(const rhi::RenderTarget& target) {
+    frame_.cmd->set_viewport(static_cast<f32>(target.width()), static_cast<f32>(target.height()));
+    frame_.cmd->set_scissor_full(static_cast<f32>(target.width()), static_cast<f32>(target.height()));
 }
 
 void Renderer::begin_pass_load(rhi::RenderTarget& target) { target.begin_load(*frame_.cmd); }

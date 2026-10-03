@@ -7,6 +7,7 @@
 
 #include <ore/math/math.h>
 #include <ore/renderer/renderer.h>
+#include <ore/renderer/upload_ring.h>
 #include <ore/rhi/buffer.h>
 #include <ore/rhi/descriptor.h>
 #include <ore/rhi/pipeline.h>
@@ -17,8 +18,18 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace t2d {
+
+/// Orthographic view-projection for the top-left origin 2D world the game uses: world (x, y) with
+/// the camera centered on p center and p size world units across the screen.
+///
+/// The world lives at z = 0, so the depth range must contain zero: with the default camera looking
+/// down -Z along near = 0.1 .. far = 100 every quad would sit behind the near plane, Vulkan would
+/// clip the entire frame away and the renderer would report draw calls while the screen stayed
+/// empty. Exposed as a free function so the mapping can be tested without a GPU.
+[[nodiscard]] ore::Mat4 sprite_view_projection(const Vec2& center, const Vec2& size);
 
 /// Vertex layout of the batch: world position, atlas uv, RGBA8 tint. 20 bytes, packed.
 struct SpriteVertex {
@@ -65,7 +76,9 @@ public:
     void draw_rect_outline(const Aabb2& rect, f32 thickness, u32 color);
     void draw_text(f32 x, f32 y, f32 scale, u32 color, std::string_view text);
 
-    /// Uploads nothing (the ring is already host visible) and issues one draw call.
+    /// Copies the staged vertices into the frame ring and issues one draw call. Only the quads
+    /// that were actually drawn are uploaded, so a light frame does not reserve a heavy one's worth
+    /// of the ring.
     void end();
 
     [[nodiscard]] u32 quads() const { return quad_count_; }
@@ -84,11 +97,19 @@ private:
     Scope<ore::rhi::PipelineLayout> pipeline_layout_;
     Scope<ore::rhi::GraphicsPipeline> pipeline_;
     Scope<ore::rhi::DescriptorPool> descriptor_pool_;
-    ore::rhi::DescriptorSet descriptor_set_;
+    /// One descriptor set per batch begun, handed out round robin. A frame records several batches
+    /// (tiles, then text) and descriptor writes take effect immediately, so a single shared set
+    /// would make every draw of the frame sample the texture written last - the tiles would come out
+    /// wearing the font atlas.
+    std::vector<ore::rhi::DescriptorSet> descriptor_sets_;
+    usize next_descriptor_set_ = 0;
 
-    SpriteVertex* vertices_ = nullptr;   ///< mapped slice of the frame ring
-    u64 vertex_offset_ = 0;              ///< byte offset of the slice inside the ring buffer
-    ore::rhi::Buffer* vertex_buffer_ = nullptr;
+    /// Quads are staged in this CPU buffer and copied into the frame ring by end() with their exact
+    /// size. Writing straight into a worst case slice of the ring wastes most of it (two batches per
+    /// frame would ask for twice the ring segment and the second one would draw nothing).
+    SpriteVertex* vertices_ = nullptr;
+    ore::UploadRing* ring_ = nullptr;
+    std::vector<SpriteVertex> staging_;
     u32 max_quads_ = 0;
     u32 quad_count_ = 0;
     u32 dropped_quads_ = 0;

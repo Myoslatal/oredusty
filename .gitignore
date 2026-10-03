@@ -37,6 +37,7 @@ imgui.ini
 *.png
 !assets/**/*.png
 !docs/**/*.png
+!**/docs/**/*.png
 
 # Scratch space used while developing
 .recon/

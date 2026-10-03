@@ -74,7 +74,9 @@ struct SharedLink::Impl {
     bool server_endpoint = false;
     u32 outbound_channel = 0; ///< channel this endpoint writes to
     u32 inbound_channel = 1;
-    LinkState state = LinkState::Connected;
+    /// Atomic because close() is called by the owner (the app shutting the server down) while the
+    /// server thread may be polling wait_for_data() on the very same endpoint.
+    std::atomic<LinkState> state{LinkState::Connected};
     LinkStats stats{};
     bool futex_wait = true;
 
@@ -93,10 +95,10 @@ struct SharedLink::Impl {
 
 SharedLink::~SharedLink() = default;
 
-LinkState SharedLink::state() const { return impl_->state; }
+LinkState SharedLink::state() const { return impl_->state.load(std::memory_order_acquire); }
 
 bool SharedLink::send(ConstSpan<const u8> message) {
-    if (impl_->state == LinkState::Closed) {
+    if (impl_->state.load(std::memory_order_acquire) == LinkState::Closed) {
         ++impl_->stats.messages_dropped;
         return false;
     }
@@ -167,7 +169,7 @@ usize SharedLink::receive(Span<u8> destination) {
 
 void SharedLink::update(u64 now_ms) {
     (void)now_ms; // nothing to pump: the channel has no timers of its own
-    if (impl_->state == LinkState::Closed) return;
+    if (impl_->state.load(std::memory_order_acquire) == LinkState::Closed) return;
     // Publish a fresh view of the inbound queue so the peer sees backpressure.
     impl_->published_in().queue.store(static_cast<u32>(impl_->queued(impl_->inbound_channel)),
                                       std::memory_order_relaxed);
@@ -181,7 +183,7 @@ const LinkStats& SharedLink::stats() const {
 }
 
 void SharedLink::close() {
-    impl_->state = LinkState::Closed;
+    impl_->state.store(LinkState::Closed, std::memory_order_release);
     if (impl_->futex_wait) {
         impl_->outbound().write_seq.notify_all();
     }
@@ -193,7 +195,7 @@ bool SharedLink::wait_for_data(u32 timeout_ms) {
     for (;;) {
         const u64 write = channel.write_seq.load(std::memory_order_acquire);
         if (channel.read_seq.load(std::memory_order_acquire) < write) return true;
-        if (impl_->state == LinkState::Closed) return false;
+        if (impl_->state.load(std::memory_order_acquire) == LinkState::Closed) return false;
         const u64 current = now_ms();
         if (current >= deadline) return false;
         const u64 remaining = deadline - current;
@@ -296,7 +298,7 @@ SharedLinkPair create_shared_link_pair(const SharedLinkOptions& options) {
         link->impl_->outbound_channel = server_endpoint ? 0u : 1u;
         link->impl_->inbound_channel = server_endpoint ? 1u : 0u;
         link->impl_->futex_wait = options.use_futex_wait;
-        link->impl_->state = LinkState::Connected;
+        link->impl_->state.store(LinkState::Connected, std::memory_order_relaxed);
         return link;
     };
 

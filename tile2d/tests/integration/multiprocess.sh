@@ -15,7 +15,7 @@ cleanup() { kill "$server_pid" 2>/dev/null || true; rm -rf "$log_dir"; }
 trap cleanup EXIT
 
 echo "==> dedicated server on udp:$port"
-"$server" --port "$port" --max-players 4 --snapshot-rate 2 --quiet >"$log_dir/server.log" 2>&1 &
+"$server" --port "$port" --max-players 4 --snapshot-rate 2 --tick-rate 240 --quiet >"$log_dir/server.log" 2>&1 &
 server_pid=$!
 sleep 0.5
 kill -0 "$server_pid" 2>/dev/null || { echo "server exited early"; cat "$log_dir/server.log"; exit 1; }

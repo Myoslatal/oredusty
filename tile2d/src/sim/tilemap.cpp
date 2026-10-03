@@ -701,13 +701,31 @@ std::optional<TileMap> TileMap::from_ascii(ConstSpan<const std::string> rows,
     if (!std::isfinite(tile_size) || tile_size <= 0.0f) return std::nullopt;
     if (width > kMaxDimension || rows.size() > kMaxDimension) return std::nullopt;
     TileMap map(static_cast<i32>(width), static_cast<i32>(rows.size()), tile_size);
+    u32 unknown_count = 0;
+    std::string unknown_characters;
     for (usize y = 0; y < rows.size(); ++y) {
         const std::string& row = rows[y];
         for (usize x = 0; x < width; ++x) {
             const auto found = legend.find(row[x]);
-            if (found == legend.end()) continue;               // unknown characters stay empty
+            if (found == legend.end()) {
+                // Unknown characters stay empty, but silently dropping them once cost the demo level
+                // its entire ground: report them, with the first position where one appears.
+                ++unknown_count;
+                if (unknown_characters.size() < 8 && unknown_characters.find(row[x]) == std::string::npos) {
+                    unknown_characters.push_back(row[x]);
+                }
+                if (unknown_count == 1) {
+                    T2D_WARN("level: unknown tile character '{}' at ({}, {}) is left empty", row[x],
+                             static_cast<i32>(x), static_cast<i32>(y));
+                }
+                continue;
+            }
             map.set(static_cast<i32>(x), static_cast<i32>(y), found->second);
         }
+    }
+    if (unknown_count > 0) {
+        T2D_WARN("level: {} cell(s) used unknown character(s) '{}' and were left empty", unknown_count,
+                 unknown_characters);
     }
     return map;
 }
@@ -731,7 +749,7 @@ std::vector<std::string> TileMap::to_ascii(const std::unordered_map<TileId, char
 
 const std::unordered_map<char, TileId>& TileMap::default_legend() {
     static const std::unordered_map<char, TileId> legend = {
-        {'.', kEmptyTile}, {'#', 1}, {'=', 4}, {'^', 5}, {'o', 6},
+        {'.', kEmptyTile}, {'#', 1}, {'2', 2}, {'3', 3}, {'=', 4}, {'^', 5}, {'o', 6},
         {':', 7}, {'H', 8}, {'~', 9}, {'C', 10},
     };
     return legend;
@@ -739,7 +757,7 @@ const std::unordered_map<char, TileId>& TileMap::default_legend() {
 
 const std::unordered_map<TileId, char>& TileMap::default_reverse_legend() {
     static const std::unordered_map<TileId, char> legend = {
-        {kEmptyTile, '.'}, {1, '#'}, {4, '='}, {5, '^'}, {6, 'o'},
+        {kEmptyTile, '.'}, {1, '#'}, {2, '2'}, {3, '3'}, {4, '='}, {5, '^'}, {6, 'o'},
         {7, ':'}, {8, 'H'}, {9, '~'}, {10, 'C'},
     };
     return legend;

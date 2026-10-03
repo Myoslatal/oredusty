@@ -79,6 +79,7 @@ public:
     T2D_NON_MOVABLE(UdpTransport);
 
     /// Receives everything that arrived, dispatches by peer, then pumps every link's KCP timers.
+    /// Re-entrant calls (a link's update pumping its own transport) return immediately.
     void update(u64 now_ms);
     /// Creates a link to \p peer (client side). \p conv of 0 picks the next free one.
     UdpLink* connect(const Endpoint& peer, u32 conv = 0);
@@ -115,6 +116,8 @@ private:
     std::vector<Scope<UdpLink>> links_;
     Stats stats_{};
     u32 next_conv_ = 0x1000;
+    /// Guards update(): links pump their transport, and the transport updates its links.
+    bool pumping_ = false;
     std::vector<u8> receive_buffer_;
 };
 

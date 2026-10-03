@@ -59,7 +59,7 @@ public:
 
 private:
     void push(const void* data, usize count) {
-        if (overflow_) return;
+        if (overflow_ || count == 0) return;
         if (external_ != nullptr) {
             if (cursor_ + count > capacity_) {
                 overflow_ = true;
@@ -69,8 +69,11 @@ private:
             cursor_ += count;
             return;
         }
-        const auto* bytes = static_cast<const u8*>(data);
-        buffer_->insert(buffer_->end(), bytes, bytes + count);
+        // resize + memcpy rather than insert(): GCC 16 at -O3 folds the inlined range insert into a
+        // bogus -Wstringop-overflow warning, and this form is neither slower nor harder to read.
+        const usize offset = buffer_->size();
+        buffer_->resize(offset + count);
+        std::memcpy(buffer_->data() + offset, data, count);
     }
 
     template <class T>

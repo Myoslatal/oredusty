@@ -14,9 +14,19 @@ constexpr usize kVertexStride = sizeof(SpriteVertex);
 
 } // namespace
 
+ore::Mat4 sprite_view_projection(const Vec2& center, const Vec2& size) {
+    const f32 half_width = size.x * 0.5f;
+    const f32 half_height = size.y * 0.5f;
+    // World +Y points down and the framebuffer's top edge is -1 in clip space, so the camera's
+    // "top" is its smaller y. near = -1 / far = 1 maps world depth 0 to the middle of [0, 1].
+    return ore::orthographic(center.x - half_width, center.x + half_width, center.y + half_height,
+                             center.y - half_height, -1.0f, 1.0f);
+}
+
 Scope<SpriteBatch> SpriteBatch::create(ore::rhi::GraphicsContext& context, const Options& options) {
     Scope<SpriteBatch> batch(new SpriteBatch());
     batch->max_quads_ = options.max_quads == 0 ? 1024u : options.max_quads;
+    batch->staging_.resize(static_cast<usize>(batch->max_quads_) * 4u);
 
     batch->vertex_shader_ = ore::rhi::ShaderModule::load(context.device(), options.vertex_shader_path);
     batch->fragment_shader_ = ore::rhi::ShaderModule::load(context.device(), options.fragment_shader_path);
@@ -73,7 +83,9 @@ Scope<SpriteBatch> SpriteBatch::create(ore::rhi::GraphicsContext& context, const
     pipeline_desc.depth_write = false;
     pipeline_desc.blend = ore::rhi::BlendMode::Alpha;
     pipeline_desc.color_formats = {options.color_format};
-    pipeline_desc.depth_format = VK_FORMAT_UNDEFINED;
+    // Must match the render pass: VK_FORMAT_UNDEFINED for a pure 2D target, the depth format when
+    // the application asked for one.
+    pipeline_desc.depth_format = options.depth_format;
     pipeline_desc.debug_name = "t2d.sprite.pipeline";
 
     ore::rhi::VertexLayout layout;
@@ -86,17 +98,27 @@ Scope<SpriteBatch> SpriteBatch::create(ore::rhi::GraphicsContext& context, const
     batch->pipeline_ = ore::rhi::GraphicsPipeline::create(context.device(), pipeline_desc);
     if (batch->pipeline_ == nullptr) return nullptr;
 
-    const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8};
-    batch->descriptor_pool_ = ore::rhi::DescriptorPool::create(context.device(),
-                                                              ore::ConstSpan<VkDescriptorPoolSize>(&pool_size, 1), 8);
+    // Enough sets that a frame's batches never collide and a set comes back around only after
+    // several frames have been retired by the GPU.
+    constexpr u32 kDescriptorSetCount = 8;
+    const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kDescriptorSetCount};
+    batch->descriptor_pool_ = ore::rhi::DescriptorPool::create(
+        context.device(), ore::ConstSpan<VkDescriptorPoolSize>(&pool_size, 1), kDescriptorSetCount);
     if (batch->descriptor_pool_ == nullptr) return nullptr;
-    batch->descriptor_set_ = ore::rhi::DescriptorSet(
-        context.device(), batch->descriptor_pool_->allocate(*batch->descriptor_layout_, "t2d.sprite.set"),
-        *batch->descriptor_layout_);
+    batch->descriptor_sets_.reserve(kDescriptorSetCount);
+    for (u32 index = 0; index < kDescriptorSetCount; ++index) {
+        batch->descriptor_sets_.emplace_back(
+            context.device(), batch->descriptor_pool_->allocate(*batch->descriptor_layout_, "t2d.sprite.set"),
+            *batch->descriptor_layout_);
+    }
 
-    // The font atlas leaves its last cell empty: sample it for solid rectangles.
-    batch->white_u_ = (static_cast<f32>(kFontAtlasWidth) - 4.0f) / static_cast<f32>(kFontAtlasWidth);
-    batch->white_v_ = (static_cast<f32>(kFontAtlasHeight) - 4.0f) / static_cast<f32>(kFontAtlasHeight);
+    // The font atlas reserves its last cell as opaque white: sample its centre for solid rectangles.
+    const u32 white_cell = kFontAtlasColumns * kFontAtlasRows - 1;
+    const f32 half_cell = static_cast<f32>(kFontCellSize) * 0.5f;
+    batch->white_u_ =
+        (static_cast<f32>((white_cell % kFontAtlasColumns) * kFontCellSize) + half_cell) / static_cast<f32>(kFontAtlasWidth);
+    batch->white_v_ =
+        (static_cast<f32>((white_cell / kFontAtlasColumns) * kFontCellSize) + half_cell) / static_cast<f32>(kFontAtlasHeight);
     T2D_DEBUG("sprite batch: up to {} quads per frame ({} KiB of vertex data)", batch->max_quads_,
               static_cast<f64>(batch->max_quads_) * 4.0 * static_cast<f64>(kVertexStride) / 1024.0);
     return batch;
@@ -106,39 +128,31 @@ SpriteBatch::~SpriteBatch() = default;
 
 void SpriteBatch::begin(ore::RenderFrame& frame, const Vec2& camera_center, const Vec2& camera_size,
                         ore::rhi::Texture& atlas, VkSampler sampler) {
-    // World +Y points down and the framebuffer's top edge is -1 in clip space, so the camera's
-    // "top" is its smaller y.
-    const ore::Mat4 projection = ore::orthographic(camera_center.x - camera_size.x * 0.5f,
-                                                  camera_center.x + camera_size.x * 0.5f,
-                                                  camera_center.y + camera_size.y * 0.5f,
-                                                  camera_center.y - camera_size.y * 0.5f, 0.1f, 100.0f);
-    begin(frame, projection, atlas, sampler);
+    begin(frame, sprite_view_projection(camera_center, camera_size), atlas, sampler);
 }
 
 void SpriteBatch::begin(ore::RenderFrame& frame, const ore::Mat4& view_projection, ore::rhi::Texture& atlas,
                         VkSampler sampler) {
     cmd_ = frame.cmd;
+    ring_ = frame.ring;
     quad_count_ = 0;
     dropped_quads_ = 0;
     draw_calls_ = 0;
-    vertices_ = nullptr;
-    vertex_buffer_ = &frame.ring->buffer();
+    vertices_ = staging_.data();
 
-    const u64 bytes = static_cast<u64>(max_quads_) * 4u * kVertexStride;
-    const auto slice = frame.ring->allocate(bytes, 16);
-    if (!slice.valid()) {
-        T2D_ERROR("sprite batch: the frame ring could not provide {} KiB for vertices", bytes / 1024);
-        return;
-    }
-    vertex_offset_ = slice.offset;
-    vertices_ = static_cast<SpriteVertex*>(slice.mapped);
-
-    descriptor_set_.write_texture(0, atlas, sampler);
+    // A fresh set per batch: the write below is immediate, so sharing one set between the batches
+    // of a frame would leave every draw sampling the last texture written.
+    ore::rhi::DescriptorSet& descriptor_set = descriptor_sets_[next_descriptor_set_];
+    next_descriptor_set_ = (next_descriptor_set_ + 1) % descriptor_sets_.size();
+    descriptor_set.write_texture(0, atlas, sampler);
     cmd_->bind_pipeline(*pipeline_);
-    cmd_->bind_descriptor_set(0, descriptor_set_);
+    // The batch always draws in screen space, so it owns the dynamic viewport and scissor state
+    // (an unset viewport silently clips every quad away).
+    cmd_->set_viewport(static_cast<f32>(frame.width), static_cast<f32>(frame.height));
+    cmd_->set_scissor_full(static_cast<f32>(frame.width), static_cast<f32>(frame.height));
+    cmd_->bind_descriptor_set(0, descriptor_set);
     cmd_->push_constants(VK_SHADER_STAGE_VERTEX_BIT, view_projection);
     cmd_->bind_index_buffer(*index_buffer_, VK_INDEX_TYPE_UINT32);
-    cmd_->bind_vertex_buffer(0, *vertex_buffer_, vertex_offset_);
 }
 
 void SpriteBatch::draw_quad(const Aabb2& rect, const Aabb2& uv_rect, u32 color) {
@@ -200,7 +214,19 @@ void SpriteBatch::draw_text(f32 x, f32 y, f32 scale, u32 color, std::string_view
 }
 
 void SpriteBatch::end() {
-    if (cmd_ == nullptr || vertices_ == nullptr || quad_count_ == 0) return;
+    if (cmd_ == nullptr || ring_ == nullptr || quad_count_ == 0) return;
+
+    const u64 bytes = static_cast<u64>(quad_count_) * 4u * kVertexStride;
+    const auto slice = ring_->allocate(bytes, 16);
+    if (!slice.valid()) {
+        T2D_ERROR("sprite batch: the frame ring could not provide {} KiB for {} quads", bytes / 1024,
+                  quad_count_);
+        dropped_quads_ += quad_count_;
+        quad_count_ = 0;
+        return;
+    }
+    std::memcpy(slice.mapped, vertices_, static_cast<usize>(bytes));
+    cmd_->bind_vertex_buffer(0, ring_->buffer(), slice.offset);
     cmd_->draw_indexed(quad_count_ * 6u);
     ++draw_calls_;
 }

@@ -66,7 +66,8 @@ int main(int argc, char** argv) {
                     "  --level path       ASCII level file (default: built-in arena)\n"
                     "  --max-players N    player limit (default 8)\n"
                     "  --ticks N          stop after N simulation ticks (used by the tests)\n"
-                    "  --snapshot-rate N  send a snapshot every N ticks (default 2)\n",
+                    "  --snapshot-rate N  send a snapshot every N ticks (default 2)\n"
+                    "  --tick-rate N      simulation ticks per second (default 60)\n",
                     args.program().c_str());
         return 0;
     }
@@ -76,6 +77,12 @@ int main(int argc, char** argv) {
     config.port = static_cast<t2d::u16>(args.uint_value("port", 7777));
     config.max_players = args.uint_value("max-players", 8);
     config.snapshot_interval_ticks = args.uint_value("snapshot-rate", 2);
+    const t2d::u32 tick_rate = args.uint_value("tick-rate", t2d::kTickRate);
+    if (tick_rate < 1 || tick_rate > 1000) {
+        T2D_ERROR("--tick-rate must be between 1 and 1000");
+        return 1;
+    }
+    config.tick_rate = tick_rate;
     config.local_client = false;
     config.world.map = load_level(args.value("level"));
     config.name = "tile2d dedicated";

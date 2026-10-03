@@ -92,7 +92,8 @@ void ServerHost::stop() {
 }
 
 void ServerHost::run() {
-    const f32 tick_seconds = 1.0f / static_cast<f32>(kTickRate);
+    const u32 rate = config_.tick_rate != 0 ? config_.tick_rate : kTickRate;
+    const f32 tick_seconds = 1.0f / static_cast<f32>(rate);
     const u64 tick_ms = static_cast<u64>(tick_seconds * 1000.0f + 0.5f);
     u64 next_tick = now_ms();
 
@@ -299,7 +300,7 @@ void ServerHost::accept_player(Session& session, std::string_view name, u64 now)
     net::WelcomeMessage welcome;
     welcome.player_id = session.player_id;
     welcome.tick = world_->tick();
-    welcome.tick_rate = kTickRate;
+    welcome.tick_rate = config_.tick_rate != 0 ? config_.tick_rate : kTickRate;
     welcome.spawn = player != nullptr ? player->spawn_position : Vec2{};
     welcome.map_width = world_->map().width();
     welcome.map_height = world_->map().height();

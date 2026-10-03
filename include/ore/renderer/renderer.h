@@ -80,6 +80,9 @@ public:
 
     // --- passes ------------------------------------------------------------
     /// Begins dynamic rendering on the current target with the given clear values.
+    ///
+    /// Viewport and scissor are dynamic state, so every pass starts with them covering the whole
+    /// target; set them again inside the pass for a smaller rectangle (split screen, shadow atlases).
     void begin_pass(const VkClearValue& color_clear, f32 depth_clear = 1.0f, u32 stencil_clear = 0);
     /// Begins dynamic rendering on the current target, preserving its contents.
     void begin_pass_load();
@@ -142,6 +145,8 @@ private:
     [[nodiscard]] bool create_targets();
     void destroy_targets();
     void recreate_swapchain();
+    /// Sets the dynamic viewport and scissor to the full extent of p target.
+    void set_default_viewport(const rhi::RenderTarget& target);
     void report_frame_stats();
 
     rhi::GraphicsContext* context_ = nullptr;

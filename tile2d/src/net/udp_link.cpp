@@ -63,6 +63,12 @@ usize UdpLink::receive(Span<u8> destination) {
 
 void UdpLink::update(u64 now_ms) {
     if (kcp_ == nullptr || state_ == LinkState::Closed) return;
+    // Incoming datagrams reach KCP through the transport, never through the link. A client owns
+    // exactly one link and one socket, so pumping here keeps the ILink contract honest: whoever
+    // only knows about the link (LocalClient, a bot, a future single player transport) still
+    // receives. On the server the shared socket is pumped by the simulation loop; there the
+    // re-entrancy guard turns this into a no-op instead of infinite recursion.
+    if (transport_ != nullptr) transport_->update(now_ms);
     kcp_->update(now_ms);
 
     if (last_packet_ms_ != 0 && now_ms > last_packet_ms_ + config_.timeout_ms) {
@@ -191,7 +197,8 @@ void UdpTransport::send_raw(const Endpoint& peer, ConstSpan<const u8> data) {
 }
 
 void UdpTransport::update(u64 now_ms) {
-    if (socket_ == nullptr) return;
+    if (socket_ == nullptr || pumping_) return;
+    pumping_ = true;
 
     for (u32 processed = 0; processed < config_.max_packets_per_update; ++processed) {
         Endpoint source;
@@ -229,6 +236,7 @@ void UdpTransport::update(u64 now_ms) {
     }
 
     for (const Scope<UdpLink>& link : links_) link->update(now_ms);
+    pumping_ = false;
 }
 
 ConstSpan<UdpLink*> UdpTransport::links() const {

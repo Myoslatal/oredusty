@@ -62,9 +62,11 @@ void write_player(ByteWriter& writer, const PlayerState& player, u8 mask) {
     }
 }
 
-[[nodiscard]] bool read_player(ByteReader& reader, PlayerState& player) {
+/// Reads one entry and reports the field mask that was on the wire: the delta merge needs to know
+/// which fields the sender actually described, so the mask must survive the decode.
+[[nodiscard]] bool read_player(ByteReader& reader, PlayerState& player, u8& mask) {
     player.id = reader.read_varint();
-    const u8 mask = reader.read_u8();
+    mask = reader.read_u8();
     if (!reader.ok()) return false;
     if ((mask & kFieldPosition) != 0u) {
         player.position.x = reader.read_fixed_16();
@@ -102,9 +104,9 @@ void write_pickup(ByteWriter& writer, const Pickup& pickup, u8 mask) {
     }
 }
 
-[[nodiscard]] bool read_pickup(ByteReader& reader, Pickup& pickup) {
+[[nodiscard]] bool read_pickup(ByteReader& reader, Pickup& pickup, u8& mask) {
     pickup.id = reader.read_varint();
-    const u8 mask = reader.read_u8();
+    mask = reader.read_u8();
     if (!reader.ok()) return false;
     if ((mask & kFieldPosition) != 0u) {
         pickup.position.x = reader.read_fixed_16();
@@ -224,6 +226,13 @@ bool apply_delta(const Snapshot& baseline, const Snapshot& delta, Snapshot& out)
         return true;
     }
     if (baseline.kind != SnapshotKind::Full || baseline.tick != delta.baseline_tick) return false;
+    // Every entry must describe which of its fields it carries. A delta without parallel masks is
+    // malformed (or came from a future encoder): refusing it makes the caller ask for a full
+    // snapshot, which is always recoverable - merging it blind would silently zero the fields the
+    // sender left out.
+    if (delta.player_masks.size() != delta.players.size() || delta.pickup_masks.size() != delta.pickups.size()) {
+        return false;
+    }
 
     out = baseline;
     out.kind = SnapshotKind::Full;
@@ -237,7 +246,7 @@ bool apply_delta(const Snapshot& baseline, const Snapshot& delta, Snapshot& out)
 
     for (usize i = 0; i < delta.players.size(); ++i) {
         const PlayerState& incoming = delta.players[i];
-        const u8 mask = i < delta.player_masks.size() ? delta.player_masks[i] : static_cast<u8>(kFieldAll);
+        const u8 mask = delta.player_masks[i];
         bool merged = false;
         for (PlayerState& existing : out.players) {
             if (existing.id != incoming.id) continue;
@@ -255,8 +264,7 @@ bool apply_delta(const Snapshot& baseline, const Snapshot& delta, Snapshot& out)
 
     for (usize i = 0; i < delta.pickups.size(); ++i) {
         const Pickup& incoming = delta.pickups[i];
-        const u8 mask = i < delta.pickup_masks.size() ? delta.pickup_masks[i]
-                                                      : (kFieldPosition | kFieldPickupState);
+        const u8 mask = delta.pickup_masks[i];
         bool merged = false;
         for (Pickup& existing : out.pickups) {
             if (existing.id != incoming.id) continue;
@@ -347,13 +355,20 @@ bool decode_snapshot(ConstSpan<const u8> data, Snapshot& out) {
     out.removed_pickups.clear();
 
     constexpr u32 kMaxEntities = 65536;
+    const bool delta = out.kind == SnapshotKind::Delta;
     const u32 player_count = reader.read_varint();
     if (!reader.ok() || player_count > kMaxEntities) return false;
     out.players.reserve(player_count);
+    if (delta) out.player_masks.reserve(player_count);
     for (u32 i = 0; i < player_count; ++i) {
         PlayerState player;
-        if (!read_player(reader, player)) return false;
+        u8 mask = 0;
+        if (!read_player(reader, player, mask)) return false;
         out.players.push_back(player);
+        // A full snapshot replaces the whole state, so it carries no masks; a delta must remember
+        // exactly which fields it described, otherwise the merge cannot tell "unchanged" from
+        // "absent" and would clobber the receiver's state with zeros.
+        if (delta) out.player_masks.push_back(mask);
     }
 
     if (out.kind == SnapshotKind::Delta) {
@@ -365,10 +380,13 @@ bool decode_snapshot(ConstSpan<const u8> data, Snapshot& out) {
     const u32 pickup_count = reader.read_varint();
     if (!reader.ok() || pickup_count > kMaxEntities) return false;
     out.pickups.reserve(pickup_count);
+    if (delta) out.pickup_masks.reserve(pickup_count);
     for (u32 i = 0; i < pickup_count; ++i) {
         Pickup pickup;
-        if (!read_pickup(reader, pickup)) return false;
+        u8 mask = 0;
+        if (!read_pickup(reader, pickup, mask)) return false;
         out.pickups.push_back(pickup);
+        if (delta) out.pickup_masks.push_back(mask);
     }
 
     if (out.kind == SnapshotKind::Delta) {

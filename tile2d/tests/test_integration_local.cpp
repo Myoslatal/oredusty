@@ -37,6 +37,9 @@ struct Rig {
     config.port = 0;                 // no sockets at all: shared memory only
     config.local_client = true;
     config.snapshot_interval_ticks = snapshot_interval_ticks;
+    // Pacing only: the simulation advances the same way per tick, so twenty seconds of gameplay fit
+    // into a few hundred milliseconds. A dedicated server would use the default 60.
+    config.tick_rate = 240;
     config.world.map = make_flat_level();
 
     rig.server = ServerHost::create(config);

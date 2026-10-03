@@ -68,6 +68,7 @@ Scope<LocalClient> LocalClient::create(const ClientConfig& config, net::ILink* l
     client->link_ = link;
     client->player_name_ = config.player_name;
     client->snapshot_buffer_ = SnapshotBuffer(config.snapshot_history);
+    client->baseline_history_.reserve(config.baseline_history);
     client->receive_buffer_.resize(net::kMaxMessageSize);
     client->link_kind_storage_ = link->kind();
     client->stats_.link_kind = client->link_kind_storage_;
@@ -204,6 +205,7 @@ void LocalClient::handle_welcome(ConstSpan<const u8> payload) {
     net::WelcomeMessage welcome;
     if (!net::decode_welcome(payload, welcome)) return;
     local_player_id_ = welcome.player_id;
+    if (welcome.tick_rate > 0) tick_rate_ = welcome.tick_rate;
     next_command_tick_ = welcome.tick + 1;
     map_chunks_expected_ = 0;
     map_chunks_received_ = 0;
@@ -272,15 +274,17 @@ void LocalClient::handle_snapshot(ConstSpan<const u8> payload, u64 now_ms) {
         ++stats_.full_snapshots_received;
     } else {
         ++stats_.delta_snapshots_received;
-        if (!apply_delta(baseline_, incoming, resolved)) {
-            // The baseline is gone (first snapshot after joining, or a very old ack): ask for a full
-            // one and keep predicting until it arrives.
+        // The server builds the delta against the newest snapshot this client acknowledged, which is
+        // at least one round trip older than the newest one it has sent. Resolving against that exact
+        // tick (instead of only the newest state) is what keeps deltas applicable.
+        const Snapshot* base = find_baseline(incoming.baseline_tick);
+        if (base == nullptr || !apply_delta(*base, incoming, resolved)) {
             ++stats_.snapshots_dropped;
-            const std::vector<u8> framed = net::encode_message(net::MessageType::NeedFullSnapshot, {});
-            link_->send(framed);
+            request_full_snapshot();
             return;
         }
     }
+    remember_baseline(resolved);
 
     if (!ready_ || world_ == nullptr) {
         baseline_ = resolved;
@@ -298,11 +302,11 @@ void LocalClient::handle_snapshot(ConstSpan<const u8> payload, u64 now_ms) {
         T2D_WARN("client: state mismatch at tick {} (local 0x{:016x}, server 0x{:016x}) - {}",
                  resolved.tick, local_checksum, resolved.checksum,
                  difference.empty() ? "checksums differ but every compared field agrees" : difference);
-        // Recovery: drop the (now suspect) baseline and ask for a full snapshot, so a single bad
+        // Recovery: drop the (now suspect) baselines and ask for a full snapshot, so a single bad
         // delta cannot keep the client drifting forever.
         baseline_ = Snapshot{};
-        const std::vector<u8> framed = net::encode_message(net::MessageType::NeedFullSnapshot, {});
-        link_->send(framed);
+        baseline_history_.clear();
+        request_full_snapshot();
     }
 
     snapshot_buffer_.push(resolved);
@@ -328,6 +332,25 @@ void LocalClient::handle_snapshot(ConstSpan<const u8> payload, u64 now_ms) {
     const u32 target = resolved.tick + config_.command_lead_ticks;
     if (next_command_tick_ < target) next_command_tick_ = target;
     stats_.pending_commands = static_cast<u32>(predictor_.pending_count());
+}
+
+const Snapshot* LocalClient::find_baseline(u32 tick) const {
+    for (const Snapshot& candidate : baseline_history_) {
+        if (candidate.tick == tick) return &candidate;
+    }
+    return nullptr;
+}
+
+void LocalClient::remember_baseline(const Snapshot& snapshot) {
+    const usize limit = std::max<usize>(config_.baseline_history, 2);
+    baseline_history_.push_back(snapshot);
+    while (baseline_history_.size() > limit) baseline_history_.erase(baseline_history_.begin());
+}
+
+void LocalClient::request_full_snapshot() {
+    if (link_ == nullptr) return;
+    const std::vector<u8> framed = net::encode_message(net::MessageType::NeedFullSnapshot, {});
+    link_->send(framed);
 }
 
 void LocalClient::send_command(u32 tick, const PlayerCommand& command) {
@@ -372,7 +395,7 @@ void LocalClient::update(u64 now_ms, const PlayerCommand& command) {
     if (ready_ && world_ != nullptr) {
         // One command per simulation tick, independent of the frame rate.
         accumulated_seconds_ += delta_seconds;
-        const f32 tick_seconds = kTickSeconds;
+        const f32 tick_seconds = 1.0f / static_cast<f32>(tick_rate_);
         u32 ticks = 0;
         while (accumulated_seconds_ >= tick_seconds && ticks < 8) {
             accumulated_seconds_ -= tick_seconds;
@@ -401,9 +424,10 @@ void LocalClient::update_render_players(u64 now_ms) {
     // Remote players: interpolated a fixed delay behind the newest snapshot.
     const Snapshot* newest = snapshot_buffer_.newest();
     if (newest != nullptr) {
-        const f32 since_snapshot = static_cast<f32>(now_ms - last_snapshot_ms_) / 1000.0f * static_cast<f32>(kTickRate);
+        const f32 rate = static_cast<f32>(tick_rate_);
+        const f32 since_snapshot = static_cast<f32>(now_ms - last_snapshot_ms_) / 1000.0f * rate;
         const f32 target_tick = static_cast<f32>(newest->tick) + std::min(since_snapshot, 4.0f);
-        render_tick_ = target_tick - config_.interpolation_delay_ms / 1000.0f * static_cast<f32>(kTickRate);
+        render_tick_ = target_tick - config_.interpolation_delay_ms / 1000.0f * rate;
 
         std::vector<PlayerState> interpolated;
         snapshot_buffer_.sample_all(render_tick_, interpolated);

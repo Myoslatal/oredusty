@@ -24,6 +24,10 @@ struct ClientConfig {
     /// How far behind the server remote entities are rendered (hides jitter, costs latency).
     f32 interpolation_delay_ms = 100.0f;
     usize snapshot_history = 32;
+    /// How many reconstructed states the client keeps so a delta can be applied against the tick the
+    /// server referenced. The server may acknowledge an older snapshot than the newest one it sent
+    /// (an ack is a round trip behind), so keeping only the newest state drops those deltas.
+    usize baseline_history = 64;
     bool enable_prediction = true;
     u32 ping_interval_ms = 500;
     /// How many ticks ahead of the server's newest snapshot the client aims to be.
@@ -120,13 +124,19 @@ private:
     void send_command(u32 tick, const PlayerCommand& command);
     void send_ping(u64 now_ms);
     void update_render_players(u64 now_ms);
+    /// The reconstructed state with this tick, or nullptr when it has already been forgotten.
+    [[nodiscard]] const Snapshot* find_baseline(u32 tick) const;
+    /// Keeps the reconstructed states a delta may reference, oldest first.
+    void remember_baseline(const Snapshot& snapshot);
+    void request_full_snapshot();
 
     ClientConfig config_{};
     net::ILink* link_ = nullptr;
     Scope<World> world_;
     Predictor predictor_;
     SnapshotBuffer snapshot_buffer_;
-    Snapshot baseline_;                       ///< last fully reconstructed server state
+    Snapshot baseline_;                       ///< newest fully reconstructed server state
+    std::vector<Snapshot> baseline_history_;  ///< recent states, keyed by tick, for delta resolution
     std::vector<u8> receive_buffer_;
     std::vector<std::vector<u8>> map_chunks_;
     u32 map_chunks_expected_ = 0;
@@ -137,6 +147,8 @@ private:
     u32 ping_sequence_ = 0;
     u32 next_command_tick_ = 1;
     u32 last_snapshot_tick_ = 0;
+    /// Ticks per second, announced by the server's welcome message (kTickRate until it arrives).
+    u32 tick_rate_ = kTickRate;
     PlayerId local_player_id_ = kInvalidId;
     bool ready_ = false;
     bool handshake_sent_ = false;

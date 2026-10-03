@@ -43,6 +43,9 @@ GameOptions parse_game_options(const ore::CommandLine& cli) {
     if (const auto name = cli.value("name"); name.has_value()) options.player_name = *name;
     if (const auto level = cli.value("level"); level.has_value()) options.level_path = *level;
     if (const auto debug = cli.bool_value("debug-draw"); debug.has_value()) options.show_debug = *debug;
+    if (const auto rate = cli.uint_value("tick-rate"); rate.has_value() && *rate >= 1 && *rate <= 1000) {
+        options.tick_rate = *rate;
+    }
     return options;
 }
 
@@ -54,6 +57,7 @@ ore::ConstSpan<ore::CliOption> GameApp::cli_options() const {
         {"name", "<player>", "player name shown in the HUD"},
         {"level", "<path>", "ASCII level file; the built-in demo level is used when omitted"},
         {"debug-draw", "<0|1>", "draw player bounding boxes and velocity vectors"},
+        {"tick-rate", "<n>", "server ticks per second in single/host mode (default 60)"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
@@ -111,25 +115,27 @@ void GameApp::on_start() {
     world_config.map = map;
     world_config.tileset = tileset;
 
-    ServerConfig server_config;
-    server_config.world = world_config;
-    server_config.local_client = true;
-    server_config.port = options_.mode == GameOptions::Mode::HostAndPlay ? options_.port : 0;
-    server_ = ServerHost::create(server_config);
-    if (server_ == nullptr) {
-        T2D_FATAL("could not start the server thread");
-        return;
-    }
-    // The server owns one end of the shared channel; the other end becomes the local client's link.
-    // Handing it over is the whole "single player is just a local client" trick.
-    shared_client_link_ = Scope<net::SharedLink>(server_->take_local_client_link());
-    if (shared_client_link_ == nullptr) {
-        T2D_FATAL("the server did not expose the local client end of the shared channel");
-        return;
-    }
-    server_->start();
-
+    // Single player and host run the authoritative simulation in this process; a pure client does
+    // not (its world is predicted from snapshots and started from the level the server sends).
     if (options_.mode != GameOptions::Mode::JoinRemote) {
+        ServerConfig server_config;
+        server_config.world = world_config;
+        server_config.local_client = true;
+        server_config.tick_rate = options_.tick_rate;
+        server_config.port = options_.mode == GameOptions::Mode::HostAndPlay ? options_.port : 0;
+        server_ = ServerHost::create(server_config);
+        if (server_ == nullptr) {
+            T2D_FATAL("could not start the server thread");
+            return;
+        }
+        // The server owns one end of the shared channel; the other end becomes the local client's
+        // link. Handing it over is the whole "single player is just a local client" trick.
+        shared_client_link_ = Scope<net::SharedLink>(server_->take_local_client_link());
+        if (shared_client_link_ == nullptr) {
+            T2D_FATAL("the server did not expose the local client end of the shared channel");
+            return;
+        }
+        server_->start();
         link_ = shared_client_link_.get();
     } else {
         net::UdpTransport::Config transport_config;
@@ -233,6 +239,15 @@ void GameApp::on_update(f32 delta_seconds) {
     const PlayerCommand command = sample_input();
     client_->update(now_ms(), command);
 
+    // Headless runs have no vsync: without pacing the loop would spin at thousands of frames per
+    // second, the simulation (which advances in wall clock time) would barely tick, and a screenshot
+    // would catch a half loaded level. --frames therefore counts real frames.
+    if (config().headless) {
+        constexpr f32 kHeadlessFrameSeconds = 1.0f / 60.0f;
+        const f32 remaining = kHeadlessFrameSeconds - delta_seconds;
+        if (remaining > 0.0f) sleep_ms(static_cast<u32>(remaining * 1000.0f + 0.5f));
+    }
+
     if (ore::Window* window = this->window(); window != nullptr) {
         const ore::InputState& input = window->input();
         if (input.key_pressed(ore::Key::F1)) debug_ = !debug_;
@@ -331,17 +346,24 @@ void GameApp::on_render(ore::RenderFrame& frame) {
     const Aabb2 view = Aabb2::from_center(camera_center_, camera_size_ * 0.5f);
 
     // Pass 1: tiles, pickups and players share the tileset atlas.
+    u32 quads = 0;
+    u32 draw_calls = 0;
     batch_->begin(frame, camera_center_, camera_size_, *tile_atlas_, sampler_->handle());
     draw_world(view);
     batch_->end();
+    quads += batch_->quads();
+    draw_calls += batch_->draw_calls();
 
     // Pass 2: text uses the font atlas, so it needs its own batch (one extra draw call).
     batch_->begin(frame, camera_center_, camera_size_, *font_atlas_, sampler_->handle());
     draw_hud();
     batch_->end();
+    quads += batch_->quads();
+    draw_calls += batch_->draw_calls();
 
-    frame.counters.draw_calls = batch_->draw_calls() + 1;
-    frame.counters.triangles = batch_->quads() * 2;
+    // begin() resets the batch's per pass counters, so the frame numbers are summed here.
+    frame.counters.draw_calls = draw_calls;
+    frame.counters.triangles = quads * 2;
     renderer().end_pass();
 }
 
