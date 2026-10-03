@@ -145,10 +145,12 @@ void MineApp::handle_start_input() {
 void MineApp::begin_session(const SessionConfig& session) {
     session_ = session;
     screen_ = Screen::Session;
-    T2D_INFO("session: world {} role {} seed {}", mode_name(session_.mode), role_name(session_.role),
-             session_.seed);
-    // Layer content is not authored yet (docs/GAME_DESIGN.md section 6): this is where the layer data
-    // would be loaded or generated, and where ServerHost/LocalClient would be created.
+    T2D_INFO("session: world {} role {} seed {} (content registry: {} entries)", mode_name(session_.mode),
+             role_name(session_.role), session_.seed, registry_.total_count());
+    // Layer content is not authored yet (docs/GAME_DESIGN.md section 6): this is where the content
+    // data would be loaded into registry_, where the layer data would be loaded or generated, and
+    // where ServerHost/LocalClient would be created. The save would then store registry_.table()
+    // alongside the ids it references.
 }
 
 void MineApp::draw_start_screen() {
@@ -223,6 +225,7 @@ void MineApp::draw_session_screen() {
         y += line_height(scale) + 4.0f;
     };
     line("WORLD", mode_name(session_.mode), kPalette.text);
+    line("CONTENT", std::format("{} REGISTERED", registry_.total_count()), kPalette.text);
     line("ROLE", role_name(session_.role), kPalette.text);
     line("SEED", format_seed(session_.seed), kPalette.text);
     if (session_.role == Role::Join) line("CONNECT", session_.connect_address, kPalette.text);
@@ -234,7 +237,7 @@ void MineApp::draw_session_screen() {
     y += line_height(scale) + 2.0f;
     batch_->draw_text(left, y, scale, kPalette.text_dim, "RESOURCES, STRUCTURES AND DEMANDS COME FROM THE");
     y += line_height(scale);
-    batch_->draw_text(left, y, scale, kPalette.text_dim, "DESIGNER DATA (docs/GAME_DESIGN.md SECTION 6).");
+    batch_->draw_text(left, y, scale, kPalette.text_dim, "DESIGNER DATA (docs/GAME_DESIGN.md SECTION 7).");
 
     batch_->draw_text(left, layout.panel.max.y - layout.padding - line_height(scale), scale,
                       kPalette.text_dim, "ESC BACK TO THE START SCREEN");

@@ -128,9 +128,14 @@ What exists today (M1) is the shell, deliberately free of any game content:
 
 ![Session screen](games/mine/docs/images/session_screen.png)
 
-* `mine_core` holds the session description and the start screen model and depends on nothing but
-  `t2d::core`, so the whole screen is tested in milliseconds without a window or a GPU
-  (`test_mine_menu`: navigation, seed editing, what each row starts).
+* `mine_core` holds the session description, the start screen model and the **content registry**
+  and depends on nothing but `t2d::core`, so the whole thing is tested in milliseconds without a
+  window or a GPU (`test_mine_menu`: navigation, seed editing, what each row starts).
+* **Saves store numbers, content is registered by name.** Every save carries the name -> id table it
+  was written with, and loading translates the saved ids by name (`ContentRegistry`,
+  `ContentTable`, `ContentRemap`). Content the running build no longer has is reported instead of
+  being silently remapped onto whichever number took its place - the classic way a save gets
+  corrupted. `test_registry` covers it, including that failure spelled out.
 * `mine_app` is the Ore application shell; `begin_session()` is the single place where the layer
   data, the server thread and the client will be created once content exists.
 * No resource, structure, recipe or machine is hard coded anywhere: those are the designer's data.

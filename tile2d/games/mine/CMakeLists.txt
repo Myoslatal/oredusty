@@ -6,6 +6,7 @@
 
 add_library(mine_core STATIC
     src/menu.cpp
+    src/registry.cpp
 )
 add_library(mine::core ALIAS mine_core)
 t2d_apply_settings(mine_core)

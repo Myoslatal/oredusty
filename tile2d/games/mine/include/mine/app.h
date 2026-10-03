@@ -7,6 +7,7 @@
 #pragma once
 
 #include <mine/menu.h>
+#include <mine/registry.h>
 #include <mine/session.h>
 
 #include <t2d/render/sprite_batch.h>
@@ -50,6 +51,9 @@ private:
     Screen screen_ = Screen::Start;
     MenuModel menu_{};
     SessionConfig session_{};
+    /// Filled from the designer's content data; a save stores the ids this hands out plus the table
+    /// that maps them back to names (see registry.h).
+    ContentRegistry registry_{};
     Scope<t2d::SpriteBatch> batch_;
     Scope<ore::rhi::Texture> font_atlas_;
     Scope<ore::rhi::Sampler> sampler_;
