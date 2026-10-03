@@ -70,7 +70,14 @@ Application::run()
             ├─（可选）截图拷贝：颜色图 → 主机可见回读缓冲
             ├─ vkQueueSubmit2（等待 image_available，signal render_finished + fence）
             └─ vkQueuePresentKHR（等待 render_finished）
+
+  退出路径：renderer->wait_idle() → on_shutdown() → 日志汇总
 ```
+
+**退出顺序是先等 GPU 空闲、再调 `on_shutdown()`**：应用在 `on_shutdown()` 里销毁自己的缓冲、
+纹理与管线，而 `end_frame()` 只提交、不等栅栏——先销毁后等待，等于让仍在飞行中的帧引用已释放的
+资源，真机上表现为 `vkDeviceWaitIdle` 返回 `VK_ERROR_DEVICE_LOST`（无窗口、无 `--screenshot` 的
+无头运行曾 100% 触发）。
 
 **为什么用 fence 而不是 timeline semaphore 做帧同步**：帧级同步只需要"这个 slot 的上一帧
 完成了没有"，二进制 fence 语义最简单、开销最低。timeline semaphore 用在
@@ -78,6 +85,12 @@ Application::run()
 
 **每帧资源三件套**：命令池、描述符池、upload ring 段。三者在 `begin_frame()` 一起重置，
 因此应用在 `on_render()` 里分配的任何每帧资源都只属于当前帧，不会与仍在使用中的上一帧冲突。
+
+**ring 段大小是可配的（`AppConfig::upload_segment_size`，默认 1 MiB）**：一帧里所有动态数据
+（sprite batch 的顶点、字形上传、截图回读）都从当前帧那一段分配，**分配不到就整批丢弃**——
+`SpriteBatch::end()` 在 ring 给不出空间时丢掉本批全部四边形并打一条 ERROR，屏幕上就是“整帧
+空白但程序正常退出”。一屏四边形多的应用要把它调大：mine 的沙盒用 4 MiB（两批各最多 16k 四边形
+× 20 字节）。
 
 **resize 与 swapchain 重建**：窗口回调只设置 `resize_pending_`；真正的重建发生在下一帧
 `begin_frame()` 开头（先 `wait_idle()`，再销毁并重建 swapchain、图像视图与每个交换链图像的

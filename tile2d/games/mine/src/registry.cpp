@@ -46,6 +46,13 @@ ContentId ContentRegistry::register_content(ContentKind kind, std::string_view n
         if (entry.name == name) return entry.id; // idempotent: re-loading data must not shift ids
     }
     const ContentId id = static_cast<ContentId>(entries.size()) + 1u;
+    if (id >= kMaxContentId) {
+        // A map cell packs an id into 20 bits (content_grid.h), so an id this large could not be
+        // stored. Refusing here keeps that guarantee where ids are handed out.
+        T2D_ERROR("registry: '{}' would be {} number {}, past the id limit of {}", name,
+                  content_kind_name(kind), id, kMaxContentId - 1u);
+        return kNoContent;
+    }
     entries.push_back(ContentEntry{kind, id, std::string(name)});
     return id;
 }
@@ -166,7 +173,7 @@ bool ContentTable::deserialize(ConstSpan<const u8> data, ContentTable& out) {
             entry.id = reader.read_varint();
             entry.name = reader.read_string();
             if (!reader.ok()) return false;
-            if (entry.id == kNoContent || entry.id > kMaxContentId) return false;
+            if (entry.id == kNoContent || entry.id >= kMaxContentId) return false;
             if (entry.name.empty() || entry.name.size() > kMaxNameLength) return false;
             // Ids and names must be unique inside a kind: a table that repeats either one cannot be
             // translated unambiguously, so it is refused instead of being resolved by luck.

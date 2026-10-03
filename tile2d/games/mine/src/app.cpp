@@ -142,6 +142,10 @@ void MineApp::on_configure(ore::AppConfig& config) {
     config.window.height = 720;
     config.depth_format = VK_FORMAT_UNDEFINED; // the interface is pure 2D
     config.stats_interval = 0.0f;
+    // A sandbox frame draws the map in two passes (colours, then pictures), each of which can hold up
+    // to kMaxCellQuads quads of 20 bytes: 4 MiB of ring is what keeps a zoomed out map of hundreds of
+    // cells per side inside one frame instead of being dropped.
+    config.upload_segment_size = 4ull << 20;
     // Escape is handled per screen: on the start screen it quits, on the others it goes back to it -
     // which is what the session screen has been telling the player all along.
     config.quit_on_escape = false;
@@ -167,6 +171,7 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"pack", "<file.ecfg>", "a content pack to load; repeatable"},
         {"packs", "<dir>", "directory of content packs (*.ecfg); repeatable, defaults to ./packs"},
         {"mods", "<dir>", "directory of mod packages to load; repeatable"},
+        {"view", "<x,y[,zoom]>", "sandbox: look at this cell instead of fitting the whole map"},
         {"layout", "<path>", "sandbox layout file: loaded at startup, written by F2"},
         {"save-layout", "<path>", "write the sandbox layout once at shutdown (scripted runs)"},
         {"dump-layer", "<0|1>", "write the sandbox layer as text to the log at shutdown"},
@@ -239,7 +244,9 @@ void MineApp::on_start() {
     t2d::SpriteBatch::Options batch_options;
     batch_options.color_format = renderer().color_format();
     batch_options.depth_format = renderer().depth_format();
-    batch_options.max_quads = 8192;
+    // The map pass alone can want 16k quads (sandbox_draw_range), plus grid lines, labels and the
+    // panel, so the batch is sized for the frame rather than for a screen of text.
+    batch_options.max_quads = 32768;
     batch_options.vertex_shader_path = shader_path("sprite.vert.spv");
     batch_options.fragment_shader_path = shader_path("sprite.frag.spv");
     batch_ = t2d::SpriteBatch::create(context, batch_options);
@@ -503,8 +510,8 @@ t2d::Aabb2 MineApp::sandbox_status_area() const {
     const f32 height = static_cast<f32>(renderer().height());
     const f32 padding = 8.0f * unit_;
     const f32 line = static_cast<f32>(body_px_) * 1.45f;
-    // Four label rows, the message and two hint lines.
-    const f32 status_height = std::min(height * 0.5f, padding * 2.0f + line * 8.0f);
+    // Five label rows, the message and two hint lines.
+    const f32 status_height = std::min(height * 0.5f, padding * 2.0f + line * 9.0f);
     return t2d::Aabb2{t2d::Vec2{0.0f, height - status_height}, t2d::Vec2{width, height}};
 }
 
@@ -529,7 +536,9 @@ void MineApp::fit_sandbox_view() {
     const f32 height = std::max(1.0f, area.max.y - area.min.y);
     const f32 cell = std::min(width / static_cast<f32>(sandbox_.width()),
                               height / static_cast<f32>(sandbox_.height()));
-    sandbox_.set_cell_px(std::floor(cell));
+    // Whole pixels while the cells are big enough to be seen one by one; below that the fraction is
+    // what makes a 512 cell map fit at all, and rounding it down would clamp to the minimum zoom.
+    sandbox_.set_cell_px(cell >= 1.0f ? std::floor(cell) : cell);
     sandbox_.center_view(t2d::Vec2{width, height});
     const t2d::Vec2 centered = sandbox_.origin();
     sandbox_.set_origin(t2d::Vec2{centered.x + area.min.x, centered.y + area.min.y});
@@ -546,7 +555,7 @@ void MineApp::open_sandbox() {
     sandbox_.set_content_paths(options_.content_paths);
     if (options_.content_paths.empty() && options_.pack_paths.empty() && options_.pack_directories.empty() &&
         options_.mod_directories.empty()) {
-        sandbox_.rebuild_palette(registry_);
+        sandbox_.rebind(registry_);
         set_status(locale_.text("sandbox.no.content"), true);
     } else {
         reload_content();
@@ -556,6 +565,11 @@ void MineApp::open_sandbox() {
     apply_fill();
     if (!options_.layout_path.empty()) load_layout();
     fit_sandbox_view();
+    // Where to look is decided last: a run that names a cell wants that cell, whatever the fit did.
+    if (options_.has_view) {
+        sandbox_.look_at(GridPos{static_cast<i32>(options_.view_cell.x), static_cast<i32>(options_.view_cell.y)},
+                         options_.view_zoom);
+    }
     T2D_INFO("sandbox: {}x{} map, {} tile layer(s), {} palette entries, {} cells filled", sandbox_.width(),
              sandbox_.height(), sandbox_.layer_count(), sandbox_.palette_count(), sandbox_.filled_cells());
 }
@@ -658,7 +672,7 @@ void MineApp::save_layout() {
         set_status(locale_.text("sandbox.no.path"), true);
         return;
     }
-    const std::vector<u8> bytes = sandbox_.serialize(registry_);
+    const std::vector<u8> bytes = sandbox_.serialize();
     if (!write_binary_file(options_.layout_path, t2d::ConstSpan<const u8>(bytes.data(), bytes.size()))) {
         set_status(format_localized(locale_.text("sandbox.save.failed"), options_.layout_path), true);
         return;
@@ -765,6 +779,27 @@ void MineApp::handle_sandbox_input() {
     }
 }
 
+MineApp::SandboxDrawRange MineApp::sandbox_draw_range() const {
+    SandboxDrawRange range;
+    // The camera already answers "which cells does the viewport touch" (t2d/core/camera2d.h): the
+    // sandbox never walks the map, only the part of it that is on screen.
+    const t2d::TileRect visible = sandbox_.visible_cells();
+    if (visible.empty()) return range;
+    range.x0 = std::max(visible.x, 0);
+    range.y0 = std::max(visible.y, 0);
+    range.x1 = std::min(visible.right() - 1, static_cast<i32>(sandbox_.width()) - 1);
+    range.y1 = std::min(visible.bottom() - 1, static_cast<i32>(sandbox_.height()) - 1);
+    if (range.x1 < range.x0 || range.y1 < range.y0) return range;
+    // One quad per cell while that stays inside the budget; past it, one quad per block of cells,
+    // sampled at the block's centre. Every layer draws the same range, so the budget is spent by the
+    // whole stack: eight layers of a zoomed out map are eight times the quads.
+    constexpr usize kMaxCellQuads = 16384;
+    const usize cells =
+        static_cast<usize>(range.x1 - range.x0 + 1) * static_cast<usize>(range.y1 - range.y0 + 1);
+    range.step = draw_step_for(cells, sandbox_.layer_count(), kMaxCellQuads);
+    return range;
+}
+
 MineApp::PaletteLayout MineApp::palette_layout() const {
     const t2d::Aabb2 panel = sandbox_panel_area();
     const f32 padding = 8.0f * unit_;
@@ -793,12 +828,10 @@ void MineApp::draw_sandbox_screen() {
 
     // --- the layer ---
     batch_->draw_rect(area, kPalette.grid_background);
-    const GridPos first = sandbox_.cell_at_screen(t2d::Vec2{area.min.x, area.min.y});
-    const GridPos last = sandbox_.cell_at_screen(t2d::Vec2{area.max.x - 1.0f, area.max.y - 1.0f});
-    const i32 x0 = std::max(first.x, 0);
-    const i32 y0 = std::max(first.y, 0);
-    const i32 x1 = std::min(last.x, static_cast<i32>(sandbox_.width()) - 1);
-    const i32 y1 = std::min(last.y, static_cast<i32>(sandbox_.height()) - 1);
+    const SandboxDrawRange range = sandbox_draw_range();
+    const i32 step = range.step;
+    const f32 span = cell * static_cast<f32>(step);
+    const i32 sample = step / 2;   // the cell in the middle of a block names the block
 
     // A label budget: a layer full of content would otherwise spend every quad the batch has on text.
     constexpr usize kMaxLabels = 320;
@@ -808,23 +841,23 @@ void MineApp::draw_sandbox_screen() {
     // a stack instead of a pile of unrelated colours.
     for (i32 layer = 0; layer < sandbox_.layer_count(); ++layer) {
         const bool active = layer == sandbox_.active_layer();
-        for (i32 y = y0; y <= y1; ++y) {
-            for (i32 x = x0; x <= x1; ++x) {
-                const GridPos pos{x, y};
-                const SandboxCell& value = sandbox_.cell(layer, pos);
+        for (i32 y = range.y0; y <= range.y1; y += step) {
+            for (i32 x = range.x0; x <= range.x1; x += step) {
+                const GridPos pos{std::min(x + sample, range.x1), std::min(y + sample, range.y1)};
+                const CellView value = sandbox_.cell(layer, pos);
                 if (value.empty()) continue;
-                const t2d::Vec2 at = sandbox_.screen_of_cell(pos);
-                const t2d::Aabb2 rect{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + cell, at.y + cell}};
+                const t2d::Vec2 at = sandbox_.screen_of_cell(GridPos{x, y});
+                const t2d::Aabb2 rect{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + span, at.y + span}};
                 const u32 colour = debug_color_for(value.name);
                 batch_->draw_rect(rect, dim_color(colour, active ? 0.45f : 0.20f));
                 if (value.missing()) batch_->draw_rect_outline(rect, 2.0f, kPalette.missing);
-                if (!active || cell < 12.0f || labels >= kMaxLabels) continue;
+                if (!active || step > 1 || cell < 12.0f || labels >= kMaxLabels) continue;
                 t2d::TextStyle style;
                 style.size_px = static_cast<u16>(std::clamp(cell * 0.5f, 9.0f, 16.0f));
                 style.color = value.missing() ? kPalette.missing : colour;
                 // The name when it fits, otherwise the id: on a small cell the number a save would
                 // store is the more useful label anyway.
-                std::string label = value.name;
+                std::string label{value.name};
                 if (text_->measure(label, fonts_, style).width > cell - 4.0f) {
                     label = std::format("#{}", value.id);
                     if (text_->measure(label, fonts_, style).width > cell - 4.0f) continue;
@@ -837,16 +870,20 @@ void MineApp::draw_sandbox_screen() {
         }
     }
 
-    // Grid lines span the whole area: one rect per column and per row instead of four per cell.
-    for (i32 x = x0; x <= x1 + 1; ++x) {
-        const f32 sx = sandbox_.screen_of_cell(GridPos{x, 0}).x;
-        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{sx, area.min.y}, t2d::Vec2{sx + 1.0f, area.max.y}},
-                          kPalette.grid_line);
-    }
-    for (i32 y = y0; y <= y1 + 1; ++y) {
-        const f32 sy = sandbox_.screen_of_cell(GridPos{0, y}).y;
-        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{area.min.x, sy}, t2d::Vec2{area.max.x, sy + 1.0f}},
-                          kPalette.grid_line);
+    // Grid lines span the whole area: one rect per column and per row instead of four per cell. Below
+    // four pixels per cell they would be denser than the screen, so a zoomed out map is drawn without
+    // them and reads as the picture it is.
+    if (step == 1 && cell >= 4.0f) {
+        for (i32 x = range.x0; x <= range.x1 + 1; ++x) {
+            const f32 sx = sandbox_.screen_of_cell(GridPos{x, 0}).x;
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{sx, area.min.y}, t2d::Vec2{sx + 1.0f, area.max.y}},
+                              kPalette.grid_line);
+        }
+        for (i32 y = range.y0; y <= range.y1 + 1; ++y) {
+            const f32 sy = sandbox_.screen_of_cell(GridPos{0, y}).y;
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{area.min.x, sy}, t2d::Vec2{area.max.x, sy + 1.0f}},
+                              kPalette.grid_line);
+        }
     }
     const t2d::Vec2 layer_at = sandbox_.screen_of_cell(GridPos{0, 0});
     batch_->draw_rect_outline(t2d::Aabb2{t2d::Vec2{layer_at.x, layer_at.y},
@@ -910,7 +947,7 @@ void MineApp::draw_sandbox_screen() {
     f32 label_width = 0.0f;
     for (const char* id : {"sandbox.cursor", "sandbox.cell", "sandbox.grid", "sandbox.filled", "sandbox.content",
                            "sandbox.layout", "sandbox.layer", "sandbox.layer.filled", "sandbox.mods",
-                           "sandbox.packs"}) {
+                           "sandbox.packs", "sandbox.view", "sandbox.cells"}) {
         label_width = std::max(label_width, text_->measure(locale_.text(id), fonts_, measure_style).width);
     }
     const f32 left = status.min.x + padding;
@@ -920,13 +957,14 @@ void MineApp::draw_sandbox_screen() {
 
     // The cell is reported as the whole stack at the cursor, topmost first: on a multi layer map
     // "what is here" is a list, not one tile.
-    const SandboxCell& under = sandbox_.cell(sandbox_.cursor());
+    const CellView under = sandbox_.cell(sandbox_.cursor());
     std::string cell_text;
     for (i32 layer = sandbox_.layer_count() - 1; layer >= 0; --layer) {
-        const SandboxCell& value = sandbox_.cell(layer, sandbox_.cursor());
+        const CellView value = sandbox_.cell(layer, sandbox_.cursor());
         if (value.empty()) continue;
         if (!cell_text.empty()) cell_text += " | ";
-        cell_text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.id, value.name);
+        cell_text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.shown_id(),
+                                 value.name);
         if (value.missing()) cell_text += std::string(" ") + std::string(locale_.text("sandbox.cell.missing"));
     }
     if (cell_text.empty()) cell_text = locale_.text("sandbox.cell.empty");
@@ -991,6 +1029,27 @@ void MineApp::draw_sandbox_screen() {
               loaded.clean() ? kPalette.text : kPalette.error, left_width);
     draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.mods"), mods_text, kPalette.text_dim,
               loaded.clean() ? kPalette.text : kPalette.error, right_width);
+    y += line;
+    // What the view costs and what the map costs: the two numbers that say whether a map of this
+    // size is actually being handled - the zoom the camera is at, how many cells are on screen, and
+    // how many bytes the cells occupy (a layer nobody painted on occupies none).
+    const t2d::TileRect visible = sandbox_.visible_cells();
+    std::string view_text = format_localized(locale_.text("sandbox.view.value"),
+                                             static_cast<t2d::f64>(sandbox_.cell_px()),
+                                             std::max(visible.width, 0), std::max(visible.height, 0));
+    // A frame that lost quads is not a frame to read a map off, so it says so on the line that
+    // describes the view. The count is the previous frame's: the panel is drawn before this frame's
+    // batches are submitted.
+    if (dropped_quads_ > 0) {
+        view_text += std::format("   {}", format_localized(locale_.text("sandbox.dropped"), dropped_quads_));
+    }
+    // Rounded up: a map that occupies 3840 bytes costs 4 KiB, not "0 KiB".
+    const std::string storage_text =
+        format_localized(locale_.text("sandbox.cells.value"), (sandbox_.cell_bytes() + 1023) / 1024);
+    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.view"), view_text, kPalette.text_dim,
+              kPalette.text, left_width);
+    draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.cells"), storage_text,
+              kPalette.text_dim, kPalette.text, right_width);
     y += line + 4.0f;
     if (!status_.empty()) {
         draw_fitted(left, y, body_px_, status_is_error_ ? kPalette.error : kPalette.warning, status_, full_width);
@@ -1002,30 +1061,27 @@ void MineApp::draw_sandbox_screen() {
 
 void MineApp::draw_sandbox_images() {
     if (image_atlas_ == nullptr || image_atlas_->count() == 0) return;
-    const t2d::Aabb2 area = sandbox_grid_area();
     const f32 cell = sandbox_.cell_px();
-    const GridPos first = sandbox_.cell_at_screen(t2d::Vec2{area.min.x, area.min.y});
-    const GridPos last = sandbox_.cell_at_screen(t2d::Vec2{area.max.x - 1.0f, area.max.y - 1.0f});
-    const i32 x0 = std::max(first.x, 0);
-    const i32 y0 = std::max(first.y, 0);
-    const i32 x1 = std::min(last.x, static_cast<i32>(sandbox_.width()) - 1);
-    const i32 y1 = std::min(last.y, static_cast<i32>(sandbox_.height()) - 1);
+    const SandboxDrawRange range = sandbox_draw_range();
+    const i32 step = range.step;
+    const f32 span = cell * static_cast<f32>(step);
+    const i32 sample = step / 2;
 
     // Bottom to top, like the panel pass, so a higher layer's art covers a lower one's. A layer the
     // brush is not on is dimmed here too, or the art would undo the dimming the colours got.
     for (i32 layer = 0; layer < sandbox_.layer_count(); ++layer) {
         const bool active = layer == sandbox_.active_layer();
-        for (i32 y = y0; y <= y1; ++y) {
-            for (i32 x = x0; x <= x1; ++x) {
-                const GridPos pos{x, y};
-                const SandboxCell& value = sandbox_.cell(layer, pos);
+        for (i32 y = range.y0; y <= range.y1; y += step) {
+            for (i32 x = range.x0; x <= range.x1; x += step) {
+                const GridPos pos{std::min(x + sample, range.x1), std::min(y + sample, range.y1)};
+                const CellView value = sandbox_.cell(layer, pos);
                 if (value.empty()) continue;
                 const std::string key = image_key(value.kind, value.name);
                 if (!image_atlas_->has(key)) continue;
-                const t2d::Vec2 at = sandbox_.screen_of_cell(pos);
-                const f32 inset = cell * 0.08f;
+                const t2d::Vec2 at = sandbox_.screen_of_cell(GridPos{x, y});
+                const f32 inset = span * 0.08f;
                 batch_->draw_quad(t2d::Aabb2{t2d::Vec2{at.x + inset, at.y + inset},
-                                             t2d::Vec2{at.x + cell - inset, at.y + cell - inset}},
+                                             t2d::Vec2{at.x + span - inset, at.y + span - inset}},
                                   image_atlas_->uv(key), active ? 0xFFFFFFFFu : 0x80FFFFFFu);
             }
         }
@@ -1072,6 +1128,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         case Screen::Sandbox: draw_sandbox_screen(); break;
     }
     batch_->end();
+    dropped_quads_ = batch_->dropped_quads();
 
     // Pack art is a second texture, so it is a second batch. It is worth it: a content entry that
     // ships a picture is drawn with it, which is what makes the sandbox a view of the real thing.
@@ -1079,6 +1136,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         batch_->begin(frame, view_projection, image_atlas_->texture(), image_sampler_->handle());
         draw_sandbox_images();
         batch_->end();
+        dropped_quads_ += batch_->dropped_quads();
     }
 
     frame.counters.draw_calls = batch_->draw_calls();
@@ -1092,7 +1150,7 @@ void MineApp::on_shutdown() {
         T2D_INFO("sandbox dump:\n{}", sandbox_.dump_text());
     }
     if (!options_.save_layout_path.empty() && options_.session.mode == Mode::Sandbox) {
-        const std::vector<u8> bytes = sandbox_.serialize(registry_);
+        const std::vector<u8> bytes = sandbox_.serialize();
         if (write_binary_file(options_.save_layout_path, t2d::ConstSpan<const u8>(bytes.data(), bytes.size()))) {
             T2D_INFO("sandbox: wrote {} bytes to '{}'", bytes.size(), options_.save_layout_path);
         } else {

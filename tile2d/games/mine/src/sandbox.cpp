@@ -14,18 +14,18 @@
 namespace mine {
 namespace {
 
-/// "MSB2": the layout format grew tile layers, and a blob from before that is refused rather than
-/// guessed at (it is a debug file, not a save).
+/// "MSB3": the layout format grew packed cells with a "gone" flag, and a blob from before that is
+/// refused rather than guessed at (it is a debug file, not a save).
 constexpr u32 kLayoutMagic = 0x3242534Du;
-constexpr u8 kLayoutVersion = 2;
+constexpr u8 kLayoutVersion = 3;
 /// A kind byte of 0xFF means "this cell is empty" - a value no ContentKind can take.
 constexpr u8 kEmptyKindByte = 0xFFu;
+/// A cell whose content is gone is written with this bit set on its kind byte.
+constexpr u8 kMissingKindBit = 0x80u;
 
 /// The cell an out of range lookup returns. Empty, so a caller that forgot inside() draws nothing
 /// instead of reading past the grid.
-const SandboxCell kNoCell{};
-
-[[nodiscard]] i32 floor_to_i32(f32 value) { return static_cast<i32>(std::floor(value)); }
+const CellView kNoCell{};
 
 /// FNV-1a: stable across runs and platforms, which is the whole point (a cell must not change colour
 /// because the process restarted).
@@ -62,12 +62,31 @@ struct Rgb {
     return Rgb{to_byte(r + m), to_byte(g + m), to_byte(b + m)};
 }
 
+/// Adds \p entry to \p table unless the table already names that id or that name. A table that
+/// repeats either one cannot be translated unambiguously, and ContentTable::deserialize refuses it.
+void add_unique(ContentTable& table, const ContentEntry& entry) {
+    if (entry.id == kNoContent || entry.name.empty()) return;
+    if (table.find(entry.kind, entry.id) != nullptr) return;
+    if (table.find_id(entry.kind, entry.name) != kNoContent) return;
+    table.entries.push_back(entry);
+}
+
 } // namespace
 
 bool is_placeable_kind(ContentKind kind) {
     // The kinds whose instances occupy a tile. Extending this is a one line change the moment the
     // designer says what else sits on the map (a submit channel, for instance).
     return kind == ContentKind::Structure || kind == ContentKind::Machine;
+}
+
+i32 draw_step_for(usize visible_cells, i32 layers, usize max_quads) {
+    const usize layer_count = static_cast<usize>(std::max(layers, 1));
+    if (max_quads == 0) return 1;
+    const usize quads = visible_cells * layer_count;
+    if (quads <= max_quads) return 1;
+    const auto step = static_cast<i32>(std::ceil(std::sqrt(static_cast<t2d::f64>(quads) /
+                                                          static_cast<t2d::f64>(max_quads))));
+    return std::max(step, 1);
 }
 
 u32 debug_color_for(std::string_view name) {
@@ -82,101 +101,72 @@ u32 debug_color_for(std::string_view name) {
            static_cast<u32>(rgb.r);
 }
 
-SandboxModel::SandboxModel(u32 width, u32 height, i32 layers) {
-    width_ = std::clamp(width, 1u, kMaxDimension);
-    height_ = std::clamp(height, 1u, kMaxDimension);
-    layers_ = std::clamp(layers, 1, kMaxLayers);
-    active_layer_ = 0;
-    cells_.assign(static_cast<usize>(width_) * height_ * static_cast<usize>(layers_), SandboxCell{});
+SandboxModel::SandboxModel(u32 width, u32 height, i32 layers)
+    : cells_(std::clamp(width, 1u, kMaxDimension), std::clamp(height, 1u, kMaxDimension),
+             std::clamp(layers, 1, kMaxLayers)) {
+    // The zoom range of the camera, in pixels per cell: close enough to read a name on a cell, far
+    // enough out that a 1024 cell map fits a small window.
+    camera_.set_zoom_limits(kMinCellPx, kMaxCellPx);
+    camera_.set_zoom(24.0f);
 }
 
-bool SandboxModel::inside(GridPos pos) const {
-    return pos.x >= 0 && pos.y >= 0 && static_cast<u32>(pos.x) < width_ && static_cast<u32>(pos.y) < height_;
-}
+// ------------------------------------------------------------------- the map ---
 
-const SandboxCell& SandboxModel::cell(GridPos pos) const {
+CellView SandboxModel::cell(GridPos pos) const {
     if (!inside(pos)) return kNoCell;
     // Topmost first: what the screen shows at this cell is what the inspector has to report.
-    for (i32 layer = layers_ - 1; layer >= 0; --layer) {
-        const SandboxCell& value = cells_[index(layer, pos)];
-        if (!value.empty()) return value;
+    for (i32 layer = layer_count() - 1; layer >= 0; --layer) {
+        const ContentRef ref = cells_.at(layer, pos);
+        if (!ref.empty()) return CellView{ref.kind, ref.id, ref.stale, name_of(ref)};
     }
-    return cells_[index(active_layer_, pos)];
+    return kNoCell;
 }
 
-const SandboxCell& SandboxModel::cell(i32 layer, GridPos pos) const {
-    if (!inside(pos) || layer < 0 || layer >= layers_) return kNoCell;
-    return cells_[index(layer, pos)];
+CellView SandboxModel::cell(i32 layer, GridPos pos) const {
+    if (!inside(pos) || layer < 0 || layer >= layer_count()) return kNoCell;
+    const ContentRef ref = cells_.at(layer, pos);
+    return CellView{ref.kind, ref.id, ref.stale, name_of(ref)};
 }
 
-void SandboxModel::set_cell(GridPos pos, const SandboxCell& value) { set_cell(active_layer_, pos, value); }
-
-void SandboxModel::set_cell(i32 layer, GridPos pos, const SandboxCell& value) {
-    if (!inside(pos) || layer < 0 || layer >= layers_) return;
-    cells_[index(layer, pos)] = value;
+std::string_view SandboxModel::name_of(ContentRef ref) const {
+    if (ref.empty()) return {};
+    // A cell that is still there is named by the table in force; a cell whose content went missing by
+    // the table it went missing from. The two are never mixed: the id of a missing cell may well have
+    // been handed to something else since, and naming it after that would be a lie.
+    const ContentTable& table = ref.stale ? retired_ : table_;
+    if (const ContentEntry* entry = table.find(ref.kind, ref.id); entry != nullptr) return entry->name;
+    return {};
 }
 
-void SandboxModel::clear_cells() { cells_.assign(cells_.size(), SandboxCell{}); }
+void SandboxModel::set_cell(GridPos pos, ContentRef value) { set_cell(active_layer_, pos, value); }
 
-void SandboxModel::clear_layer(i32 layer) {
-    if (layer < 0 || layer >= layers_) return;
-    for (u32 y = 0; y < height_; ++y) {
-        for (u32 x = 0; x < width_; ++x) {
-            cells_[index(layer, GridPos{static_cast<i32>(x), static_cast<i32>(y)})] = SandboxCell{};
-        }
-    }
-}
+void SandboxModel::set_cell(i32 layer, GridPos pos, ContentRef value) { cells_.set(layer, pos, value); }
 
-usize SandboxModel::filled_cells() const {
-    usize filled = 0;
-    for (const SandboxCell& value : cells_) {
-        if (!value.empty()) ++filled;
-    }
-    return filled;
-}
+void SandboxModel::clear_cells() { cells_.clear(); }
 
-usize SandboxModel::filled_cells(i32 layer) const {
-    if (layer < 0 || layer >= layers_) return 0;
-    usize filled = 0;
-    for (u32 y = 0; y < height_; ++y) {
-        for (u32 x = 0; x < width_; ++x) {
-            if (!cells_[index(layer, GridPos{static_cast<i32>(x), static_cast<i32>(y)})].empty()) ++filled;
-        }
-    }
-    return filled;
+void SandboxModel::clear_layer(i32 layer) { cells_.clear_layer(layer); }
+
+usize SandboxModel::filled_cells() const { return cells_.filled(); }
+
+usize SandboxModel::filled_cells(i32 layer) const { return cells_.filled(layer); }
+
+void SandboxModel::resize(u32 width, u32 height) {
+    cells_.resize(width, height);
+    set_cursor(cursor_);
 }
 
 void SandboxModel::set_active_layer(i32 layer) {
-    if (layers_ <= 0) {
+    const i32 layers = layer_count();
+    if (layers <= 0) {
         active_layer_ = 0;
         return;
     }
-    active_layer_ = ((layer % layers_) + layers_) % layers_;   // wrap: a key press walks the stack
+    active_layer_ = ((layer % layers) + layers) % layers;   // wrap: a key press walks the stack
 }
 
 void SandboxModel::cycle_layer(i32 delta) { set_active_layer(active_layer_ + delta); }
 
-void SandboxModel::resize(u32 width, u32 height) {
-    const u32 new_width = std::clamp(width, 1u, kMaxDimension);
-    const u32 new_height = std::clamp(height, 1u, kMaxDimension);
-    std::vector<SandboxCell> resized(static_cast<usize>(new_width) * new_height * static_cast<usize>(layers_),
-                                     SandboxCell{});
-    const u32 keep_x = std::min(new_width, width_);
-    const u32 keep_y = std::min(new_height, height_);
-    for (i32 layer = 0; layer < layers_; ++layer) {
-        for (u32 y = 0; y < keep_y; ++y) {
-            for (u32 x = 0; x < keep_x; ++x) {
-                const GridPos pos{static_cast<i32>(x), static_cast<i32>(y)};
-                resized[static_cast<usize>(layer) * new_width * new_height + static_cast<usize>(y) * new_width + x] =
-                    cells_[index(layer, pos)];
-            }
-        }
-    }
-    width_ = new_width;
-    height_ = new_height;
-    cells_ = std::move(resized);
-    set_cursor(cursor_);
-}
+// ------------------------------------------------------------------- palette ---
 
 usize SandboxModel::rebuild_palette(const ContentRegistry& registry) {
     // The selection survives a reload when it still points at the same content: re-registering a file
@@ -239,9 +229,11 @@ const PaletteEntry* SandboxModel::selected_entry() const {
     return &palette_[selected_];
 }
 
+// ------------------------------------------------------------ cursor and brush ---
+
 void SandboxModel::set_cursor(GridPos pos) {
-    cursor_.x = t2d::clamp_i32(pos.x, 0, static_cast<i32>(width_) - 1);
-    cursor_.y = t2d::clamp_i32(pos.y, 0, static_cast<i32>(height_) - 1);
+    cursor_.x = t2d::clamp_i32(pos.x, 0, static_cast<i32>(width()) - 1);
+    cursor_.y = t2d::clamp_i32(pos.y, 0, static_cast<i32>(height()) - 1);
 }
 
 void SandboxModel::move_cursor(i32 dx, i32 dy) { set_cursor(GridPos{cursor_.x + dx, cursor_.y + dy}); }
@@ -249,71 +241,72 @@ void SandboxModel::move_cursor(i32 dx, i32 dy) { set_cursor(GridPos{cursor_.x + 
 bool SandboxModel::paint() {
     const PaletteEntry* entry = selected_entry();
     if (entry == nullptr) return false;
-    const SandboxCell& existing = cell(active_layer_, cursor_);
-    if (!existing.empty() && existing.kind == entry->kind && existing.id == entry->id &&
-        existing.name == entry->name) {
-        return false;
-    }
-    set_cell(active_layer_, cursor_, SandboxCell{entry->kind, entry->id, entry->name});
+    const ContentRef existing = cells_.at(active_layer_, cursor_);
+    if (existing.kind == entry->kind && existing.id == entry->id && !existing.stale) return false;
+    set_cell(active_layer_, cursor_, ContentRef{entry->kind, entry->id, false});
     return true;
 }
 
 bool SandboxModel::erase() {
     // Topmost first: what is visible at the cursor is what gets deleted, whichever layer holds it.
-    for (i32 layer = layers_ - 1; layer >= 0; --layer) {
-        if (cells_[index(layer, cursor_)].empty()) continue;
-        cells_[index(layer, cursor_)] = SandboxCell{};
+    for (i32 layer = layer_count() - 1; layer >= 0; --layer) {
+        if (cells_.at(layer, cursor_).empty()) continue;
+        cells_.set(layer, cursor_, ContentRef{});
         return true;
     }
     return false;
 }
 
-void SandboxModel::set_cell_px(f32 pixels) { cell_px_ = std::clamp(pixels, 2.0f, 512.0f); }
+// -------------------------------------------------------------------- camera ---
 
-void SandboxModel::zoom_at(Vec2 anchor, f32 factor) {
-    const f32 before = cell_px_;
-    set_cell_px(cell_px_ * factor);
-    if (before == cell_px_) return;
-    // The point under the cursor stays where it is: solve origin from anchor = origin + cells * cell_px.
-    const Vec2 cells{(anchor.x - origin_.x) / before, (anchor.y - origin_.y) / before};
-    origin_ = Vec2{anchor.x - cells.x * cell_px_, anchor.y - cells.y * cell_px_};
+void SandboxModel::set_cell_px(f32 pixels) { camera_.set_zoom(pixels); }
+
+void SandboxModel::set_origin(Vec2 origin) {
+    // Solved from screen_of(): the screen position of cell (0, 0) is what a caller wants to place.
+    camera_.set_centre((camera_.viewport_centre() - origin) / camera_.zoom());
 }
 
 GridPos SandboxModel::cell_at_screen(Vec2 point) const {
-    return GridPos{floor_to_i32((point.x - origin_.x) / cell_px_),
-                   floor_to_i32((point.y - origin_.y) / cell_px_)};
+    const Vec2 world = camera_.world_of(point);
+    return GridPos{t2d::floor_to_i32(world.x), t2d::floor_to_i32(world.y)};
 }
 
 Vec2 SandboxModel::screen_of_cell(GridPos cell_position) const {
-    return Vec2{origin_.x + static_cast<f32>(cell_position.x) * cell_px_,
-                origin_.y + static_cast<f32>(cell_position.y) * cell_px_};
+    return camera_.screen_of(Vec2{static_cast<f32>(cell_position.x), static_cast<f32>(cell_position.y)});
 }
 
 void SandboxModel::center_view(Vec2 viewport) {
-    origin_ = Vec2{(viewport.x - static_cast<f32>(width_) * cell_px_) * 0.5f,
-                   (viewport.y - static_cast<f32>(height_) * cell_px_) * 0.5f};
+    camera_.set_viewport(viewport);
+    camera_.look_at(Vec2{static_cast<f32>(width()) * 0.5f, static_cast<f32>(height()) * 0.5f});
+}
+
+void SandboxModel::look_at(GridPos cell, f32 pixels_per_cell) {
+    if (pixels_per_cell > 0.0f) set_cell_px(pixels_per_cell);
+    // The middle of the cell, not its corner: the cell is what the caller wants to look at.
+    camera_.look_at(Vec2{static_cast<f32>(cell.x) + 0.5f, static_cast<f32>(cell.y) + 0.5f});
 }
 
 void SandboxModel::scroll_to_show(GridPos cell_position, Vec2 viewport) {
-    const f32 margin = cell_px_;
-    const Vec2 top_left = screen_of_cell(cell_position);
-    const Vec2 bottom_right{top_left.x + cell_px_, top_left.y + cell_px_};
-    if (top_left.x < margin) origin_.x += margin - top_left.x;
-    else if (bottom_right.x > viewport.x - margin) origin_.x -= bottom_right.x - (viewport.x - margin);
-    if (top_left.y < margin) origin_.y += margin - top_left.y;
-    else if (bottom_right.y > viewport.y - margin) origin_.y -= bottom_right.y - (viewport.y - margin);
+    camera_.set_viewport(viewport);
+    const f32 x = static_cast<f32>(cell_position.x);
+    const f32 y = static_cast<f32>(cell_position.y);
+    // One cell of margin, so a cursor that is walked with the arrow keys does not end up glued to the
+    // edge of the screen.
+    camera_.scroll_to_show(t2d::Aabb2{Vec2{x, y}, Vec2{x + 1.0f, y + 1.0f}}, camera_.zoom());
 }
+
+// --------------------------------------------------------------------- fills ---
 
 void SandboxModel::fill_bands() {
     clear_layer(active_layer_);
     if (palette_.empty()) return;
     const usize count = palette_.size();
-    for (u32 y = 0; y < height_; ++y) {
-        const usize band = std::min(count - 1, static_cast<usize>(y) * count / height_);
-        for (u32 x = 0; x < width_; ++x) {
-            const PaletteEntry& entry = palette_[band];
+    for (u32 y = 0; y < height(); ++y) {
+        const usize band = std::min(count - 1, static_cast<usize>(y) * count / height());
+        const PaletteEntry& entry = palette_[band];
+        for (u32 x = 0; x < width(); ++x) {
             set_cell(GridPos{static_cast<i32>(x), static_cast<i32>(y)},
-                     SandboxCell{entry.kind, entry.id, entry.name});
+                     ContentRef{entry.kind, entry.id, false});
         }
     }
 }
@@ -323,15 +316,17 @@ void SandboxModel::fill_scatter(u64 seed, u32 percent) {
     if (palette_.empty()) return;
     t2d::Rng rng(seed);
     const u32 chance = std::min(percent, 100u);
-    for (u32 y = 0; y < height_; ++y) {
-        for (u32 x = 0; x < width_; ++x) {
+    for (u32 y = 0; y < height(); ++y) {
+        for (u32 x = 0; x < width(); ++x) {
             if (rng.next_bounded(100) >= chance) continue;
             const PaletteEntry& entry = palette_[rng.next_bounded(static_cast<u32>(palette_.size()))];
             set_cell(GridPos{static_cast<i32>(x), static_cast<i32>(y)},
-                     SandboxCell{entry.kind, entry.id, entry.name});
+                     ContentRef{entry.kind, entry.id, false});
         }
     }
 }
+
+// ------------------------------------------------------- reloading by name ---
 
 SandboxReloadReport SandboxModel::reload(ContentRegistry& registry, const std::vector<std::string>& paths) {
     std::vector<std::string> texts;
@@ -401,45 +396,83 @@ SandboxReloadReport SandboxModel::reload_texts(ContentRegistry& registry,
     return report;
 }
 
+void SandboxModel::remember_missing(ContentKind kind, ContentId id, std::string_view name) {
+    add_unique(retired_, ContentEntry{kind, id, std::string(name)});
+}
+
 SandboxReloadReport SandboxModel::rebind(const ContentRegistry& registry) {
     SandboxReloadReport report;
     // Re-point every placed cell at its content by name. This is the step that makes reloading safe:
     // inserting an entry in the middle of a file shifts every id after it, and without this the map
     // would quietly turn one structure into another.
-    for (SandboxCell& value : cells_) {
-        if (value.empty()) continue;
-        const ContentId current = registry.find(value.kind, value.name);
-        if (current == kNoContent) {
-            value.id = kNoContent;
-            ++report.lost_cells;
-            continue;
-        }
-        if (current != value.id) ++report.remapped_cells;
-        value.id = current;
+    const ContentRemap remap = ContentRemap::build(table_, registry);
+    for (i32 layer = 0; layer < layer_count(); ++layer) {
+        cells_.for_each(layer, [&](GridPos pos, ContentRef& ref) {
+            (void)pos;
+            if (ref.empty()) return;
+            if (ref.stale) {
+                // A missing cell is matched by the name it was placed under, not by its number: that
+                // number may have been handed to something else since, and turning one structure into
+                // another is the one thing this pass exists to prevent.
+                const ContentEntry* retired = retired_.find(ref.kind, ref.id);
+                const ContentId current =
+                    retired != nullptr ? registry.find(ref.kind, retired->name) : kNoContent;
+                if (current == kNoContent) return;   // still gone, and still reported as missing
+                ref.id = current;
+                ref.stale = false;
+                ++report.remapped_cells;
+                return;
+            }
+            const ContentId current = remap.to_current(ref.kind, ref.id);
+            if (current == kNoContent) {
+                // The name comes from the table the cell was placed under, so it survives the registry
+                // that dropped it.
+                remember_missing(ref.kind, ref.id, name_of(ref));
+                ref.stale = true;
+                ++report.lost_cells;
+                return;
+            }
+            if (current != ref.id) ++report.remapped_cells;
+            ref.id = current;
+        });
     }
+    table_ = registry.table();
     report.palette_size = rebuild_palette(registry);
     return report;
 }
 
-std::vector<u8> SandboxModel::serialize(const ContentRegistry& registry) const {
+// ------------------------------------------------------------- save and load ---
+
+ContentTable SandboxModel::save_table() const {
+    // The table in force names everything that is still there; the retired names are added on top so a
+    // saved layout can still say what a lost cell used to be.
+    ContentTable table = table_;
+    for (const ContentEntry& entry : retired_.entries) add_unique(table, entry);
+    return table;
+}
+
+std::vector<u8> SandboxModel::serialize() const {
     std::vector<u8> out;
     t2d::ByteWriter writer(out);
     writer.write_u32(kLayoutMagic);
     writer.write_u8(kLayoutVersion);
-    writer.write_varint(width_);
-    writer.write_varint(height_);
-    writer.write_varint(static_cast<u32>(layers_));
-    writer.write_varint(width_ * height_);
-    // cells_ is layer major, so this writes every layer bottom to top in one pass.
-    for (const SandboxCell& value : cells_) {
-        if (value.empty()) {
-            writer.write_u8(kEmptyKindByte);
-            continue;
-        }
-        writer.write_u8(static_cast<u8>(value.kind));
-        writer.write_varint(value.id);
+    writer.write_varint(width());
+    writer.write_varint(height());
+    writer.write_varint(static_cast<u32>(layer_count()));
+    writer.write_varint(width() * height());
+    // Layer major, row major inside a layer: the same order the grid stores.
+    for (i32 layer = 0; layer < layer_count(); ++layer) {
+        cells_.for_each(layer, [&](GridPos pos, const ContentRef& ref) {
+            (void)pos;
+            if (ref.empty()) {
+                writer.write_u8(kEmptyKindByte);
+                return;
+            }
+            writer.write_u8(static_cast<u8>(ref.kind) | (ref.stale ? kMissingKindBit : 0u));
+            writer.write_varint(ref.id);
+        });
     }
-    const std::vector<u8> table = registry.table().serialize();
+    const std::vector<u8> table = save_table().serialize();
     writer.write_varint(static_cast<u32>(table.size()));
     writer.write_bytes(t2d::ConstSpan<const u8>(table.data(), table.size()));
     return out;
@@ -478,28 +511,28 @@ SandboxLoadReport SandboxModel::deserialize(t2d::ConstSpan<const u8> data, const
 
     // Read everything into locals: a file that turns out to be corrupt half way through must leave the
     // map exactly as it was.
-    const u64 total = static_cast<u64>(count) * layers;
-    std::vector<SandboxCell> loaded(static_cast<usize>(total));
+    ContentGrid loaded(width, height, static_cast<i32>(layers));
     usize unknown_kind = 0;
-    for (u64 cell_index = 0; cell_index < total; ++cell_index) {
-        const u32 layer = static_cast<u32>(cell_index / count);
-        const u32 within = static_cast<u32>(cell_index % count);
-        const u8 kind_byte = reader.read_u8();
-        if (kind_byte == kEmptyKindByte) continue;
-        if (!reader.ok() || kind_byte >= static_cast<u8>(ContentKind::Count)) {
-            report.error = std::format("layer {} cell {} has an unknown kind {}", layer, within, kind_byte);
-            return report;
+    for (u32 layer = 0; layer < layers; ++layer) {
+        for (u32 within = 0; within < count; ++within) {
+            const u8 kind_byte = reader.read_u8();
+            if (kind_byte == kEmptyKindByte) continue;
+            const u8 kind_value = kind_byte & ~kMissingKindBit;
+            if (!reader.ok() || kind_value >= static_cast<u8>(ContentKind::Count)) {
+                report.error = std::format("layer {} cell {} has an unknown kind {}", layer, within, kind_value);
+                return report;
+            }
+            const ContentId id = reader.read_varint();
+            if (!reader.ok()) {
+                report.error = std::format("layer {} cell {} is truncated", layer, within);
+                return report;
+            }
+            const ContentKind kind = static_cast<ContentKind>(kind_value);
+            if (!is_placeable_kind(kind)) ++unknown_kind;
+            loaded.set(static_cast<i32>(layer),
+                       GridPos{static_cast<i32>(within % width), static_cast<i32>(within / width)},
+                       ContentRef{kind, id, (kind_byte & kMissingKindBit) != 0});
         }
-        const ContentId id = reader.read_varint();
-        if (!reader.ok()) {
-            report.error = std::format("layer {} cell {} is truncated", layer, within);
-            return report;
-        }
-        SandboxCell value;
-        value.kind = static_cast<ContentKind>(kind_byte);
-        if (!is_placeable_kind(value.kind)) ++unknown_kind;
-        value.id = id;
-        loaded[static_cast<usize>(cell_index)] = value;
     }
 
     const u32 table_size = reader.read_varint();
@@ -519,26 +552,37 @@ SandboxLoadReport SandboxModel::deserialize(t2d::ConstSpan<const u8> data, const
     }
 
     // Translate the saved ids into the running registry's ids, by name (registry.h). Content that is
-    // gone keeps its name and gets id 0: the screen can then say what used to be there.
+    // gone keeps its id and is marked missing, so the screen can still say what used to be there.
     const ContentRemap remap = ContentRemap::build(saved, registry);
+    ContentTable retired;
     usize translated = 0;
     usize missing = 0;
-    for (SandboxCell& value : loaded) {
-        if (value.empty()) continue;
-        const ContentEntry* entry = saved.find(value.kind, value.id);
-        if (entry != nullptr) value.name = entry->name;
-        value.id = remap.to_current(value.kind, value.id);
-        if (value.id == kNoContent) ++missing;
-        else ++translated;
+    for (i32 layer = 0; layer < loaded.layer_count(); ++layer) {
+        loaded.for_each(layer, [&](GridPos pos, ContentRef& ref) {
+            (void)pos;
+            if (ref.empty()) return;
+            const ContentId current = remap.to_current(ref.kind, ref.id);
+            if (current != kNoContent) {
+                ref.id = current;
+                ref.stale = false;
+                ++translated;
+                return;
+            }
+            ref.stale = true;
+            ++missing;
+            if (const ContentEntry* entry = saved.find(ref.kind, ref.id); entry != nullptr) {
+                add_unique(retired, *entry);
+            }
+        });
     }
 
-    width_ = width;
-    height_ = height;
-    layers_ = static_cast<i32>(layers);
-    active_layer_ = 0;
     cells_ = std::move(loaded);
+    active_layer_ = 0;
     set_cursor(cursor_);
-    // A loaded layer is ready to paint on: the palette comes from the registry that translated it.
+    // The cells now hold the running registry's ids, so its table is the one in force; the names of
+    // what the save lost are kept beside it.
+    table_ = registry.table();
+    retired_ = std::move(retired);
     rebuild_palette(registry);
 
     report.ok = true;
@@ -549,9 +593,11 @@ SandboxLoadReport SandboxModel::deserialize(t2d::ConstSpan<const u8> data, const
 }
 
 std::string SandboxModel::dump_text() const {
-    const usize cells_per_layer = static_cast<usize>(width_) * height_;
-    std::string text = std::format("sandbox map {}x{}, {} tile layer(s), {} of {} cells filled\n", width_,
-                                   height_, layers_, filled_cells(), cells_per_layer * layers_);
+    const usize cells_per_layer = static_cast<usize>(width()) * height();
+    std::string text = std::format("sandbox map {}x{}, {} tile layer(s), {} of {} cells filled, {} KiB\n",
+                                   width(), height(), layer_count(), filled_cells(),
+                                   cells_per_layer * static_cast<usize>(layer_count()),
+                                   cell_bytes() / 1024);
     if (content_paths_.empty()) {
         text += "content: none\n";
     } else {
@@ -564,16 +610,13 @@ std::string SandboxModel::dump_text() const {
         text += std::format("  [{}] {} #{} {}\n", index, content_kind_name(palette_[index].kind),
                             palette_[index].id, palette_[index].name);
     }
-    for (i32 layer = 0; layer < layers_; ++layer) {
-        for (u32 y = 0; y < height_; ++y) {
-            for (u32 x = 0; x < width_; ++x) {
-                const SandboxCell& value =
-                    cells_[index(layer, GridPos{static_cast<i32>(x), static_cast<i32>(y)})];
-                if (value.empty()) continue;
-                text += std::format("  L{} {},{} {} #{} {}{}\n", layer, x, y, content_kind_name(value.kind),
-                                    value.id, value.name, value.missing() ? " (missing)" : "");
-            }
-        }
+    for (i32 layer = 0; layer < layer_count(); ++layer) {
+        cells_.for_each(layer, [&](GridPos pos, const ContentRef& ref) {
+            if (ref.empty()) return;
+            const CellView view{ref.kind, ref.id, ref.stale, name_of(ref)};
+            text += std::format("  L{} {},{} {} #{} {}{}\n", layer, pos.x, pos.y, content_kind_name(ref.kind),
+                                view.shown_id(), view.name, view.missing() ? " (missing)" : "");
+        });
     }
     return text;
 }

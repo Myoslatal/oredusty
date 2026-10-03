@@ -70,6 +70,21 @@ int main(int argc, char** argv) {
         std::error_code code;
         if (std::filesystem::is_directory("packs", code)) options.pack_directories.push_back("packs");
     }
+    if (const auto view = cli.value("view"); view.has_value()) {
+        const std::size_t first = view->find(',');
+        const std::size_t second = first == std::string::npos ? std::string::npos : view->find(',', first + 1);
+        if (first == std::string::npos) {
+            T2D_ERROR("--view wants x,y or x,y,zoom, got '{}'", *view);
+            return 1;
+        }
+        const std::string y_text = view->substr(first + 1, second == std::string::npos ? second : second - first - 1);
+        options.view_cell.x = static_cast<mine::f32>(std::strtof(view->substr(0, first).c_str(), nullptr));
+        options.view_cell.y = static_cast<mine::f32>(std::strtof(y_text.c_str(), nullptr));
+        if (second != std::string::npos) {
+            options.view_zoom = static_cast<mine::f32>(std::strtof(view->substr(second + 1).c_str(), nullptr));
+        }
+        options.has_view = true;
+    }
     if (const auto layout = cli.value("layout"); layout.has_value()) options.layout_path = *layout;
     if (const auto save = cli.value("save-layout"); save.has_value()) options.save_layout_path = *save;
     if (const auto dump = cli.bool_value("dump-layer"); dump.has_value()) options.dump_layer = *dump;

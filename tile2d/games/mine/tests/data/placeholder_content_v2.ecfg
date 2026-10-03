@@ -1,0 +1,20 @@
+# A placeholder content file for the sandbox: NOT game content.
+#
+# The names below are invented so the tool itself can be verified. The real resource, structure and
+# machine tables come from the designer (docs/GAME_DESIGN.md section 7). What is under a name is the
+# designer's to define - the engine only reads the names, and the ids it hands out in file order.
+item::
+    placeholder_item::
+        note:"items are referenced by cells, they never sit on one"
+structure::
+    placeholder_new::
+    placeholder_wall::
+        solid:true
+    placeholder_floor::
+    placeholder_ore::
+        yield:3
+machine::
+    placeholder_drill::
+        power:10
+    placeholder_belt::
+        speed:2

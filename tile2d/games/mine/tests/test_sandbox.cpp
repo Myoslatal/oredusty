@@ -66,7 +66,7 @@ void paint_named(SandboxModel& model, GridPos pos, ContentKind kind, std::string
                  const ContentRegistry& registry) {
     const ContentId id = registry.find(kind, name);
     T2D_REQUIRE(id != kNoContent);
-    model.set_cell(pos, SandboxCell{kind, id, std::string(name)});
+    model.set_cell(pos, ContentRef{kind, id, false});
 }
 
 } // namespace
@@ -108,7 +108,7 @@ T2D_TEST(the_palette_is_the_registered_content_that_can_sit_on_a_tile) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model;
-    T2D_CHECK_EQ(model.rebuild_palette(registry), 3u);
+    T2D_CHECK_EQ(model.rebind(registry).palette_size, 3u);
     T2D_CHECK_EQ(model.palette_count(), 3u);
     T2D_CHECK_EQ(model.palette(0).name, std::string("sample_a"));
     T2D_CHECK_EQ(model.palette(0).kind, ContentKind::Structure);
@@ -121,7 +121,7 @@ T2D_TEST(the_palette_is_the_registered_content_that_can_sit_on_a_tile) {
     // An empty registry leaves the palette empty and the accessors safe.
     ContentRegistry empty;
     SandboxModel bare;
-    T2D_CHECK_EQ(bare.rebuild_palette(empty), 0u);
+    T2D_CHECK_EQ(bare.rebind(empty).palette_size, 0u);
     T2D_CHECK(bare.selected_entry() == nullptr);
     T2D_CHECK_FALSE(bare.paint());
     T2D_CHECK_EQ(bare.palette(7).name, std::string{});
@@ -131,7 +131,7 @@ T2D_TEST(painting_places_the_selected_entry_and_erasing_takes_it_away) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(4, 4);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     model.set_cursor(GridPos{2, 1});
 
     T2D_CHECK(model.paint());
@@ -164,7 +164,7 @@ T2D_TEST(the_palette_selection_wraps_and_its_window_follows_it) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model;
-    model.rebuild_palette(registry);
+    model.rebind(registry);
 
     T2D_CHECK_EQ(model.selected_palette(), 0u);
     model.cycle_palette(-1);
@@ -210,7 +210,7 @@ T2D_TEST(screen_and_cell_coordinates_are_inverse_and_zoom_keeps_the_anchor) {
     T2D_CHECK_EQ(model.cell_at_screen(anchor), under_anchor);
     // The zoom is clamped, and a zoom that changes nothing must not move the layer either.
     model.zoom_at(anchor, 0.0001f);
-    T2D_CHECK_NEAR(model.cell_px(), 2.0f, 0.001f);
+    T2D_CHECK_NEAR(model.cell_px(), SandboxModel::kMinCellPx, 0.001f);
     const t2d::Vec2 origin_before = model.origin();
     model.zoom_at(anchor, 1.0f);
     T2D_CHECK_NEAR(model.origin().x, origin_before.x, 0.001f);
@@ -250,7 +250,7 @@ T2D_TEST(a_reload_repoints_painted_cells_by_name_when_ids_move) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(8, 8);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     T2D_CHECK_EQ(registry.find(ContentKind::Structure, "sample_a"), 1u);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);
     paint_named(model, GridPos{2, 2}, ContentKind::Structure, "sample_b", registry);
@@ -287,7 +287,7 @@ T2D_TEST(a_reload_reports_content_that_is_gone_and_never_reuses_its_id) {
     ContentRegistry registry;
     load(registry, kContentV2);
     SandboxModel model(8, 8);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_b", registry);
 
     const SandboxReloadReport report = model.reload_texts(registry, {kContentV3}, {"v3.ecfg"});
@@ -297,9 +297,8 @@ T2D_TEST(a_reload_reports_content_that_is_gone_and_never_reuses_its_id) {
     T2D_CHECK_EQ(report.lost_cells, 1u);
     T2D_CHECK_EQ(report.added, 0u);
 
-    const SandboxCell& cell = model.cell(GridPos{1, 1});
+    const CellView cell = model.cell(GridPos{1, 1});
     T2D_CHECK(cell.missing());
-    T2D_CHECK_EQ(cell.id, kNoContent);
     // The name survives: "this was sample_b and the file no longer has it" is the useful message.
     T2D_CHECK_EQ(cell.name, std::string("sample_b"));
     // And the id it used to hold is not handed to whatever now holds that number.
@@ -318,7 +317,7 @@ T2D_TEST(a_broken_file_changes_neither_the_registry_nor_the_layer) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(8, 8);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);
 
     const SandboxReloadReport report = model.reload_texts(registry, {kBroken}, {"broken.ecfg"});
@@ -356,12 +355,12 @@ T2D_TEST(a_layout_round_trips_through_the_save_path) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(6, 5);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{0, 0}, ContentKind::Structure, "sample_a", registry);
     paint_named(model, GridPos{5, 4}, ContentKind::Structure, "sample_b", registry);
     paint_named(model, GridPos{3, 2}, ContentKind::Machine, "sample_c", registry);
 
-    const std::vector<u8> bytes = model.serialize(registry);
+    const std::vector<u8> bytes = model.serialize();
     T2D_CHECK_GT(bytes.size(), 16u);
 
     SandboxModel loaded(1, 1);
@@ -384,10 +383,10 @@ T2D_TEST(a_saved_layout_survives_the_ids_moving_underneath_it) {
     ContentRegistry old_registry;
     load(old_registry, kContentV1);
     SandboxModel model(6, 5);
-    model.rebuild_palette(old_registry);
+    model.rebind(old_registry);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", old_registry);
     paint_named(model, GridPos{2, 2}, ContentKind::Structure, "sample_b", old_registry);
-    const std::vector<u8> bytes = model.serialize(old_registry);
+    const std::vector<u8> bytes = model.serialize();
 
     // The designer inserted an entry: every structure id moved, so the saved numbers now mean
     // something else. The layout still loads, because it carried the table it was written with.
@@ -421,9 +420,9 @@ T2D_TEST(a_layout_file_it_cannot_trust_is_refused_and_nothing_moves) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(4, 4);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);
-    const std::vector<u8> good = model.serialize(registry);
+    const std::vector<u8> good = model.serialize();
 
     SandboxModel target(4, 4);
     const auto refused = [&](ConstSpan<const u8> data, std::string_view expected) {
@@ -457,7 +456,7 @@ T2D_TEST(a_layout_file_it_cannot_trust_is_refused_and_nothing_moves) {
     // A map size that would ask for a gigabyte, and a cell count that does not match it.
     const auto write_header = [](t2d::ByteWriter& writer, u32 width, u32 height, u32 layers, u32 count) {
         writer.write_u32(0x3242534Du);
-        writer.write_u8(2u);
+        writer.write_u8(3u);
         writer.write_varint(width);
         writer.write_varint(height);
         writer.write_varint(layers);
@@ -506,7 +505,7 @@ T2D_TEST(the_dump_lists_the_cells_and_the_palette) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(4, 4);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     model.set_content_paths({"content.ecfg"});
     paint_named(model, GridPos{2, 3}, ContentKind::Structure, "sample_a", registry);
 
@@ -543,7 +542,7 @@ T2D_TEST(the_debug_fills_are_content_agnostic_and_deterministic) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(12, 8);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
 
     // One band per palette entry, in palette order.
     model.fill_bands();
@@ -563,7 +562,7 @@ T2D_TEST(the_debug_fills_are_content_agnostic_and_deterministic) {
 
     // Nothing registered: both fills empty the layer instead of inventing content.
     ContentRegistry empty;
-    model.rebuild_palette(empty);
+    model.rebind(empty);
     model.fill_scatter(7u);
     T2D_CHECK_EQ(model.filled_cells(), 0u);
     model.fill_bands();
@@ -574,7 +573,7 @@ T2D_TEST(resizing_keeps_what_still_fits) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(4, 4);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{3, 3}, ContentKind::Structure, "sample_a", registry);
     paint_named(model, GridPos{0, 0}, ContentKind::Structure, "sample_b", registry);
     model.set_cursor(GridPos{3, 3});
@@ -599,7 +598,7 @@ T2D_TEST(the_map_has_tile_layers_and_the_brush_writes_into_the_active_one) {
     T2D_CHECK_EQ(model.layer_count(), 3);
     T2D_CHECK_EQ(model.active_layer(), 0);
 
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     model.set_cursor(GridPos{2, 2});
     T2D_CHECK(model.paint());                                  // sample_a on layer 0
     T2D_CHECK_EQ(model.cell(0, GridPos{2, 2}).name, std::string("sample_a"));
@@ -652,7 +651,7 @@ T2D_TEST(the_map_has_tile_layers_and_the_brush_writes_into_the_active_one) {
     T2D_CHECK_EQ(SandboxModel(4, 4).layer_count(), 1);         // the one layer default
 
     // Writing to a layer that does not exist is refused, not redirected.
-    model.set_cell(9, GridPos{1, 1}, SandboxCell{ContentKind::Structure, 1, "sample_a"});
+    model.set_cell(9, GridPos{1, 1}, ContentRef{ContentKind::Structure, 1, false});
     T2D_CHECK_EQ(model.filled_cells(), 0u);
 }
 
@@ -660,7 +659,7 @@ T2D_TEST(erasing_removes_what_is_on_top) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(4, 4, 2);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     model.set_cursor(GridPos{1, 1});
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);   // active layer 0
     model.set_active_layer(1);
@@ -680,7 +679,7 @@ T2D_TEST(a_layout_keeps_every_tile_layer) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(6, 5, 3);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{0, 0}, ContentKind::Structure, "sample_a", registry);
     model.set_active_layer(1);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_b", registry);
@@ -689,7 +688,7 @@ T2D_TEST(a_layout_keeps_every_tile_layer) {
     paint_named(model, GridPos{2, 2}, ContentKind::Machine, "sample_c", registry);
     model.set_active_layer(2);
 
-    const std::vector<u8> bytes = model.serialize(registry);
+    const std::vector<u8> bytes = model.serialize();
     SandboxModel loaded(1, 1);
     const SandboxLoadReport report = loaded.deserialize(span_of(bytes), registry);
     T2D_CHECK_MSG(report.ok, "{}", report.error);
@@ -723,7 +722,7 @@ T2D_TEST(a_reload_repoints_cells_on_every_tile_layer) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(6, 5, 2);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_a", registry);
     model.set_active_layer(1);
     paint_named(model, GridPos{2, 2}, ContentKind::Structure, "sample_b", registry);
@@ -749,7 +748,7 @@ T2D_TEST(the_debug_fills_only_touch_the_active_layer) {
     ContentRegistry registry;
     load(registry, kContentV1);
     SandboxModel model(12, 8, 2);
-    model.rebuild_palette(registry);
+    model.rebind(registry);
     model.set_active_layer(1);
     model.fill_bands();
     T2D_CHECK_EQ(model.filled_cells(1), 12u * 8u);
@@ -770,10 +769,130 @@ T2D_TEST(the_debug_fills_only_touch_the_active_layer) {
     const usize scattered = model.filled_cells(1);
     T2D_CHECK_GT(scattered, 0u);
     ContentRegistry empty;
-    model.rebuild_palette(empty);
+    model.rebind(empty);
     model.fill_scatter(7u);
     T2D_CHECK_EQ(model.filled_cells(0), 0u);      // the active layer was cleared
     T2D_CHECK_EQ(model.filled_cells(1), scattered);
+}
+
+T2D_TEST(a_map_of_hundreds_of_cells_per_side_costs_four_bytes_a_cell) {
+    SandboxModel model(512, 512, 4);
+    T2D_CHECK_EQ(model.width(), 512u);
+    T2D_CHECK_EQ(model.height(), 512u);
+    T2D_CHECK_EQ(model.layer_count(), 4);
+    // Nothing painted yet: a layer nobody wrote to has no storage at all, and the fill count is a
+    // counter rather than a walk over 262144 cells (the status line asks for it every frame).
+    T2D_CHECK_EQ(model.cell_bytes(), 0u);
+    T2D_CHECK_EQ(model.filled_cells(), 0u);
+
+    ContentRegistry registry;
+    load(registry, kContentV1);
+    model.rebind(registry);
+    model.set_cursor(GridPos{511, 511});
+    T2D_CHECK(model.paint());
+    T2D_CHECK_EQ(model.cell_bytes(), 512u * 512u * 4u);   // one layer of the four
+    T2D_CHECK_EQ(model.filled_cells(), 1u);
+    T2D_CHECK_EQ(model.cell(GridPos{511, 511}).name, std::string("sample_a"));
+
+    model.set_active_layer(3);
+    model.set_cursor(GridPos{0, 0});
+    T2D_CHECK(model.paint());
+    T2D_CHECK_EQ(model.cell_bytes(), 2u * 512u * 512u * 4u);
+    T2D_CHECK_EQ(model.filled_cells(), 2u);
+    T2D_CHECK_EQ(model.filled_cells(3), 1u);
+
+    // The same map under the old storage - a name per cell - was forty bytes a cell and a heap
+    // allocation for every painted one; the whole map is four bytes a cell per layer used.
+    model.clear_cells();
+    T2D_CHECK_EQ(model.cell_bytes(), 0u);
+    T2D_CHECK_EQ(model.filled_cells(), 0u);
+}
+
+T2D_TEST(the_camera_can_show_a_map_of_hundreds_of_cells_at_once) {
+    SandboxModel model(512, 512);
+    const t2d::Vec2 viewport{1280.0f, 720.0f};
+    // Fitting a map this size needs a zoom below one pixel per cell. The zoom range has to allow it,
+    // or the whole feature is "you can never see your map". The frame then draws a sampled overview.
+    T2D_CHECK_LT(static_cast<f32>(SandboxModel::kMaxDimension) * SandboxModel::kMinCellPx, 1280.0f);
+    const f32 cell = std::min(viewport.x / 512.0f, viewport.y / 512.0f);
+    model.set_cell_px(cell);
+    T2D_CHECK_NEAR(model.cell_px(), cell, 0.0005f);
+    model.center_view(viewport);
+
+    // Every cell of the map is inside the view. The height is the tighter axis, so the view is wider
+    // than the map on both sides - which is exactly what fitting means.
+    const t2d::TileRect visible = model.visible_cells();
+    T2D_CHECK(visible.contains(0, 0));
+    T2D_CHECK(visible.contains(511, 511));
+    T2D_CHECK_LT(visible.x, 0);
+    T2D_CHECK_NEAR(static_cast<f32>(visible.height), 512.0f, 1.0f);
+
+    // A cursor walked to the far corner is brought on screen at that zoom, and the cell under a
+    // screen point survives zooming in on it.
+    model.set_cursor(GridPos{511, 511});
+    model.scroll_to_show(model.cursor(), viewport);
+    const t2d::Vec2 at = model.screen_of_cell(model.cursor());
+    T2D_CHECK_GE(at.x, 0.0f);
+    T2D_CHECK_LT(at.x, viewport.x);
+    T2D_CHECK_GE(at.y, 0.0f);
+    T2D_CHECK_LT(at.y, viewport.y);
+
+    const t2d::Vec2 anchor{100.0f, 100.0f};
+    const GridPos under = model.cell_at_screen(anchor);
+    model.zoom_at(anchor, 8.0f);
+    T2D_CHECK_EQ(model.cell_at_screen(anchor), under);
+    T2D_CHECK_NEAR(model.cell_px(), cell * 8.0f, 0.001f);
+    T2D_CHECK_LT(model.visible_cells().width, visible.width);   // zooming in shows fewer cells
+}
+
+T2D_TEST(the_draw_step_keeps_a_big_map_inside_the_quad_budget) {
+    // A small map is drawn cell by cell, whatever the layer count.
+    T2D_CHECK_EQ(draw_step_for(100, 1, 16384), 1);
+    T2D_CHECK_EQ(draw_step_for(16384, 1, 16384), 1);
+    // Past the budget one quad covers a block of cells, and the block grows with the square root.
+    T2D_CHECK_EQ(draw_step_for(16385, 1, 16384), 2);
+    T2D_CHECK_EQ(draw_step_for(65536, 1, 16384), 2);
+    T2D_CHECK_EQ(draw_step_for(65537, 1, 16384), 3);
+    // Every layer draws the same range, so eight layers need eight times the step.
+    T2D_CHECK_EQ(draw_step_for(16385, 4, 16384), 3);
+    T2D_CHECK_EQ(draw_step_for(16385, 8, 16384), 3);
+    // The whole of a 512x512 map at a zoom that shows all of it.
+    const i32 step = draw_step_for(512u * 512u, 4, 16384);
+    T2D_CHECK_GE(step, 8);
+    const i32 per_axis = (512 + step - 1) / step;   // how many blocks one row of the map becomes
+    T2D_CHECK_GE(16384, per_axis * per_axis * 4);   // the whole stack stays inside the budget
+    // A caller that asks for nothing still gets a usable step rather than a division by zero.
+    T2D_CHECK_EQ(draw_step_for(0, 0, 0), 1);
+    T2D_CHECK_EQ(draw_step_for(1000000, -3, 16384), draw_step_for(1000000, 1, 16384));
+}
+
+T2D_TEST(a_layout_written_while_content_was_missing_repairs_itself) {
+    ContentRegistry full;
+    load(full, kContentV2);
+    SandboxModel model(4, 4);
+    model.rebind(full);
+    paint_named(model, GridPos{1, 1}, ContentKind::Structure, "sample_b", full);
+
+    // The designer deletes sample_b and reloads: the cell is marked missing and keeps the id it was
+    // placed with, so the entry coming back can repair it.
+    ContentRegistry reduced;
+    (void)model.reload_texts(reduced, {kContentV3}, {"v3.ecfg"});
+    T2D_CHECK(model.cell(GridPos{1, 1}).missing());
+    T2D_CHECK_EQ(model.cell(GridPos{1, 1}).name, std::string("sample_b"));
+
+    // A layout written now carries the name of what went missing, so loading it into a registry that
+    // has the content again brings the cell back instead of losing it for good.
+    const std::vector<u8> bytes = model.serialize();
+    ContentRegistry restored;
+    load(restored, kContentV2);
+    SandboxModel loaded(1, 1);
+    const SandboxLoadReport report = loaded.deserialize(span_of(bytes), restored);
+    T2D_CHECK_MSG(report.ok, "{}", report.error);
+    T2D_CHECK_EQ(report.missing, 0u);
+    T2D_CHECK_EQ(report.translated, 1u);
+    T2D_CHECK_FALSE(loaded.cell(GridPos{1, 1}).missing());
+    T2D_CHECK_EQ(loaded.cell(GridPos{1, 1}).name, std::string("sample_b"));
+    T2D_CHECK_EQ(loaded.cell(GridPos{1, 1}).id, restored.find(ContentKind::Structure, "sample_b"));
 }
 
 T2D_TEST_MAIN

@@ -193,6 +193,7 @@ int Application::run(int argc, char** argv) {
     renderer_desc.color_format = config_.color_format;
     renderer_desc.depth_format = config_.depth_format;
     renderer_desc.frames_in_flight = config_.frames_in_flight;
+    renderer_desc.upload_segment_size = config_.upload_segment_size;
     renderer_desc.offscreen_sampled = config_.offscreen_sampled;
     renderer_ = Renderer::create(renderer_desc);
     if (renderer_ == nullptr) {
@@ -278,8 +279,11 @@ int Application::run(int argc, char** argv) {
         if (config_.frames > 0 && frame_count_ >= config_.frames) break;
     }
 
-    on_shutdown();
+    // The GPU goes idle *before* the application tears down: on_shutdown() is where an application
+    // destroys its own buffers, textures and pipelines, and destroying anything a frame still in
+    // flight references loses the device (the frame's fence is not waited on by end_frame()).
     renderer_->wait_idle();
+    on_shutdown();
     log_summary();
     return 0;
 }

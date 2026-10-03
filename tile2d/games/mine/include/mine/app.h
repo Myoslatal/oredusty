@@ -57,6 +57,12 @@ struct MineOptions {
     i32 tile_layers = 1;
     i32 start_layer = 0;
     std::string layout_path;
+    /// Open the camera here instead of fitting the whole map: "x,y" or "x,y,zoom" in cell coordinates
+    /// and pixels per cell (see SandboxModel::look_at). A map of hundreds of cells per side does not
+    /// fit a window at a readable zoom, so a scripted run has to say where to look.
+    bool has_view = false;
+    t2d::Vec2 view_cell{};
+    f32 view_zoom = 0.0f;   ///< 0 keeps the fitted zoom
     /// Written once at shutdown; for a scripted run that has no keyboard to press F2 on.
     std::string save_layout_path;
     /// "none", "bands" or "scatter" - a view of the palette, never content of its own.
@@ -110,6 +116,15 @@ private:
     /// Decodes every picture the packs ship into one atlas, so the sandbox can draw what the content
     /// describes instead of a colour standing in for it.
     void load_pack_images();
+    /// The cells of the sandbox map a frame has to draw, and how many cells one drawn quad covers.
+    /// A map of hundreds of cells per side cannot be drawn cell by cell at every zoom: past a quad
+    /// budget the frame draws a sampled overview instead, one quad per block of cells.
+    struct SandboxDrawRange {
+        i32 x0 = 0, y0 = 0, x1 = -1, y1 = -1;   ///< inclusive, clipped to the map
+        i32 step = 1;                            ///< cells per drawn quad
+        [[nodiscard]] bool empty() const { return x1 < x0 || y1 < y0; }
+    };
+    [[nodiscard]] SandboxDrawRange sandbox_draw_range() const;
     /// The palette rows the panel actually shows: shared by the panel pass and the picture pass.
     struct PaletteLayout {
         f32 left = 0.0f, right = 0.0f, first_y = 0.0f, row_height = 0.0f;
@@ -165,6 +180,9 @@ private:
     Scope<t2d::ImageAtlas> image_atlas_;
     Scope<ore::rhi::Sampler> image_sampler_;
     std::vector<std::string> image_errors_;
+    /// Quads the batch refused in the last frame (both passes): a frame that lost quads is a frame the
+    /// screen must not pretend is complete.
+    u32 dropped_quads_ = 0;
     f32 unit_ = 2.0f;      ///< layout unit derived from the window height
     u16 body_px_ = 16;     ///< text size the interface is drawn at
 };

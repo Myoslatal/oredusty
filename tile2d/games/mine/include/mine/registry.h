@@ -40,7 +40,8 @@ inline constexpr usize kContentKindCount = static_cast<usize>(ContentKind::Count
 using ContentId = u32;
 /// "Nothing": an empty slot, a missing reference, content that no longer exists.
 inline constexpr ContentId kNoContent = 0;
-/// Guard against a corrupt table asking for a huge allocation.
+/// Guard against a corrupt table asking for a huge allocation, and the width of the id field of a
+/// packed map cell (content_grid.h): every id is < kMaxContentId.
 inline constexpr ContentId kMaxContentId = 1u << 20;
 
 struct ContentEntry {

@@ -35,6 +35,10 @@ struct AppConfig {
     /// When set, the first frame (or the last one with --frames) is written to this PNG path.
     std::string screenshot_path;
     u32 frames_in_flight = 2;
+    /// Bytes of per-frame dynamic vertex/uniform data. A frame that asks the ring for more than this
+    /// cannot be uploaded: the sprite batch, for instance, drops the quads it cannot fit, which on a
+    /// screen full of tiles means an empty frame. Raise it for a frame that draws a lot.
+    u64 upload_segment_size = 1ull << 20;
     /// Colour format for the swapchain and the offscreen target. The default (undefined) resolves to
     /// a non-sRGB format, so colours authored as sRGB bytes appear exactly as authored and a window
     /// looks like an offscreen screenshot; name an _SRGB format when correct 3D lighting matters more.

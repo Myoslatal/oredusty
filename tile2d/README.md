@@ -14,21 +14,21 @@ that direction. What is left is what the game actually uses, and it is all teste
 
 | Module | What it does | Tested by |
 |---|---|---|
-| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, byte streams with varints, the `.ecfg` reader, the dynamic loader, CLI | `test_ecfg`, `test_module` |
+| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, the **2D camera** (pan, zoom about an anchor, fit, clamp, world↔screen, the cell range a viewport touches), byte streams with varints, the `.ecfg` reader, the dynamic loader, CLI | `test_ecfg`, `test_module`, `test_camera2d` |
 | `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring) and the tileset (what a tile id means for physics, where it lives in an atlas) | `test_tilemap` |
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the sandbox, and the mod host (manifests, load order, the native ABI) | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_sandbox`, `test_mod_package` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** the world is made of, the sandbox, and the mod host (manifests, load order, the native ABI) | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_sandbox`, `test_content_pack`, `test_mod_package` |
 
 ## Layout
 
-    include/t2d/core      types, log, deterministic RNG, 2D math, byte streams, the .ecfg reader, CLI
+    include/t2d/core      types, log, deterministic RNG, 2D math, the 2D camera, byte streams, .ecfg, CLI
     include/t2d/sim       tile map (chunked, multi-layer, collision), tileset
     include/t2d/text      font engine (TrueType + CFF), rasterising, UTF-8, language tables
     include/t2d/net       ILink, shared-memory link (mmap + lock-free SPSC rings), KCP, UDP, protocol
     include/t2d/render    sprite batch, glyph atlas, text renderer, tile map renderer, bitmap font
-    games/mine            the sandbox/industrial-automation game built on this framework
+    games/mine            the sandbox/industrial-automation game: registry, content packs, mod host, map grid, sandbox
     tests                 unit tests and the shader fixture the offscreen render test needs
 
 ## Build and test
@@ -43,20 +43,22 @@ collections (3.5 s). The `no-renderer` preset builds the tile map, the text engi
 without Vulkan, GLFW or the game — the split that lets a dedicated server exist later.
 
     tests/test_tilemap            16 cases / 345 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
+    tests/test_camera2d            7 cases /1986 checks  screen/world mapping, zooming about an anchor, fitting a 512² map, bounding the view
     tests/test_ecfg               12 cases / 128 checks  the configuration format, including the shipped example.ecfg
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                8 cases / 205 checks  UTF-8, language tables, the shipped interface strings
+    tests/test_text                8 cases / 235 checks  UTF-8, language tables, the shipped interface strings
     tests/test_module             5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases / 1265 checks framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
-    tests/test_render_offscreen    7 cases /  33 checks  real rendering with pixel readback (skips without a device)
+    tests/test_render_offscreen    8 cases /  51 checks  real rendering with pixel readback (skips without a device)
     games/mine/tests/test_mine_menu      10 cases / 137 checks  the start screen as a state machine
     games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
-    games/mine/tests/test_sandbox        22 cases / 650 checks  the sandbox: grid, palette, reload by name, layouts
-    games/mine/tests/test_content_pack    7 cases /  85 checks  packs: headers, order, collisions, the three sources
+    games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
+    games/mine/tests/test_sandbox        26 cases / 696 checks  the sandbox: map, palette, camera, reload by name, layouts
+    games/mine/tests/test_content_pack    9 cases / 116 checks  packs: headers, order, collisions, the three sources
     games/mine/tests/test_mod_package     9 cases / 102 checks  mod manifests, dependency order, collisions, a native module
 
 ## The tile map
@@ -85,6 +87,44 @@ written into costs those headers and nothing else.
   existing map at an offset, and `to_ascii(layer, ...)` dumps one back out. Unknown characters are
   reported with their position and left empty — silently dropping them once cost a demo level its
   entire ground.
+
+## The camera and big maps
+
+The game is a god view (docs/GAME_DESIGN.md §1.11): there is no player character, so the camera *is*
+where the player is looking and the pointer is what they act with. Both are framework types, and both
+are pure logic, so a picking bug is a test failure in milliseconds rather than something seen on
+screen.
+
+* **`t2d::Camera2D`** (`t2d/core/camera2d.h`) owns a viewport, a world position and a zoom in pixels
+  per world unit; a tile game uses one world unit per cell, which makes zoom "pixels per cell" and the
+  camera's centre a cell coordinate. `screen_of()`/`world_of()` are exact inverses, `zoom_at()` keeps
+  the world point under the pointer exactly where it is, `fit()` frames a map (with a margin),
+  `clamp_to()` stops a bounded view at the edge of the world and centres a world smaller than the
+  viewport, and `visible_cells()` is the half-open cell range a renderer walks — the culling primitive
+  a big map needs. It never decides what may be visible: a camera can look past the edge of a map,
+  and only the caller knows what to draw there.
+* **`mine::ContentGrid`** (`games/mine/include/mine/content_grid.h`) is the map the game is made of:
+  32 bits a cell (a 20 bit content id, a 4 bit kind, a "this content is gone" flag), layers allocated
+  on first write, and fill counts kept as counters. A 512×512 layer is 1 MiB, a 1024×1024×8 map is
+  32 MiB of cells *if every layer is written* — the storage the sandbox used to carry (a name per
+  cell) was 37 bytes a cell and a heap allocation for every painted one.
+* **Drawing a map that is bigger than the screen** is culling plus, at low zoom, sampling: the
+  sandbox walks only `visible_cells()`, and when the visible cells of *all* layers exceed a quad
+  budget it draws one quad per block of cells (named by the cell in the middle) instead of one per
+  cell. At 0.99 pixels per cell a 512×512 map on a 1280×720 screen is 832×512 visible cells over four
+  layers: drawn cell by cell that is 1.7M quads, drawn sampled (one quad per 11×11 cells) it is 14k.
+
+Measured on the real device (Intel Arc Pro 130T/140T, debug build, headless, 1280×720):
+
+| Map | Cells | Storage | Frame |
+|---|---|---|---|
+| 40×24, 1 layer, scatter | 960 | 3 KiB | ~9 ms |
+| 512×512, 4 layers, scatter | 1.05M | 4096 KiB | ~10 ms |
+| 1024×1024, 8 layers, scatter | 8.4M | 32768 KiB | ~9 ms |
+
+The frame cost stops following the map size because nothing walks the map: it follows the *screen*.
+(These are CPU-bound debug numbers with the frame paced to 60 Hz; the ring peak for the 512² case is
+682 KiB of the 4 MiB the game asks for.)
 
 ## The channel
 

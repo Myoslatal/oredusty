@@ -10,6 +10,10 @@ target_link_libraries(test_registry PRIVATE mine_core)
 t2d_add_test(test_content_loader test_content_loader.cpp)
 target_link_libraries(test_content_loader PRIVATE mine_core)
 
+# The map grid: packed four byte cells, layers allocated on first write, O(1) fill counters.
+t2d_add_test(test_content_grid test_content_grid.cpp)
+target_link_libraries(test_content_grid PRIVATE mine_core)
+
 # The single layer sandbox: grid, palette, camera, reload by name, layout save/load.
 t2d_add_test(test_sandbox test_sandbox.cpp)
 target_link_libraries(test_sandbox PRIVATE mine_core)

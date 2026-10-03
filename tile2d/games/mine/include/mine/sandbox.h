@@ -18,12 +18,19 @@
 // layer, erasing removes what is on top, and the screen draws the stack bottom to top so a ground
 // layer, an ore layer and a structures layer can be told apart.
 //
+// The storage is the one the game itself will use (content_grid.h): four bytes per cell, so a map of
+// hundreds of cells per side is cheap, and no name per cell, so a reload has to go through the same
+// name -> id translation a save does. The view is the framework's camera (t2d/core/camera2d.h): the
+// sandbox is a god view like the game is - there is no player character anywhere in this file.
+//
 // Nothing in this file is content: no resource, structure, recipe or machine is named here, and none
 // ever will be.
 #pragma once
 
+#include <mine/content_grid.h>
 #include <mine/registry.h>
 
+#include <t2d/core/camera2d.h>
 #include <t2d/core/math2d.h>
 #include <t2d/core/types.h>
 
@@ -41,29 +48,23 @@ using t2d::u8;
 using t2d::usize;
 using t2d::Vec2;
 
-/// A cell coordinate. Signed, because a cursor can be dragged outside the layer and a camera can look
-/// past its edge; only inside() cells exist in the grid.
-struct GridPos {
-    i32 x = 0;
-    i32 y = 0;
-
-    friend bool operator==(const GridPos&, const GridPos&) = default;
-};
-
-/// One cell of one tile layer. The name is kept beside the id on purpose: it is what makes the cell
-/// re-pointable after the registry changed, and what lets the screen say "this was sample_a and it is
-/// gone" instead of showing a bare 0.
-struct SandboxCell {
-    /// ContentKind::Count means the cell is empty.
+/// One cell as a reader sees it: the stored reference plus the name the table in force gives it. The
+/// name is a view into that table, so it stays valid for as long as the registry is not reloaded.
+struct CellView {
     ContentKind kind = ContentKind::Count;
-    /// The id the running registry handed out; kNoContent when the content is no longer registered.
     ContentId id = kNoContent;
-    std::string name;
+    bool stale = false;
+    std::string_view name{};
 
     [[nodiscard]] bool empty() const { return kind == ContentKind::Count; }
-    [[nodiscard]] bool missing() const { return !empty() && id == kNoContent; }
+    [[nodiscard]] bool missing() const { return !empty() && stale; }
+    [[nodiscard]] ContentRef ref() const { return ContentRef{kind, id, stale}; }
+    /// The id a reader should be shown: kNoContent once the content is gone. The cell keeps the number
+    /// it was placed with internally - that is what lets a returning entry repair it - but that number
+    /// may have been handed to something else since, so showing it would be a lie.
+    [[nodiscard]] ContentId shown_id() const { return missing() ? kNoContent : id; }
 
-    friend bool operator==(const SandboxCell&, const SandboxCell&) = default;
+    friend bool operator==(const CellView&, const CellView&) = default;
 };
 
 /// One selectable piece of registered content.
@@ -77,6 +78,13 @@ struct PaletteEntry {
 /// whose instances occupy a tile. Items, recipes, layers and channels are referenced *by* cells and
 /// never placed on one, so they stay out of the palette.
 [[nodiscard]] bool is_placeable_kind(ContentKind kind);
+
+/// How many cells one drawn quad should cover so that \p visible_cells cells on every one of
+/// \p layers layers fit inside \p max_quads: 1 while the map is small enough to be drawn cell by
+/// cell, larger when it is not. A map of hundreds of cells per side at a zoom that shows all of it
+/// is a million cells; one quad per cell would be a million quads for a screen of pixels, so the
+/// frame draws a sample instead - one quad per block of cells, named by the cell in its middle.
+[[nodiscard]] i32 draw_step_for(usize visible_cells, i32 layers, usize max_quads);
 
 /// A stable colour for a content name, packed the way ore::make_rgba packs (0xAABBGGRR). Art arrives
 /// with the designer's data; until then a colour derived from the name is what makes a cell readable,
@@ -122,25 +130,32 @@ public:
     static constexpr u32 kDefaultWidth = 40;
     static constexpr u32 kDefaultHeight = 24;
     /// Mirrors TileMap::kMaxLayers: how many tile layers a sandbox map can hold.
-    static constexpr i32 kMaxLayers = 32;
+    static constexpr i32 kMaxLayers = ContentGrid::kMaxLayers;
+    /// The zoom range of the camera, in pixels per cell. The low end is what makes a map of hundreds
+    /// of cells per side visible as a whole: at 0.05 pixels per cell a 4096 cell map is 205 pixels
+    /// wide, and the frame draws it as a sampled overview instead of one quad per cell.
+    static constexpr f32 kMinCellPx = 0.05f;
+    static constexpr f32 kMaxCellPx = 512.0f;
 
     SandboxModel(u32 width = kDefaultWidth, u32 height = kDefaultHeight, i32 layers = 1);
 
     // --- the map ---
-    [[nodiscard]] u32 width() const { return width_; }
-    [[nodiscard]] u32 height() const { return height_; }
-    [[nodiscard]] i32 layer_count() const { return layers_; }
-    [[nodiscard]] bool inside(GridPos pos) const;
+    [[nodiscard]] u32 width() const { return cells_.width(); }
+    [[nodiscard]] u32 height() const { return cells_.height(); }
+    [[nodiscard]] i32 layer_count() const { return cells_.layer_count(); }
+    [[nodiscard]] bool inside(GridPos pos) const { return cells_.inside(pos); }
     /// The topmost non-empty cell at \p pos: what the inspector shows, and what erase() removes.
-    [[nodiscard]] const SandboxCell& cell(GridPos pos) const;
-    [[nodiscard]] const SandboxCell& cell(i32 layer, GridPos pos) const;
+    [[nodiscard]] CellView cell(GridPos pos) const;
+    [[nodiscard]] CellView cell(i32 layer, GridPos pos) const;
     /// Writes into the active layer.
-    void set_cell(GridPos pos, const SandboxCell& value);
-    void set_cell(i32 layer, GridPos pos, const SandboxCell& value);
+    void set_cell(GridPos pos, ContentRef value);
+    void set_cell(i32 layer, GridPos pos, ContentRef value);
     void clear_cells();                                   ///< every layer
     void clear_layer(i32 layer);
-    [[nodiscard]] usize filled_cells() const;             ///< every layer
+    [[nodiscard]] usize filled_cells() const;             ///< every layer, O(1)
     [[nodiscard]] usize filled_cells(i32 layer) const;
+    /// Bytes the cells occupy: what a map of this size costs, for the status line.
+    [[nodiscard]] usize cell_bytes() const { return cells_.bytes(); }
     /// Resizes, keeping the cells of every layer that still fit.
     void resize(u32 width, u32 height);
 
@@ -151,9 +166,6 @@ public:
     void cycle_layer(i32 delta);
 
     // --- the palette (the designer's data, as registered) ---
-    /// Rebuilds the palette from \p registry and returns how many entries it holds. The selection is
-    /// kept when it still points at the same content, and clamped otherwise.
-    usize rebuild_palette(const ContentRegistry& registry);
     [[nodiscard]] usize palette_count() const { return palette_.size(); }
     [[nodiscard]] const PaletteEntry& palette(usize index) const;
     [[nodiscard]] usize selected_palette() const { return selected_; }
@@ -175,19 +187,26 @@ public:
     /// Empties the topmost non-empty cell at the cursor; false when it is already empty everywhere.
     bool erase();
 
-    // --- the camera (screen space) ---
-    [[nodiscard]] f32 cell_px() const { return cell_px_; }
+    // --- the camera (screen space, through the framework's camera) ---
+    [[nodiscard]] const t2d::Camera2D& camera() const { return camera_; }
+    [[nodiscard]] f32 cell_px() const { return camera_.zoom(); }
     void set_cell_px(f32 pixels);
-    [[nodiscard]] Vec2 origin() const { return origin_; }
-    void set_origin(Vec2 origin) { origin_ = origin; }
-    void pan(Vec2 delta) { origin_.x += delta.x; origin_.y += delta.y; }
+    [[nodiscard]] Vec2 origin() const { return camera_.screen_of(Vec2{0.0f, 0.0f}); }
+    void set_origin(Vec2 origin);
+    void pan(Vec2 delta) { camera_.pan(delta); }
     /// Zooms by \p factor while keeping the point under \p anchor on screen: the reason to zoom is to
     /// look closer at the cell you are already looking at.
-    void zoom_at(Vec2 anchor, f32 factor);
+    void zoom_at(Vec2 anchor, f32 factor) { camera_.zoom_at(anchor, factor); }
     [[nodiscard]] GridPos cell_at_screen(Vec2 point) const;
     [[nodiscard]] Vec2 screen_of_cell(GridPos cell) const;
+    /// The cells the viewport touches, half open: what a renderer walks instead of the whole map.
+    [[nodiscard]] t2d::TileRect visible_cells() const { return camera_.visible_cells(); }
     /// Centres the whole map in a viewport of \p viewport pixels.
     void center_view(Vec2 viewport);
+    /// Puts \p cell in the middle of the view at \p pixels_per_cell (0 keeps the current zoom): a map
+    /// of hundreds of cells per side does not fit a window at a readable zoom, so a caller has to be
+    /// able to say where to look.
+    void look_at(GridPos cell, f32 pixels_per_cell = 0.0f);
     /// Scrolls the least amount that brings \p cell inside a viewport, keeping a margin of one cell.
     void scroll_to_show(GridPos cell, Vec2 viewport);
 
@@ -206,17 +225,17 @@ public:
     /// The same, over texts already in memory (\p names are used in the error messages).
     SandboxReloadReport reload_texts(ContentRegistry& registry, const std::vector<std::string>& texts,
                                      const std::vector<std::string>& names);
-    /// Re-points every placed cell at its content by name and rebuilds the palette, without touching
-    /// the registry. A caller that fills the registry from more than one source (the game's own
-    /// content, then its mods) calls this once, after the last source, so a single pass sees the whole
-    /// picture.
+    /// Adopts \p registry as the one in force: every placed cell is re-pointed at its content by name,
+    /// the palette is rebuilt from it, and its name table becomes the one the cells refer to. A caller
+    /// that fills the registry from more than one source (the game's own content, then its mods) calls
+    /// this once, after the last source, so a single pass sees the whole picture.
     SandboxReloadReport rebind(const ContentRegistry& registry);
     [[nodiscard]] const std::vector<std::string>& content_paths() const { return content_paths_; }
     void set_content_paths(std::vector<std::string> paths) { content_paths_ = std::move(paths); }
 
     /// The map as a save would store it: every layer's cells as ids, plus the name -> id table in
     /// force, so a later version can translate them back by name (registry.h).
-    [[nodiscard]] std::vector<u8> serialize(const ContentRegistry& registry) const;
+    [[nodiscard]] std::vector<u8> serialize() const;
     /// Loads a saved layout and translates its ids into the running registry. A file it cannot fully
     /// trust is refused and the map is left untouched; a file that loads rebuilds the palette from
     /// \p registry, so the map is ready to paint on.
@@ -227,22 +246,30 @@ public:
     [[nodiscard]] std::string dump_text() const;
 
 private:
-    [[nodiscard]] usize index(i32 layer, GridPos pos) const {
-        return static_cast<usize>(layer) * width_ * height_ + static_cast<usize>(pos.y) * width_ +
-               static_cast<usize>(pos.x);
-    }
+    /// Rebuilds the palette from \p registry. Called by rebind() and deserialize(), which are the two
+    /// places that know the ids in the cells have just been re-pointed.
+    usize rebuild_palette(const ContentRegistry& registry);
+    /// The name the table in force gives \p ref, or an empty view when nothing names it.
+    [[nodiscard]] std::string_view name_of(ContentRef ref) const;
+    /// Remembers the name of a cell whose content went missing, so the screen can still say what used
+    /// to be there after the registry dropped it.
+    void remember_missing(ContentKind kind, ContentId id, std::string_view name);
+    /// The table a save of this map carries: the one in force, plus the names of what went missing.
+    [[nodiscard]] ContentTable save_table() const;
 
-    u32 width_ = kDefaultWidth;
-    u32 height_ = kDefaultHeight;
-    i32 layers_ = 1;
-    i32 active_layer_ = 0;
-    /// Layer major: layer * width * height + y * width + x.
-    std::vector<SandboxCell> cells_;
+    ContentGrid cells_{};
+    /// The name -> id table the placed cells refer to. A cell stores no name of its own (that is what
+    /// makes it four bytes), so this is what turns its id back into a name - and what makes a reload
+    /// able to re-point it after ids moved.
+    ContentTable table_{};
+    /// Names of content that went missing, kept so a lost cell can still be reported by name.
+    ContentTable retired_{};
     std::vector<PaletteEntry> palette_;
     usize selected_ = 0;
+    /// Which layer the brush writes into. What a layer means is the designer's business.
+    i32 active_layer_ = 0;
     GridPos cursor_{};
-    Vec2 origin_{};
-    f32 cell_px_ = 24.0f;
+    t2d::Camera2D camera_{};
     std::vector<std::string> content_paths_;
 };
 

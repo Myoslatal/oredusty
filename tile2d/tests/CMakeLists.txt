@@ -1,5 +1,7 @@
 # Unit tests. Everything here is pure CPU work: no window, no threads, no sleeps, milliseconds.
 t2d_add_test(test_tilemap test_tilemap.cpp)
+# The camera: coordinates, zooming, fitting a map of hundreds of cells and bounding the view.
+t2d_add_test(test_camera2d test_camera2d.cpp)
 # The .ecfg configuration reader (format: example.ecfg in the repository root).
 t2d_add_test(test_ecfg test_ecfg.cpp)
 

@@ -50,6 +50,13 @@ structure::
 
   ![内容包里的贴图](images/sandbox_pack_art_en.png)
 
+  ```sh
+  # 本体占位内容 + 仓库里的三个测试包（其中两个带 art/*.png），bands 填充：每项内容一条横带
+  ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+      --content games/mine/tests/data/placeholder_content.ecfg \
+      --packs games/mine/tests/packs --fill bands
+  ```
+
   美术风格是多边形，资源仍是图片：引擎不做矢量多边形渲染（见 `docs/GAME_DESIGN.md` §1.10）。
 * 内容包不能新增 `ContentKind`，也不能跑代码；要这两样就用下面的模组包。
 
@@ -68,6 +75,13 @@ structure::
 `--mods` 可重复。模组的内容与本体内容进入**同一个注册表**，id 按注册顺序分配，本体内容先注册。
 
 ![本体内容 + 两个模组](images/sandbox_mods_en.png)
+
+```sh
+# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 5 项 + 模组 7 项 = 12 项，bands 填充
+./build/debug/games/mine/mine_game --world sandbox --start 1 \
+    --content games/mine/tests/data/placeholder_content.ecfg \
+    --mods build/debug/games/mine/tests/mods --fill bands
+```
 
 上图里 `structure #1..#3`、`machine #1..#2` 是本体内容，`structure #4..#5`、`machine #3..#6` 来自两个模组；
 其中 `mod_tier_1_drill`…`mod_tier_3_drill` **不是写在数据里的**，是原生模组按自己的参数生成的。
