@@ -1,0 +1,23 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Vulkan)
+find_dependency(glfw3)
+find_dependency(glm)
+find_dependency(Threads)
+if(@ORE_WITH_SHADERC@)
+    find_dependency(PkgConfig)
+    pkg_check_modules(SHADERC REQUIRED IMPORTED_TARGET shaderc)
+endif()
+if(@ORE_WITH_ZLIB@)
+    find_dependency(ZLIB)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/oreTargets.cmake")
+
+# ore_add_shaders(): build time GLSL -> SPIR-V, same helper the framework itself uses.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/OreShaders.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/OreShaders.cmake")
+endif()
+
+check_required_components(ore)

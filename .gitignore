@@ -1,0 +1,21 @@
+# Build outputs
+build/
+out/
+.cache/
+compile_commands.json
+imgui.ini
+
+# Editor / tooling
+.vscode/
+.idea/
+*.swp
+*~
+
+# Captures produced by the headless screenshot mode
+*.png
+!assets/**/*.png
+!docs/**/*.png
+
+# Scratch space used while developing
+.recon/
+.tmp/
