@@ -183,6 +183,37 @@ add_custom_target(mine_package
     DEPENDS mine_game mine_game_table
     COMMENT "Packaging ${MINE_PACKAGE_NAME} into ${MINE_PACKAGE_ZIP}")
 
+# A package for the people who write mods, which is a different thing from a package for the people
+# who play: the headers the engine and the game are made of, the generated configuration headers they
+# include, the published surface, the game's own table (so a mod can be built and checked against the
+# game it mods), the toolchain, the template and the documents that explain all of it.
+set(MINE_DEV_NAME "mine-dev-${PROJECT_VERSION}")
+set(MINE_DEV_DIR "${MINE_PACKAGE_ROOT}/${MINE_DEV_NAME}")
+set(MINE_DEV_ZIP "${CMAKE_BINARY_DIR}/${MINE_DEV_NAME}-${CMAKE_BUILD_TYPE}.zip")
+add_custom_target(builddev
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "${MINE_DEV_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${MINE_DEV_DIR}/include"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${T2D_ORE_DIR}/include/ore"
+            "${MINE_DEV_DIR}/include/ore"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/include/t2d"
+            "${MINE_DEV_DIR}/include/t2d"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/games/mine/include/mine"
+            "${MINE_DEV_DIR}/include/mine"
+    # The one header that is generated rather than written: t2d/config.h, which every t2d header includes.
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_BINARY_DIR}/generated/t2d"
+            "${MINE_DEV_DIR}/include/t2d"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/engine.api" "${MINE_DEV_DIR}/engine.api"
+    COMMAND ${CMAKE_COMMAND} -E copy "${MINE_TABLE_PATH}" "${MINE_DEV_DIR}/mine.codetab"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:codetab> "${MINE_DEV_DIR}/codetab"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/packs" "${MINE_DEV_DIR}/packs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "${MINE_DEV_DIR}/docs"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${MINE_DEV_DIR}/README.md"
+    COMMAND ${CMAKE_COMMAND} -E remove "${MINE_DEV_ZIP}"
+    COMMAND ${CMAKE_COMMAND} -E tar cf "${MINE_DEV_ZIP}" --format=zip -- "${MINE_DEV_NAME}"
+    WORKING_DIRECTORY "${MINE_PACKAGE_ROOT}"
+    DEPENDS mine_game_table codetab
+    COMMENT "Packaging ${MINE_DEV_NAME} into ${MINE_DEV_ZIP}")
+
 if(T2D_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
