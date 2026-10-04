@@ -21,6 +21,7 @@ constexpr u16 kShnAbs = 0xfff1;
 constexpr u16 kShnCommon = 0xfff2;
 constexpr u32 kShtSymtab = 2;
 constexpr u32 kShtRela = 4;
+constexpr u32 kShtGroup = 17;
 constexpr u32 kShtNobits = 8;
 constexpr usize kElfHeaderSize = 64;
 constexpr usize kSectionHeaderSize = 64;
@@ -219,6 +220,20 @@ std::optional<ObjectFile> ObjectFile::parse(ConstSpan<const u8> bytes, std::stri
             if (where == kShnAbs && symbol.kind != ObjectSymbolKind::File) symbol.kind = ObjectSymbolKind::None;
             object.symbols.push_back(std::move(symbol));
         }
+    }
+
+    // The COMDAT groups: a group's signature is the symbol its info field names, and its members are
+    // the sections it lists after the flags word.
+    for (const RawSection& section : raw) {
+        if (section.type != kShtGroup) continue;
+        const u32 words = static_cast<u32>(section.size / 4);
+        ObjectGroup group;
+        group.signature = section.info;
+        for (u32 entry = 1; entry < words; ++entry) {
+            const u32 member = read_u32(bytes.data() + section.offset + entry * 4);
+            if (member < section_count) group.members.push_back(member);
+        }
+        object.groups.push_back(std::move(group));
     }
 
     for (usize index = 0; index < raw.size(); ++index) {

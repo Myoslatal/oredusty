@@ -99,7 +99,14 @@ target_link_libraries(mine_app PUBLIC mine_core t2d::render)
 
 add_executable(mine_game src/main.cpp)
 t2d_apply_settings(mine_game)
-target_link_libraries(mine_game PRIVATE mine_app)
+# The engine is linked whole, and that is not an optimisation detail: the game arrives as a table and
+# resolves the engine's symbols at run time, so every object file of it has to be in this program's
+# dynamic symbol table - including the ones this program never calls itself. A static library linked
+# normally only keeps what the linker was asked for, which would leave the game unable to find the
+# framework's own functions.
+target_link_libraries(mine_game PRIVATE
+    -Wl,--whole-archive t2d::render t2d::sim t2d::text t2d::net t2d::core ore::ore -Wl,--no-whole-archive)
+set_target_properties(mine_game PROPERTIES ENABLE_EXPORTS ON)
 add_dependencies(mine_game mine_game_table)
 ore_add_shaders(mine_game SHADERS
     "${CMAKE_SOURCE_DIR}/shaders/sprite.vert"

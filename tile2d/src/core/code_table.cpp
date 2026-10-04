@@ -124,11 +124,24 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             section_by_name.emplace(object.sections[index].name, section_map[index]);
         }
 
+        // Which section each COMDAT group's code is in, by the symbol index of its signature: the
+        // group is what says where the code of an inline function lives, and it does not depend on the
+        // symbol's name matching a section's.
+        std::map<u32, u32> group_section;
+        for (const ObjectGroup& group : object.groups) {
+            for (const u32 member : group.members) {
+                if (member >= section_map.size() || section_map[member] == kInvalidId) continue;
+                group_section.emplace(group.signature, section_map[member]);
+                break;
+            }
+        }
+
         // Every symbol is kept, including the ones the table does not define and the empty symbol at
         // index zero: a relocation names its symbol by index, so dropping one would move every index
         // after it.
         const u32 symbol_base = static_cast<u32>(table.symbols.size());
-        for (const ObjectSymbol& symbol : object.symbols) {
+        for (usize symbol_index = 0; symbol_index < object.symbols.size(); ++symbol_index) {
+            const ObjectSymbol& symbol = object.symbols[symbol_index];
             CodeTableSymbol packed;
             packed.name = symbol.name;
             packed.kind = symbol.kind;
@@ -146,6 +159,15 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             // full of them - would be reported as something nobody defines.
             if (packed.section == kInvalidId && packed.binding == ObjectSymbolBinding::Local &&
                 packed.kind == ObjectSymbolKind::None && packed.size == 0 && !packed.name.empty()) {
+                const auto by_group = group_section.find(static_cast<u32>(symbol_index));
+                if (by_group != group_section.end()) {
+                    packed.section = by_group->second;
+                    packed.binding = ObjectSymbolBinding::Weak;
+                    packed.kind = (object.sections.empty() ? ObjectSymbolKind::Function
+                                                           : ObjectSymbolKind::Function);
+                    table.symbols.push_back(std::move(packed));
+                    continue;
+                }
                 for (const char* prefix : {".text.", ".rodata.", ".data."}) {
                     const auto found = section_by_name.find(std::string(prefix) + packed.name);
                     if (found == section_by_name.end()) continue;
@@ -671,10 +693,16 @@ void CodeImage::resolve_symbols() {
             // A file symbol is the name of the source the object came from, not something to resolve,
             // and the empty symbol at index zero is the table's own "no symbol".
             if (symbol.kind == ObjectSymbolKind::File || symbol.name.empty()) continue;
-            // The table the compiler's own addressing is relative to: the runtime builds one, so this
-            // is answered here rather than looked for in the running program.
+            // Two symbols every module answers for itself, the way a shared library does: the table
+            // its own addressing is relative to, and the handle its static destructors are registered
+            // against. Looking for either in the running program would find the program's, which is
+            // the wrong answer for code that was placed somewhere else.
             if (symbol.name == "_GLOBAL_OFFSET_TABLE_") {
                 module.symbol_address[s] = module.got != nullptr ? module.got : module.data;
+                continue;
+            }
+            if (symbol.name == "__dso_handle") {
+                module.symbol_address[s] = module.base;
                 continue;
             }
             const auto found = definitions_.find(symbol.name);

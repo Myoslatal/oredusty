@@ -1,132 +1,117 @@
-// Mine - the game executable. For now it is the start screen: pick a world, a language, a seed and a
-// role.
-#include <mine/app.h>
-#include <mine/content_search.h>
-
-#include <ore/ore.h>
-
+// Mine - the launcher.
+//
+// The game is not linked into this program: it travels beside it as a **code table** (docs/TABLES.md),
+// which the launcher places in memory and merges with every other table it finds - a mod's - before
+// calling into the result. The engine stays here: the renderer, the fonts, the network, the file
+// system, and the runtime that does the merging. This program exports its own symbols, because the
+// game calls back into all of that.
+#include <t2d/core/code_table.h>
 #include <t2d/core/executable.h>
 #include <t2d/core/log.h>
-#include <t2d/text/locale.h>
 
-#include <cstdlib>
+#include <algorithm>
 #include <filesystem>
-#include <format>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace {
+
+namespace fs = std::filesystem;
+
+using t2d::CodeImage;
+using t2d::CodeOverride;
+using t2d::CodeTable;
+
+constexpr const char* kGameTableName = "mine.codetab";   ///< travels with the executable
+constexpr const char* kEntrySymbol = "mine_game_main";
+constexpr const char* kEngineId = "engine";
+constexpr const char* kEngineVersion = "0.1";
+
+/// The game's own table first, then the ones named on the command line, then the ones beside the
+/// executable: a mod drops its table into "packs" next to its content. Sorted, so the merge order does
+/// not depend on what the filesystem returns first.
+[[nodiscard]] std::vector<std::string> collect_tables(const std::vector<std::string>& named,
+                                                      const std::string& directory) {
+    std::vector<std::string> tables;
+    std::error_code code;
+    const fs::path game = fs::path(directory) / kGameTableName;
+    if (fs::is_regular_file(game, code)) tables.push_back(game.string());
+    else T2D_ERROR("table: '{}' is not there: the game's table travels with the executable", game.string());
+    for (const std::string& path : named) {
+        if (!fs::is_regular_file(path, code)) {
+            T2D_ERROR("table: '{}' is not a table", path);
+            continue;
+        }
+        tables.push_back(path);
+    }
+    std::vector<std::string> found;
+    const fs::path packs = fs::path(directory) / "packs";
+    if (fs::is_directory(packs, code)) {
+        for (const fs::directory_entry& entry : fs::directory_iterator(packs, code)) {
+            if (entry.path().extension() == ".codetab") found.push_back(entry.path().string());
+        }
+    }
+    std::sort(found.begin(), found.end());
+    tables.insert(tables.end(), found.begin(), found.end());
+    return tables;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
-    const ore::CommandLine cli = ore::CommandLine::parse(argc, argv);
+    // --table belongs to the launcher, so it is taken out of the command line before the game parses
+    // what is left: an option the game does not know is not a thing to hand it.
+    std::vector<std::string> named;
+    std::vector<std::string> kept;
+    for (int index = 0; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (index > 0 && argument == "--table" && index + 1 < argc) {
+            named.emplace_back(argv[++index]);
+            continue;
+        }
+        kept.push_back(argument);
+    }
+    std::vector<char*> game_argv;
+    game_argv.reserve(kept.size());
+    for (std::string& argument : kept) game_argv.push_back(argument.data());
 
-    mine::MineOptions options;
-    if (const auto world = cli.value("world"); world.has_value()) {
-        if (*world == "sandbox") options.session.mode = mine::Mode::Sandbox;
-        else options.session.mode = *world == "endless" ? mine::Mode::Endless : mine::Mode::Story;
-    }
-    if (const auto seed = cli.uint_value("seed"); seed.has_value()) options.session.seed = *seed;
-    if (const auto host = cli.bool_value("host"); host.has_value() && *host) options.session.role = mine::Role::Host;
-    if (const auto connect = cli.value("connect"); connect.has_value()) {
-        options.session.role = mine::Role::Join;
-        options.session.connect_address = *connect;
-    }
-    if (const auto start = cli.bool_value("start"); start.has_value()) options.start_immediately = *start;
-    if (const auto lang = cli.value("lang"); lang.has_value()) {
-        const std::optional<t2d::Language> language = t2d::parse_language(*lang);
-        if (!language.has_value()) {
-            T2D_ERROR("unknown language '{}' (try en, zh-Hans or zh-Hant)", *lang);
-            return 1;
-        }
-        options.language = *language;
-    }
-    if (const auto font = cli.value("font"); font.has_value()) options.font_path = *font;
-    if (const auto cjk = cli.value("cjk-font"); cjk.has_value()) options.cjk_font_path = *cjk;
-    if (const auto ui = cli.value("ui-text"); ui.has_value()) options.ui_text_path = *ui;
+    const std::vector<std::string> paths =
+        collect_tables(named, t2d::parent_directory_of(t2d::executable_path()));
+    if (paths.empty()) return 1;
 
-    // The sandbox: which content files describe the layer, how big it is, and what to do with it.
-    for (const std::string& path : cli.values("content")) options.content_paths.push_back(path);
-    if (const auto grid = cli.value("grid"); grid.has_value()) {
-        const std::size_t separator = grid->find('x');
-        if (separator == std::string::npos) {
-            T2D_ERROR("--grid wants a size like 40x24, got '{}'", *grid);
+    // The image is deliberately never destroyed. It owns the memory the game was placed in, and the
+    // C++ runtime runs the module's static destructors *after* main returns - a destroyed image would
+    // have unmapped the code those destructors are made of. A program that ends in a moment is not a
+    // program that needs to hand memory back.
+    CodeImage& image = *new CodeImage();
+    image.declare_host(kEngineId, kEngineVersion);
+    for (const std::string& path : paths) {
+        std::string error;
+        std::optional<CodeTable> table = CodeTable::load(path, &error);
+        if (!table.has_value()) {
+            T2D_ERROR("table: {}", error);
             return 1;
         }
-        options.grid_width = static_cast<mine::u32>(std::strtoul(grid->substr(0, separator).c_str(), nullptr, 10));
-        options.grid_height = static_cast<mine::u32>(std::strtoul(grid->substr(separator + 1).c_str(), nullptr, 10));
-        if (options.grid_width == 0 || options.grid_height == 0) {
-            T2D_ERROR("--grid wants two positive numbers, got '{}'", *grid);
-            return 1;
-        }
+        image.add(std::move(*table));
     }
-    if (const auto layers = cli.uint_value("tile-layers"); layers.has_value()) {
-        options.tile_layers = static_cast<mine::i32>(*layers);
-    }
-    if (const auto layer = cli.uint_value("layer"); layer.has_value()) {
-        options.start_layer = static_cast<mine::i32>(*layer);
-    }
-    if (const auto fill = cli.value("fill"); fill.has_value()) options.fill = *fill;
-    if (const auto fill_layer = cli.value("fill-layer"); fill_layer.has_value()) options.fill_layer = *fill_layer;
-    for (const std::string& directory : cli.values("packs")) options.pack_directories.push_back(directory);
-    for (const std::string& directory : cli.values("mods")) options.mod_directories.push_back(directory);
-    // Where the game looks without being told (mine/content_search.h): the "packs" directory beside
-    // the executable - drop a pack or a mod there and run the game, wherever you are standing - and the
-    // working directory's own "packs", which is the workspace a designer develops in. Neither is a
-    // promise: a missing one is silent, because nobody asked for it, while an explicit --packs or
-    // --mods that is missing *is* reported.
-    //
-    // The two lists default independently: --packs on its own still lets the game find its own mods.
-    if (options.pack_directories.empty() || options.mod_directories.empty()) {
-        const bool packs_by_default = options.pack_directories.empty();
-        const bool mods_by_default = options.mod_directories.empty();
-        const std::vector<std::string> defaults =
-            mine::default_content_directories(t2d::executable_path(), std::filesystem::current_path().string());
-        if (packs_by_default) options.pack_directories = defaults;
-        if (mods_by_default) options.mod_directories = defaults;
-        for (const std::string& directory : defaults) {
-            // One line per directory, saying what it is being looked in for: "which directory did that
-            // come from" is the first question a designer asks of a load they did not spell out.
-            T2D_INFO("content: looking in '{}' for {} without being asked", directory,
-                     packs_by_default && mods_by_default
-                         ? "packs and mods"
-                         : (packs_by_default ? "packs" : "mod packages"));
-        }
-    }
-    if (const auto view = cli.value("view"); view.has_value()) {
-        const std::size_t first = view->find(',');
-        const std::size_t second = first == std::string::npos ? std::string::npos : view->find(',', first + 1);
-        if (first == std::string::npos) {
-            T2D_ERROR("--view wants x,y or x,y,zoom, got '{}'", *view);
-            return 1;
-        }
-        const std::string y_text = view->substr(first + 1, second == std::string::npos ? second : second - first - 1);
-        options.view_cell.x = static_cast<mine::f32>(std::strtof(view->substr(0, first).c_str(), nullptr));
-        options.view_cell.y = static_cast<mine::f32>(std::strtof(y_text.c_str(), nullptr));
-        if (second != std::string::npos) {
-            options.view_zoom = static_cast<mine::f32>(std::strtof(view->substr(second + 1).c_str(), nullptr));
-        }
-        options.has_view = true;
-    }
-    if (const auto layout = cli.value("layout"); layout.has_value()) options.layout_path = *layout;
-    if (const auto save = cli.value("save-layout"); save.has_value()) options.save_layout_path = *save;
-    if (const auto dump = cli.bool_value("dump-layer"); dump.has_value()) options.dump_layer = *dump;
-    if (const auto playtest = cli.bool_value("playtest"); playtest.has_value()) options.playtest = *playtest;
-    if (const auto pointer = cli.value("pointer"); pointer.has_value()) {
-        const std::size_t separator = pointer->find(',');
-        if (separator == std::string::npos) {
-            T2D_ERROR("--pointer wants a cell like 12,7, got '{}'", *pointer);
-            return 1;
-        }
-        options.pointer_cell.x = static_cast<mine::f32>(std::strtof(pointer->substr(0, separator).c_str(), nullptr));
-        options.pointer_cell.y = static_cast<mine::f32>(std::strtof(pointer->substr(separator + 1).c_str(), nullptr));
-        options.has_pointer = true;
-    }
-    if (const auto list = cli.bool_value("content-list"); list.has_value()) options.content_list = *list;
 
-    // The world view: straight into the mine, which layer, and what to put in it while the layer rules
-    // are still the designer's to give.
-    if (const auto view = cli.bool_value("world-view"); view.has_value()) options.world_view = *view;
-    if (const auto layer = cli.uint_value("mine-layer"); layer.has_value()) {
-        options.mine_layer = static_cast<mine::i32>(*layer);
+    const t2d::CodeImageReport& report = image.load();
+    for (const std::string& message : report.errors) T2D_ERROR("table: {}", message);
+    for (const std::string& name : report.unresolved) T2D_ERROR("table: nothing defines '{}'", name);
+    // Who replaced what is the first question asked of a modded run, so it is said out loud.
+    for (const CodeOverride& replaced : report.overrides) {
+        T2D_WARN("table: '{}' from '{}' replaced '{}'", replaced.symbol, replaced.from, replaced.replaced);
     }
-    if (const auto fill = cli.value("layer-fill"); fill.has_value()) options.layer_fill = *fill;
+    T2D_INFO("tables: {} module(s), {} symbol(s), {} relocation(s), {} override(s), {} error(s)",
+             report.modules.size(), report.symbols, report.relocations, report.overrides.size(),
+             report.errors.size());
+    if (!report.clean()) return 1;
 
-    mine::MineApp application(std::move(options));
-    return application.run(argc, argv);
+    const auto entry = image.function<int(int, char**)>(kEntrySymbol);
+    if (entry == nullptr) {
+        T2D_ERROR("table: the game's table does not export '{}'", kEntrySymbol);
+        return 1;
+    }
+    return entry(static_cast<int>(game_argv.size()), game_argv.data());
 }

@@ -82,12 +82,23 @@ struct ObjectRelocation {
     i64 addend = 0;
 };
 
+/// One COMDAT group: the symbol that names it, and the sections it owns.
+///
+/// A C++ compiler marks the code of an inline function this way, and when the symbol itself is left in
+/// a section a table does not carry (a group is bookkeeping, not something the program runs), the group
+/// is the only thing that still says which section the code is in.
+struct ObjectGroup {
+    u32 signature = 0;          ///< index into ObjectFile::symbols
+    std::vector<u32> members;   ///< section indices
+};
+
 /// One relocatable object file.
 struct ObjectFile {
     std::string source;   ///< where it was read from, for messages
     std::vector<ObjectSection> sections;
     std::vector<ObjectSymbol> symbols;
     std::vector<ObjectRelocation> relocations;
+    std::vector<ObjectGroup> groups;
 
     [[nodiscard]] static std::optional<ObjectFile> load(const std::string& path, std::string* error = nullptr);
     [[nodiscard]] static std::optional<ObjectFile> parse(ConstSpan<const u8> bytes, std::string* error = nullptr);
