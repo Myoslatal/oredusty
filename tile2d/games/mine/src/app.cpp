@@ -978,15 +978,19 @@ void MineApp::apply_fill() {
     sandbox_.set_active_layer(options_.start_layer);
 }
 
+ore::rhi::Texture* MineApp::texture_of(ContentKind kind, std::string_view name) const {
+    const auto found = content_textures_.find(image_key(kind, name));
+    return found == content_textures_.end() ? nullptr : found->second.get();
+}
+
 void MineApp::load_content_images() {
     image_errors_.clear();
-    image_atlas_.reset();
-    // How big a cell has to be is decided by the art the content actually ships: the atlas refuses an
-    // image larger than a cell rather than scaling it (silently scaling art is worse than saying no),
-    // and content comes in whatever size it was drawn in. The first pass reads the sizes, the second
-    // fills the atlas, so the pixels of every picture are not held at once.
-    constexpr u32 kPageSize = 1024;
-    u32 cell = 64;
+    content_textures_.clear();
+    // One picture per content entry, and its own texture: there is no atlas to pack into, so a picture
+    // is drawn in whatever size it was drawn in (docs/MODS.md section 0) and no cell can be too small
+    // for it. The price is a batch per distinct picture on screen, which is what a batch binds.
+    usize loaded = 0;
+    u32 largest = 0;
     for (const ResolvedImage& image : content_.report().images) {
         if (!image.ok) continue;   // the content loader already reported why
         const std::optional<ore::Image> pixels = ore::Image::load_png(image.resolved);
@@ -994,34 +998,19 @@ void MineApp::load_content_images() {
             image_errors_.push_back(std::format("{}: cannot be decoded", image.resolved));
             continue;
         }
-        cell = std::max(cell, std::max(pixels->width, pixels->height));
-    }
-    // A power of two keeps the grid aligned, and the page is the ceiling: an image that does not fit
-    // is reported below, with its own name on it.
-    cell = std::min(std::bit_ceil(cell), kPageSize);
-
-    t2d::ImageAtlas::Options options;
-    options.page_size = kPageSize;
-    options.cell_size = cell;
-    image_atlas_ = t2d::ImageAtlas::create(context(), options);
-    if (image_atlas_ == nullptr) {
-        image_errors_.emplace_back("the image atlas could not be created");
-        return;
-    }
-    usize loaded = 0;
-    for (const ResolvedImage& image : content_.report().images) {
-        if (!image.ok) continue;
-        const std::optional<ore::Image> pixels = ore::Image::load_png(image.resolved);
-        if (!pixels.has_value()) continue;   // reported by the pass above
-        if (!image_atlas_->add(image_key(image.kind, image.content), *pixels)) {
-            image_errors_.push_back(std::format("{}: does not fit a {} pixel cell", image.resolved, cell));
+        const std::string key = image_key(image.kind, image.content);
+        Scope<ore::rhi::Texture> texture =
+            context().create_texture(*pixels, false, std::format("content.{}", key));
+        if (texture == nullptr) {
+            image_errors_.push_back(std::format("{}: the texture could not be created", image.resolved));
             continue;
         }
+        largest = std::max(largest, std::max(pixels->width, pixels->height));
+        content_textures_.emplace(key, std::move(texture));
         ++loaded;
     }
     if (loaded > 0) {
-        T2D_INFO("images: {} loaded into a {}x{} atlas ({} cell)", loaded, image_atlas_->page_size(),
-                 image_atlas_->page_size(), image_atlas_->cell_size());
+        T2D_INFO("images: {} loaded, one texture per content entry (largest {} px)", loaded, largest);
     }
     for (const std::string& error : image_errors_) T2D_WARN("images: {}", error);
 }
@@ -1579,13 +1568,41 @@ void MineApp::draw_playtest_screen() {
     draw_line(hint_x, text_y, body_px_, kPalette.accent, hint);
 }
 
-void MineApp::draw_sandbox_images() {
-    if (image_atlas_ == nullptr || image_atlas_->count() == 0) return;
+MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
+                                                    const ore::Mat4& view_projection) {
+    ImagePassCost cost;
+    if (content_textures_.empty()) return cost;
     const f32 cell = sandbox_.cell_px();
     const SandboxDrawRange range = sandbox_draw_range();
     const i32 step = range.step;
     const f32 span = cell * static_cast<f32>(step);
     const i32 sample = step / 2;
+
+    // One quad of art, and which content entry it belongs to. They are collected first and drawn
+    // grouped, because a batch binds one texture and every content entry has its own: the frame issues
+    // one batch per distinct picture rather than one per frame.
+    struct Quad {
+        std::string key;
+        t2d::Aabb2 rect{};
+        u32 color = 0xFFFFFFFFu;
+    };
+    // Collected per picture, in the order the pictures first appear: one batch per distinct content on
+    // screen rather than one per run of cells (a checkerboard of two floors must not be two thousand
+    // batches). Within a picture the quads keep the order they were collected in, and since the cells
+    // are walked layer by layer, a picture first seen on a higher layer is drawn after the ones below
+    // it - which is what keeps a machine's art on top of the floor it stands on.
+    std::vector<std::pair<std::string, std::vector<Quad>>> groups;
+    std::unordered_map<std::string, usize> group_of;
+    const auto add_quad = [&](Quad quad) {
+        const auto found = group_of.find(quad.key);
+        if (found == group_of.end()) {
+            group_of.emplace(quad.key, groups.size());
+            groups.emplace_back(quad.key, std::vector<Quad>{});
+            groups.back().second.push_back(std::move(quad));
+            return;
+        }
+        groups[found->second].second.push_back(std::move(quad));
+    };
 
     // Bottom to top, like the panel pass, so a higher layer's art covers a lower one's. A layer the
     // brush is not on is dimmed here too, or the art would undo the dimming the colours got.
@@ -1596,34 +1613,48 @@ void MineApp::draw_sandbox_images() {
                 const GridPos pos{std::min(x + sample, range.x1), std::min(y + sample, range.y1)};
                 const CellView value = sandbox_.cell(layer, pos);
                 if (value.empty()) continue;
-                const std::string key = image_key(value.kind, value.name);
-                if (!image_atlas_->has(key)) continue;
+                if (texture_of(value.kind, value.name) == nullptr) continue;
                 const t2d::Vec2 at = sandbox_.screen_of_cell(GridPos{x, y});
                 // The editor insets a picture so the cell under it stays readable; the playtest draws
                 // it edge to edge, which is how a tilemap draws a tile, and dims nothing.
                 const f32 inset = playtest_ ? 0.0f : span * 0.08f;
-                batch_->draw_quad(t2d::Aabb2{t2d::Vec2{at.x + inset, at.y + inset},
-                                             t2d::Vec2{at.x + span - inset, at.y + span - inset}},
-                                  image_atlas_->uv(key), (playtest_ || active) ? 0xFFFFFFFFu : 0x80FFFFFFu);
+                add_quad(Quad{image_key(value.kind, value.name),
+                              t2d::Aabb2{t2d::Vec2{at.x + inset, at.y + inset},
+                                         t2d::Vec2{at.x + span - inset, at.y + span - inset}},
+                              (playtest_ || active) ? 0xFFFFFFFFu : 0x80FFFFFFu});
             }
         }
     }
 
     // The palette's swatches: the same picture the cell would get, so a designer can tell two entries
     // apart by looking at them. The playtest has no palette, so it draws none.
-    if (playtest_ || sandbox_.palette_count() == 0) return;
-    const PaletteLayout layout = palette_layout();
-    for (usize index = layout.first_visible; index < sandbox_.palette_count() &&
-                                              index < layout.first_visible + layout.visible; ++index) {
-        const PaletteEntry& entry = sandbox_.palette(index);
-        const std::string key = image_key(entry.kind, entry.name);
-        if (!image_atlas_->has(key)) continue;
-        const f32 y = layout.first_y + static_cast<f32>(index - layout.first_visible) * layout.row_height;
-        batch_->draw_quad(t2d::Aabb2{t2d::Vec2{layout.left, y + layout.swatch_offset},
+    if (!playtest_ && sandbox_.palette_count() > 0) {
+        const PaletteLayout layout = palette_layout();
+        for (usize index = layout.first_visible; index < sandbox_.palette_count() &&
+                                                  index < layout.first_visible + layout.visible; ++index) {
+            const PaletteEntry& entry = sandbox_.palette(index);
+            if (texture_of(entry.kind, entry.name) == nullptr) continue;
+            const f32 y = layout.first_y + static_cast<f32>(index - layout.first_visible) * layout.row_height;
+            add_quad(Quad{image_key(entry.kind, entry.name),
+                          t2d::Aabb2{t2d::Vec2{layout.left, y + layout.swatch_offset},
                                      t2d::Vec2{layout.left + layout.swatch,
                                                y + layout.swatch_offset + layout.swatch}},
-                          image_atlas_->uv(key), 0xFFFFFFFFu);
+                          0xFFFFFFFFu});
+        }
     }
+    // Each picture fills its whole texture: there is no atlas, so the uv rectangle is the texture.
+    const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
+    for (const std::pair<std::string, std::vector<Quad>>& group : groups) {
+        const auto texture = content_textures_.find(group.first);
+        if (texture == content_textures_.end()) continue;
+        batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+        for (const Quad& quad : group.second) batch_->draw_quad(quad.rect, full_uv, quad.color);
+        batch_->end();
+        cost.draw_calls += batch_->draw_calls();
+        cost.quads += batch_->quads();
+        cost.dropped += batch_->dropped_quads();
+    }
+    return cost;
 }
 
 void MineApp::on_resize(u32 width, u32 height) {
@@ -1655,18 +1686,22 @@ void MineApp::on_render(ore::RenderFrame& frame) {
     }
     batch_->end();
     dropped_quads_ = batch_->dropped_quads();
+    // The frame's counters are the frame's: the chrome batch is what has just ended, and the art pass
+    // below adds the batches of its own.
+    u32 draw_calls = batch_->draw_calls();
+    usize quads = batch_->quads();
 
-    // Pack art is a second texture, so it is a second batch. It is worth it: a content entry that
-    // ships a picture is drawn with it, which is what makes the sandbox a view of the real thing.
-    if (screen_ == Screen::Sandbox && image_atlas_ != nullptr && image_atlas_->count() > 0) {
-        batch_->begin(frame, view_projection, image_atlas_->texture(), image_sampler_->handle());
-        draw_sandbox_images();
-        batch_->end();
-        dropped_quads_ += batch_->dropped_quads();
+    // Content art comes after the colours and in its own batches: a content entry that ships a picture
+    // is drawn with it, which is what makes the sandbox a view of the real thing.
+    if (screen_ == Screen::Sandbox) {
+        const ImagePassCost cost = draw_sandbox_images(frame, view_projection);
+        draw_calls += cost.draw_calls;
+        quads += cost.quads;
+        dropped_quads_ += cost.dropped;
     }
 
-    frame.counters.draw_calls = batch_->draw_calls();
-    frame.counters.triangles = batch_->quads() * 2;
+    frame.counters.draw_calls = draw_calls;
+    frame.counters.triangles = static_cast<u32>(quads) * 2;
     renderer().end_pass();
 }
 

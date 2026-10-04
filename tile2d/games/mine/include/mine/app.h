@@ -21,7 +21,6 @@
 #include <mine/sandbox.h>
 #include <mine/session.h>
 
-#include <t2d/render/image_atlas.h>
 #include <t2d/render/sprite_batch.h>
 #include <t2d/render/text_renderer.h>
 #include <t2d/text/font.h>
@@ -31,6 +30,8 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace mine {
@@ -137,10 +138,13 @@ private:
     void fit_sandbox_view();
     void load_localisation();
     void load_fonts();
-    /// Decodes every picture the content ships into one atlas, so the sandbox can draw what the content
-    /// describes instead of a colour standing in for it. Every source is in here: the game's own files,
-    /// the packs and the mods.
+    /// Decodes every picture the content ships into **its own texture**, so the sandbox can draw what
+    /// the content describes instead of a colour standing in for it. Every source is in here: the
+    /// game's own files, the packs and the mods. There is no atlas on purpose (docs/MODS.md section 0):
+    /// one picture per content entry, in whatever size it was drawn in.
     void load_content_images();
+    /// The texture one content entry is drawn with, or nullptr when it has no picture.
+    [[nodiscard]] ore::rhi::Texture* texture_of(ContentKind kind, std::string_view name) const;
     /// The cells of the sandbox map a frame has to draw, and how many cells one drawn quad covers.
     /// A map of hundreds of cells per side cannot be drawn cell by cell at every zoom: past a quad
     /// budget the frame draws a sampled overview instead, one quad per block of cells.
@@ -160,8 +164,17 @@ private:
         usize first_visible = 0, visible = 0;
     };
     [[nodiscard]] PaletteLayout palette_layout() const;
-    /// Draws the pictures of the visible cells and of the palette, in their own batch: one texture.
-    void draw_sandbox_images();
+    /// What the art pass cost: it issues its own batches (one per distinct picture on screen), so the
+    /// frame's counters have to be told about them rather than reading the last batch.
+    struct ImagePassCost {
+        u32 draw_calls = 0;
+        usize quads = 0;
+        u32 dropped = 0;
+    };
+    /// Draws the pictures of the visible cells and of the palette. Each content entry has its own
+    /// texture, and a batch binds one texture, so this is one batch per distinct picture on screen -
+    /// the price of not packing the art into an atlas.
+    [[nodiscard]] ImagePassCost draw_sandbox_images(ore::RenderFrame& frame, const ore::Mat4& view_projection);
     void draw_start_screen();
     void draw_session_screen();
     void draw_sandbox_screen();
@@ -251,8 +264,8 @@ private:
 
     Scope<t2d::SpriteBatch> batch_;
     Scope<ore::rhi::Sampler> sampler_;
-    /// Pack art: one page for every picture the content references, drawn in a second batch.
-    Scope<t2d::ImageAtlas> image_atlas_;
+    /// Content art: one texture per content entry that ships a picture, keyed "kind:name".
+    std::unordered_map<std::string, Scope<ore::rhi::Texture>> content_textures_;
     Scope<ore::rhi::Sampler> image_sampler_;
     std::vector<std::string> image_errors_;
     /// The content files the game itself ships (games/mine/content), scanned once at startup: they are
