@@ -135,6 +135,40 @@ ore_add_shaders(mine_game SHADERS
     "${CMAKE_SOURCE_DIR}/shaders/sprite.vert"
     "${CMAKE_SOURCE_DIR}/shaders/sprite.frag")
 
+# The game's own content pack travels beside the executable, so a build tree is a runnable game and
+# the source tree is not consulted at run time at all: what is packaged is what was built.
+add_custom_command(TARGET mine_game_table POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/games/mine/content" "${CMAKE_CURRENT_BINARY_DIR}/content"
+    COMMENT "Copying the game's own content pack beside the executable")
+
+# A release: everything a run needs, assembled in one directory and then zipped. Nothing here is
+# optional - a package without the table, the surface or the content is a package that does not start.
+set(MINE_PACKAGE_NAME "mine-${PROJECT_VERSION}")
+set(MINE_PACKAGE_ROOT "${CMAKE_BINARY_DIR}/package")
+set(MINE_PACKAGE_DIR "${MINE_PACKAGE_ROOT}/${MINE_PACKAGE_NAME}")
+set(MINE_PACKAGE_ZIP "${CMAKE_BINARY_DIR}/${MINE_PACKAGE_NAME}-${CMAKE_BUILD_TYPE}.zip")
+# The working directory of a custom command has to exist before the command runs, and the commands
+# below are what put the package together: the root is made at configure time, the rest at build time.
+file(MAKE_DIRECTORY "${MINE_PACKAGE_ROOT}")
+add_custom_target(mine_package
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "${MINE_PACKAGE_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${MINE_PACKAGE_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:mine_game> "${MINE_PACKAGE_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy "${MINE_TABLE_PATH}" "${MINE_PACKAGE_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/engine.api" "${MINE_PACKAGE_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/games/mine/content" "${MINE_PACKAGE_DIR}/content"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_BINARY_DIR}/shaders" "${MINE_PACKAGE_DIR}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/packs" "${MINE_PACKAGE_DIR}/packs"
+    COMMAND ${CMAKE_COMMAND} -E remove "${MINE_PACKAGE_ZIP}"
+    COMMAND ${CMAKE_COMMAND} -E tar cf "${MINE_PACKAGE_ZIP}" --format=zip -- "${MINE_PACKAGE_NAME}"
+    WORKING_DIRECTORY "${MINE_PACKAGE_ROOT}"
+    DEPENDS mine_game mine_game_table
+    COMMENT "Packaging ${MINE_PACKAGE_NAME} into ${MINE_PACKAGE_ZIP}")
+
 if(T2D_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
