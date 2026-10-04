@@ -233,7 +233,7 @@
   版本不符、截断、重复 id、重复名字、零 id、空名字、超长名字、尾随字节——读不懂就拒绝，
   绝不猜测。
 * `[已实现]` `mine_core/registry.h`：`ContentRegistry`、`ContentTable`、`ContentRemap`；
-  单测 `test_registry`（10 用例 / 127 断言，纯 CPU）。
+  单测 `test_registry`（10 用例 / 128 断言，纯 CPU）。
 * `[已实现]` **内容数据用 `.ecfg` 文件**（格式见仓库根的 `example.ecfg`，读取器 `t2d/core/ecfg.h`）。
   文件里以 kind 名（item / structure / …）开表，表内每个键就是一个内容名，键下面的字段由设计者
   定义、引擎不解释：
@@ -267,8 +267,8 @@
   同名内容**报冲突而不合并**（谁先注册谁保留，冲突记进报告）；内容包重定义本体内容时，本体赢。
 * 原生模组编译时只需要 `mine/mod_api.h`（及其引用的类型头），**不链接本体的任何库**；跨过 ABI 的只有
   纯数据与函数指针，接口按"只追加 + `struct_size` + 版本号"的方式演进。
-* `[已实现]` 单测 `test_module`（5 用例 / 33 断言）、`test_mod_package`（9 用例 / 102 断言）与
-  `test_content_pack`（11 用例 / 155 断言，覆盖包头错误、重复 id、依赖缺失与成环、语法错、重定义本体内容、
+* `[已实现]` 单测 `test_module`（5 用例 / 33 断言）、`test_mod_package`（9 用例 / 104 断言）与
+  `test_content_pack`（13 用例 / 196 断言，覆盖包头错误、重复 id、依赖缺失与成环、语法错、重定义本体内容、
   三来源顺序与重载一致性、本体内容自带贴图、引擎字段写错被报告），示例在 `games/mine/tests/{packs,mods}/`。
 
 ## 7. 需要设计者提供的内容清单（本清单就是"内容接口"）
@@ -312,7 +312,7 @@
 * 开始界面：`mine_game`（`tile2d/games/mine`），世界类型 / 种子 / 单机·主持·加入 / 退出，
   键控 + 会话界面回退。
 * 纯逻辑：`mine_core`（会话配置 + 菜单模型 + 内容注册表 / 每存档 id 表），无 Ore 依赖。
-* 测试：`test_mine_menu`（7 用例 / 47 断言）、`test_registry`（10 用例 / 127 断言），
+* 测试：`test_mine_menu`（11 用例 / 168 断言）、`test_registry`（10 用例 / 128 断言），
   毫秒级，已进入 Tile2D 的 ctest 套件。
 * 截图（真机 GPU，Intel Arc Pro 130T/140T；离屏渲染，尺寸取窗口标称的 2133×1200）：
 
@@ -329,7 +329,7 @@
 模式**，是开发工具（完整说明见 `docs/SANDBOX.md`）。
 
 * 纯逻辑：`mine_core/sandbox.h`（网格 / 内容面板 / 光标 / 相机 / 按名字重载 / 布局序列化 / 文字导出），
-  无 Ore 依赖；单测 `test_sandbox`（17 用例 / 483 断言，毫秒级）。
+  无 Ore 依赖；单测 `test_sandbox`（28 用例 / 716 断言，毫秒级）。
 * 界面：`mine_app` 的第三个界面（网格 + 内容面板 + 状态栏），键鼠操作，`--world sandbox`。
 * 命令行：`--content`（可重复）、`--grid WxH`、`--fill none|bands|scatter`、`--layout`、
   `--save-layout`、`--dump-layer`。
@@ -378,7 +378,7 @@
 
 ### M2 前置交付状态（二）：大图与相机（已落地）
 
-玩法要在几百格见方的图上跑，而沙盒当时每格存一个名字（37 字节 + 一次堆分配），一屏还要把可见格子
+玩法要在几百格见方的图上跑，而沙盒当时每格存一个名字（一个 `std::string` 加一次堆分配），一屏还要把可见格子
 全部按格子画一遍。这一轮把两件事都换成能撑住大图的做法，并且都用真机数字验证：
 
 * **相机进框架**：`t2d/core/camera2d.h`——视口、世界中心、缩放（像素/世界单位，格子游戏即像素/格）、
@@ -399,12 +399,12 @@
 
 | 地图 | 格子数 | 存储 | 每帧 | 峰值 RSS |
 |---|---|---|---|---|
-| 40×24 × 1 层 | 960 | 3 KiB | ~9 ms | 100.5 MB |
-| 512×512 × 4 层 | 1.05M | 4096 KiB | ~10 ms | 100.4 MB |
-| 1024×1024 × 8 层 | 8.4M | 32768 KiB | ~9 ms | 116.6 MB |
+| 40×24 × 1 层 | 960 | 3 KiB | ~10 ms | 108.9 MB |
+| 512×512 × 4 层 | 1.05M | 4096 KiB | ~11 ms | 108.9 MB |
+| 1024×1024 × 8 层 | 8.4M | 32768 KiB | ~12 ms | 125.0 MB |
 
 同一组运行在改造前是：512×512×4 用 134.5 MB / 2.25 s（20 帧），1024×1024×8 用 414.6 MB / 5.30 s——
-存储从 37 字节一格降到 4 字节一格，帧成本从“随地图面积”变成“随屏幕”。
+存储从每格一个名字降到每格 4 字节，帧成本从“随地图面积”变成“随屏幕”。
 
 截图（512×512 × 4 层，同一份散布数据）：整图入框（0.99 像素/格，按块采样）与放大到 20 像素/格：
 
@@ -506,10 +506,10 @@
 * `[已实现]` **多层瓦片地图**：`TileMap` 支持 1..32 个瓦片层（构造参数，默认 1，因此所有既有调用
   行为不变）、按层掩码的碰撞/危险/单向/射线查询、`topmost()`、逐层填充与计数、逐层 ASCII 读写与
   盖章（`stamp_ascii`）；序列化格式升到 v2（逐层 RLE，运行不跨层），校验和与层数一起哈希。
-  渲染器按层自下而上绘制。单测 `test_tilemap`（16 用例 / 345 断言）
+  渲染器按层自下而上绘制。单测 `test_tilemap`（17 用例 / 359 断言）
   与离屏像素测试 `test_render_offscreen`（高层覆盖低层、掩码选层）。
 * `[已实现]` 沙盒支持瓦片层：`--tile-layers / --layer / --fill-layer`，`[ ]` 切换当前层，非当前层压暗，
-  光标处的"格子"报告整叠内容；布局文件（magic `MSB3`）逐层存取。
+  光标处的"格子"报告整叠内容；布局文件（magic `MSB2` + 一个版本字节，当前 3）逐层存取。
 * `[已实现]` **相机（框架）**：`t2d/core/camera2d.h`——世界↔屏幕映射、以锚点缩放、`fit`、`clamp_to`、
   `visible_cells`（剔除范围）。纯数学、无 GPU；沙盒的相机就是它，单测 `test_camera2d`。
 * `[已实现]` **大图存储（游戏）**：`mine/content_grid.h`——每格 32 位的内容引用（id/kind/缺失标志）、
@@ -541,7 +541,7 @@
   错误报告、移动语义）与 `mine/mod_package.h`（清单解析、目录扫描、依赖拓扑排序、冲突报告、
   原生模块宿主与 C ABI 实现）；模组 SDK 头 `mine/mod_api.h`（版本化、只追加的 C ABI）；示例包
   `games/mine/tests/mods/*`（一个纯数据、一个原生）；沙盒 `--mods`、F5 连模组一起重载、状态栏 MODS 行。
-  单测 `test_module`（5 用例 / 33 断言）、`test_mod_package`（9 用例 / 102 断言）。
+  单测 `test_module`（5 用例 / 33 断言）、`test_mod_package`（9 用例 / 104 断言）。
 * `[已实现]` **第一份本体内容：泥地**（§1.17）：`games/mine/content/floors.ecfg` 用 `floor:: dirt::`
   声明它，贴图 `content/art/floor_dirt.png` 与它放在一起。**本体内容是加载顺序的第一段**，
   不需要任何参数就会加载（`--content` 是在它之后追加）：沙盒打开就列出 `floor #1 dirt`，
@@ -604,11 +604,31 @@
   `parent_directory_of()`（纯字符串规则，可无文件系统测试）；`mine/content_search.h`——
   `packs_beside()` 与 `default_content_directories()`：可执行文件旁边的 `packs/` 第一顺位、
   工作目录下的第二顺位、同一目录只算一次、只有存在的才进列表。单测 `test_executable`（2 用例 / 18 断言）
-  与 `test_content_search`（4 用例 / 24 断言，含"一个目录里同时放包和模组、两者都加载且无冲突"）。
+  与 `test_content_search`（5 用例 / 41 断言，含"一个目录里同时放包和模组、两者都加载且无冲突"）。
   顺带定下一条规则：**带 `mod.ecfg` 的目录不是内容包项目**，`ContentPack::scan_directory` 不再往里递归。
 * `[已实现]` **框架修复（重载会丢设备）**：重载内容时替换纹理前先 `renderer().wait_idle()`——
   上一帧可能还在 GPU 上读那张纹理，销毁在用的纹理会 `VK_ERROR_DEVICE_LOST`（`sync.cpp:72`，
   退出码 134）。复现步骤与修后数字见 §8 的 M2 交付状态。
+* `[已实现]` **代码表（框架）**：`t2d/core/object_file.h` + `t2d/core/code_table.h` + `tools/codetab`——把系统
+  编译器编出来的目标文件打成一张表（`.codetab`），运行时在内存里合并多张表、建一张符号表、**在合并之后**填
+  所有重定位。于是"模组覆盖本体函数"与"模组覆盖虚函数、本体的虚调用改道"都成立（实测 11 → 101、25 → 97）。
+  设计、边界与实测数字：`docs/TABLES.md`；公开面与版本规则：`docs/ENGINE_API.md`。
+* `[已实现]` **整块本体进表，可执行文件变启动器（游戏）**：`mine.codetab` 里是**整个游戏**（release 986 节 /
+  3000 符号 / 9828 重定位 / 1.13 MiB；debug 5602 / 23908 / 14165 / 3.40 MiB），`mine_game` 只做启动：收集表
+  （本体表 + `--table` + `packs/*.codetab`）、合并、校验公开面与版本、调用入口符号 `mine_game_main`。演示模组
+  `mods/demo_mod/mod.codetab` 顶掉本体一个函数：输出从 `Mine, unmodified` 变成 `Mine, modded`。
+* `[已实现]` **发布包与开发包（工程）**：`mine_package` 出 `mine-0.1.0-Release.zip`（启动器 + 表 + `engine.api` +
+  界面文本 + 本体内容包 + 着色器 + `packs/` 模板，strip 后约 0.9 MiB），`builddev` 出 `mine-dev-0.1.0-Debug.zip`
+  （头文件含生成的 `config.h` + `engine.api` + 本体表 + `codetab` + 模板 + 文档）。两个包都在"只有解压目录"的
+  环境里实跑过：`0 error(s)`。
+* `[已实现]` **框架修复（同一份定义两个函数体）**：GCC 在 `-O3` 下会把同一个 vague linkage 函数吐成两份不同的
+  机器码（实测 253 与 744 字节），旧的合并按"组内位置"去重，留下小的那份却把大的那份的重定位写了进去——
+  Release 包一启动就报 "a relocation runs past the section"。现在按**组签名 + 节名 + 字节**认同一份定义，字节
+  不同就各留各的；被丢掉的拷贝连同它的重定位一起丢；`from_objects` 还会拒绝任何越界的重定位，于是这类问题
+  变成**构建失败**而不是坏包（回归测试在 `test_code_table`）。
+* `[已实现]` **界面文本跟着包走（工程）**：`assets/text/ui.ecfg` 现在优先从**可执行文件旁边**读
+  （`mine/content_search.h` 的 `ui_text_beside()`），源码树只是构建目录里跑游戏时的回退——包拷到别的机器上
+  也还有文字，而不是一串 id。
 * M2 还差：**层数据/生成规则**（等设计者的 §7.3、§7.4、§7.8、§7.9：每层生成什么、一张图分几个瓦片层、
   每层放什么）、**层间通道与解锁**（§7，当前唯一确认的解锁条件是"本层需求全部完成"）、
   以及模组的 tick/行为钩子（等模拟的形状定了再往 ABI 末尾追加）。
@@ -657,6 +677,23 @@
 
 | 版本 | 变更 |
 |---|---|
+| M2.4 | **代码表：让 C++ 模组能改本体**（`docs/TABLES.md`、`docs/ENGINE_API.md`）：① **表与工具**——
+  `t2d/core/object_file.h` 读 ELF64 目标文件（含 COMDAT 组），`t2d/core/code_table.h` 是表格式 + `CodeImage`
+  （放置、合并、重定位、跑 `.init_array`），`tools/codetab` 提供 `build` / `pack` / `dump` / `api` / `dumphead`。
+  ② **整块本体进表**：`mine.codetab`（release 986 节 / 3000 符号 / 9828 重定位 / 1.13 MiB；debug 5602 / 23908 /
+  14165 / 3.40 MiB），`mine_game` 变成**启动器**——收集本体表 + `--table` + `packs/*.codetab`、合并、调用入口
+  符号 `mine_game_main`；引擎留在可执行文件里，`--whole-archive` 链接并导出自己的符号。③ **公开面与版本规则**：
+  `engine.api`（82 个符号：A 层 38 / B 层 44）是"模组能碰什么"，`api_verdict` 是"差多远还能用"——清单内跨整个
+  major、清单外同版本静默 / ±1 minor 警告后加载 / 再远拒绝、major 不同一律拒绝；三处执行：构建期 `--api`、
+  `codetab api`、启动器加载期。④ **打包**：`mine_package` 出发布包（strip 后约 0.9 MiB），`builddev` 出开发包
+  （头文件含生成的 `config.h` + `engine.api` + 本体表 + `codetab` + 模板 + 文档），两个包都在只有解压目录的环境里
+  实跑过（`0 error(s)`）。⑤ **修 bug**：同一份 vague linkage 定义被 GCC 吐成两份不同机器码（253 / 744 字节）时，
+  旧的按"组内位置"去重会把一份的重定位写进另一份——Release 包启动即报 "a relocation runs past the section"；
+  现在按**组签名 + 节名 + 字节**认同一份定义，被丢掉的拷贝连同重定位一起丢，越界重定位直接让**构建失败**。
+  ⑥ **界面文本跟着包走**：`assets/text/ui.ecfg` 优先从可执行文件旁边读。单测 `test_code_table` 10 → **13 用例 /
+  231 断言**、`test_mine_table`（3 用例 / 17 断言）；Tile2D 套件 23 → **25 个测试**全绿（debug/release/asan/tsan
+  25/25、no-renderer 11/11、Ore 13/13）；演示模组 `mods/demo_mod/mod.codetab` 顶掉本体一个函数，输出从
+  `Mine, unmodified` 变成 `Mine, modded` |
 | M2.3 | **内容包是一个目录**（设计者新要求）+ **本体内容按同一条规则加载**：① **一个内容包 = 一个目录**
   （若干 `.ecfg` 内容文件 + 资源），`pack.ecfg`（可选）用**顶层键** id / name / version / requires
   说明这个包是谁——与模组的 `mod.ecfg` 同一套；没有它时目录名就是 id。旧写法（一个 `.ecfg` 文件就是一个包）
@@ -680,7 +717,7 @@
   报成"已注册、未替换"）；④ `main.cpp` 里包与模组**各自独立**套用默认目录（只写 `--packs` 时模组仍自动找），
   并在启动日志里说明这次看了哪些目录。真机验证：把包与模组放进 `build/debug/games/mine/packs/`，
   **从 `/tmp` 启动**仍然加载（1 包 + 1 模组 + 本体 = 3 项内容，0 错误；内容列表 3 个来源全 OK）。
-  单测 `test_executable`（2 用例 / 18 断言）、`test_content_search`（4 用例 / 24 断言）；
+  单测 `test_executable`（2 用例 / 18 断言）、`test_content_search`（5 用例 / 41 断言）；
   Tile2D 套件 21 → **23 个测试**（no-renderer 9 → 10）全绿；文档 `docs/MODS.md` §0、
   `packs/README.md`、`docs/SANDBOX.md` §2、`tile2d/README.md` 同步 |
 | M2.1 | **世界（M2 第一段）**：① **`mine/world.h`**——`MineLayer`（地图格 + 地块 + 32×32 块索引 + 层自己的 `Rng`）与

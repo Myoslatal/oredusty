@@ -5,7 +5,7 @@ Ore 是一个紧凑、可读、依赖极少的现代 C++ 游戏开发框架：�
 分配器、描述符与管线封装、网格与相机、ECS 场景、帧循环与 headless 离屏渲染 + 截图。
 
 目标不是再做一个"教程级 Vulkan 封装"，而是一套**可以直接开项目**的最小完整栈：
-每一层都有明确的所有权与生命周期规则、可测试的纯逻辑、以及在 CI 里能真跑的验证手段。
+每一层都有明确的所有权与生命周期规则、可测试的纯逻辑、以及一条真能跑的验证脚本（`scripts/verify.sh`）。
 
 | 三角形 | 自转立方体 + 网格 + 飞行相机 | ECS 场景（纹理 / 层级 / 轨道相机） |
 |---|---|---|
@@ -244,7 +244,8 @@ ore_add_shaders(my_game SHADERS shaders/mesh.vert shaders/mesh.frag)
 ├── cmake/
 │   ├── OreHelpers.cmake        # 警告集、sanitizer、ore_add_example/test
 │   ├── OreShaders.cmake        # ore_add_shaders(): GLSL -> SPIR-V（增量 + 可选嵌入）
-│   └── EmbedSpirv.cmake        # 生成内嵌 SPIR-V 的 C++ 头
+│   ├── EmbedSpirv.cmake        # 生成内嵌 SPIR-V 的 C++ 头
+│   └── oreConfig.cmake.in      # find_package(ore) 的配置模板
 ├── include/ore/                # 公共头（可直接安装）
 │   ├── core/                   # 类型、日志、断言、计时、文件、图像/PNG、空闲链表、命令行
 │   ├── math/                   # glm 别名 + Vulkan 约定矩阵 + 相机与控制器
@@ -281,7 +282,7 @@ CPU 最多领先 GPU `frames_in_flight` 帧，因此每帧资源必须来自本�
 `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC` 的 dynamic offset 绑定：
 
 ```cpp
-const auto slice = frame.ring->allocate(sizeof(ObjectUniforms));   // 自动 256 字节对齐
+const auto slice = frame.ring->allocate(sizeof(ObjectUniforms));   // 自动按设备的 minUniformBufferOffsetAlignment 对齐
 *static_cast<ObjectUniforms*>(slice.mapped) = object;
 const u32 offset = static_cast<u32>(slice.offset);
 frame.cmd->bind_descriptor_set(0, scene_set, ConstSpan<u32>(&offset, 1));
@@ -342,15 +343,16 @@ ctest --test-dir build/debug --output-on-failure        # 全部
 |---|---|
 | `test_core_block_allocator` | 空闲链表分配器：best-fit、对齐、合并、碎片、不变量校验 |
 | `test_core_image` | PNG 编码/解码往返（含 1×1 与奇数尺寸）、非法输入拒绝、文件读写 |
-| `test_core_cli` | 命令行解析：`--k=v` / `--k v` / 短选项 / 重复项 / 布尔字面量 / help |
+| `test_core_cli` | 命令行解析：`--k=v` / `--k v` / 位置参数 / 重复项 / 布尔字面量 / help |
 | `test_core_time` | 固定步长累加器、帧计时统计 |
 | `test_input_map` | 输入边沿、鼠标增量、动作/轴绑定、重复绑定与解绑、缩放显示器上的指针换算（2 倍 / 1.6667 倍 / 退化尺寸） |
 | `test_shader_compile` | 运行期编译仓库内全部 GLSL、错误诊断、`#include` 解析、热重载轮询 |
 | `test_scene` | ECS：句柄代际回收、稀疏集一致性、`each<>` 组合、层级矩阵、5000 实体压力 |
 | `test_camera` | 投影/视图矩阵的 Vulkan 约定、AABB、飞行与轨道相机行为 |
+| `test_rhi_helpers` | RHI 里的纯函数：flush 范围按 `nonCoherentAtomSize` 对齐并夹在分配内、常见 layout 转换的默认 barrier 掩码、子资源范围、usage/stage 映射、深度与 `_SRGB` 格式分类 |
 | `test_debug_input` | 调试输入服务器：命令解析（键名、点击=按下+抬起、错误信息）、真实 socket 往返落到 `InputState`、按住与点一下的区别、两个服务器同时监听 |
 | `test_gpu_smoke` | 设备可用性（无设备时 SKIP） |
-| `test_gpu_render` | **离屏渲染并断言像素**：清屏回读、push constant 变色的全屏三角形、缓冲上传往返、纹理上传往返、mip 链、离屏尺寸变更、分配器统计 |
+| `test_gpu_render` | **离屏渲染并断言像素**：清屏回读、push constant 变色的全屏三角形、主机可见 staging 一定能映射、缓冲上传往返、纹理上传往返、mip 链、离屏尺寸变更、分配器统计 |
 | `test_gpu_swapchain` | **真实交换链的呈现路径**：借助 `VK_EXT_headless_surface` 创建无窗口交换链，验证 acquire → 渲染 → submit → present、呈现图像截图、resize 后重建交换链；驱动不支持该扩展时整组 SKIP |
 
 `test_gpu_render` 全流程走的是真实 Vulkan 设备（独显、核显或 SwiftShader 等软件实现），

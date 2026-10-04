@@ -1,14 +1,16 @@
 # 外部内容：纯 ecfg 内容包与模组包
 
 本体只做**核心逻辑**（tilemap、渲染、文字、传输、注册表、沙盒）。内容——定义与逻辑——从外部加载，
-有两种形式，按需要选（此外，**游戏自己带的内容**放在 `games/mine/content/`，永远是加载顺序的第一段）：
+有三种形式，按需要选（此外，**游戏自己带的内容**放在 `games/mine/content/`，永远是加载顺序的第一段）：
 
 | 形式 | 是什么 | 能带代码吗 |
 |---|---|---|
 | **内容包**（纯 ecfg） | **一个目录**：若干 `.ecfg` 内容文件 + 它们的资源，可选一个 `pack.ecfg` 说明自己是谁 | 不能 |
 | **模组包** | 一个目录 + `mod.ecfg` 清单 + 若干内容文件 + 可选的共享库 | 能（C ABI，见 §3） |
+| **代码表模组** | 一个 `.codetab` 文件（编好的 C++），启动时与本体合并 | 能，而且是**同一门 C++**（§3.5、[`TABLES.md`](TABLES.md)） |
 
-大多数内容只需要第一种；需要"跑点什么"（按参数生成内容、将来挂 tick 钩子）时才用第二种。
+大多数内容只需要第一种；需要"跑点什么"（按参数生成内容、将来挂 tick 钩子）时用第二种；需要**改本体自己
+的函数或类**时用第三种——`dlopen` 做不到这件事，因为本体内部的调用在链接本体时就绑定好了。
 
 加载顺序固定为：**本体内容 → 内容包 → 模组包**，三者进同一个注册表，id 按注册顺序分配。因此本体的 id
 永远稳定，内容包只能在它后面追加，模组包再往后。
@@ -112,7 +114,7 @@ structure::
   ```sh
   # 本体占位内容 + 仓库里的三个测试包（其中两个带 art/*.png），bands 填充：每项内容一条横带
   ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-      --content games/mine/tests/data/placeholder_content.ecfg \
+      --content games/mine/tests/data/placeholder_content \
       --packs games/mine/tests/packs --fill bands
   ```
 
@@ -140,7 +142,7 @@ structure::
         native.cpp -> libexample_native.so
 
     ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-        --content <本体内容.ecfg> --mods mods
+        --content <一个内容包目录> --mods mods
 
 `--mods` 可重复。不写 `--mods` 时用默认目录（与内容包同一批，见 §0 开头），所以模组也可以直接
 放进游戏目录下的 `packs/`。模组的内容与本体内容进入**同一个注册表**，id 按注册顺序分配，本体内容先注册。
@@ -151,7 +153,7 @@ structure::
 # 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的泥地 1 项 + 模组 6 项
 # = 13 项，bands 填充
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-    --content games/mine/tests/data/placeholder_content.ecfg \
+    --content games/mine/tests/data/placeholder_content \
     --mods build/debug/games/mine/tests/mods --fill bands
 ```
 
@@ -261,6 +263,39 @@ static const mine::MineModDesc g_desc{mine::kModApiVersion, sizeof(mine::MineMod
 MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 ```
 
+## 3.5 代码表模组：改本体自己的函数
+
+共享库能注册内容、能跑自己的代码，但改不了本体**内部**的调用。代码表把这次链接推迟到启动时：**本体自己
+也是一张表**（`mine.codetab`），`mine_game` 是一个**启动器**——它在内存里把本体表与模组表合并成一张符号表，
+再填所有重定位（完整设计见 [`TABLES.md`](TABLES.md)）。
+
+一个代码表模组就是**一个 `.codetab` 文件**，不需要 `mod.ecfg`、不需要目录结构：
+
+    codetab build mod.cpp -o mod.codetab --id my_mod --version 1.0 --requires mine@1.0 --api engine.api
+
+    <游戏目录>/
+      mine_game
+      mine.codetab              # 本体：整个游戏都在里面
+      engine.api                # 引擎公开面
+      packs/
+        my_mod.codetab          # 放进 packs/ 就会自动合并（按路径排序）
+
+不想放进 `packs/` 就用启动器自己的开关指名：`./mine_game --table mods/demo_mod/mod.codetab`。
+
+* **覆盖**：模组里的强定义顶掉本体的同名符号，**连本体自己的调用与 vtable 条目一起改道**；谁顶掉了谁写在
+  启动日志里（`table: 'x' from 'my_mod' replaced 'mine'`）。弱定义（内联函数、模板实例、vtable）不覆盖，
+  先到先得——那是 C++ 的 ODR，不是运行时的毛病。
+* **改类**：重定义一个**非内联虚函数**就够了，vtable 里的那一项是重定位，合并时自动指向模组。
+* **能碰什么由公开面决定**：模组向引擎索取的符号必须落在 `engine.api` 里——构建期 `--api` 就拒绝越界，
+  加载期再查一遍并逐个指名。版本规则：清单内跨整个 major 放行，清单外同版本静默、相差一个 minor 警告后仍然
+  加载、再远拒绝，major 不同一律拒绝（[`TABLES.md`](TABLES.md) §5.5、[`ENGINE_API.md`](ENGINE_API.md)）。
+* **启动时合并，改表要重启**：表一旦放置，函数指针、vtable 指针、静态数据地址就散进了整个程序，热重载会把
+  它们全变成悬空指针。`dlopen` 模组的热重载（`F5`）照旧。
+* **例子**：`games/mine/tests/data/tables/mod_banner.cpp` → `mods/demo_mod/mod.codetab`：一个函数顶掉本体的
+  同名函数，游戏自己的输出从 `Mine, unmodified` 变成 `Mine, modded`，报告里 1 条覆盖。
+* **现在的缺口**：表只能放进 `packs/` 或用 `--table` 指名，**内容清单还看不见它**（`mod.ecfg` 没有 `table:`
+  键）；数据侧的 `patch::` / `remove::` 也还没做（`TABLES.md` §9）。
+
 ## 4. 真机验证
 
 仓库里带两个示例包（`games/mine/tests/mods/`，CMake 把它们组装进构建目录，和真实安装的布局一致），
@@ -332,9 +367,10 @@ printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0
 * **没有补丁/覆盖机制（内容侧）**：同名内容报冲突而不是覆盖。做"修改别人的内容"需要明确的加载顺序与
   覆盖语义，那是后续的设计。
 * **原生模组改不了本体的内部函数**：`dlopen` 进来的库无法改变本体在链接时就绑定好的调用。要改内部函数
-  与类，用**代码表**（[`TABLES.md`](TABLES.md)）：本体与模组都编成 `.codetab`，运行时在启动时合并，
-  后加入的强定义覆盖先前的，连 vtable 里的条目一起改道。已落地并有测试（13 用例 / 231 断言），
-  本体自己的 `registry.cpp` 已经进表跑通（`test_mine_table`），整块本体进表是下一步。
-  加载时按 `requires` 校验引擎/本体版本，**不符合就拒绝加载**（没有"兼容范围"这种规则）。
+  与类，用**代码表**（§3.5、[`TABLES.md`](TABLES.md)）：**整个本体已经在表里**（`mine.codetab`，release
+  986 节 / 3000 符号 / 9828 重定位），`mine_game` 是启动器，模组表在启动时合并，强定义连 vtable 条目一起改道。
+  测试：`test_code_table`（13 用例 / 231 断言）、`test_mine_table`（3 用例 / 17 断言）。加载时按 `requires`
+  校验版本，并按**公开面**（`engine.api`）判断越界：清单内跨整个 major 放行，清单外同版本静默、相差一个 minor
+  警告后仍然加载、再远拒绝，major 不同一律拒绝。
 * **不隔离**：原生模组能崩溃游戏。调试工具、开发期加载，不要加载来路不明的包。
 * **单线程**：加载与卸载都在帧之间；一个正在回调里的模组不会被卸载。

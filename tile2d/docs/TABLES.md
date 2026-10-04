@@ -81,8 +81,11 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 ## 4. 工具链：`codetab`
 
-    codetab build <源码...> -o <输出.codetab> [--id mine --version 1.0] [--requires art]
-    codetab dump <表文件>            # 节 / 符号 / 重定位 / 元数据，全列出来
+    codetab build <源码...> -o <输出.codetab> [--id mine --version 1.0] [--requires engine@1.0 --api engine.api]
+    codetab pack  <目标文件...> -o <输出.codetab>   # 构建系统自己管编译开关时用它
+    codetab dump  <表文件>            # 节 / 符号 / 重定位 / 元数据，全列出来
+    codetab api   --surface engine.api <表...>   # 它向引擎要什么，以及能不能要
+    codetab dumphead <表文件> [-o <名字.h>]      # 它定义了哪些符号，按作用域分组
 
 它**驱动系统编译器**（默认 `c++`，可用 `--compiler` 换），把编出来的目标文件读进来、打包成表。
 它自己加上的开关就是 §2 里那两条，外加 `-fno-stack-protector`（让表自足，不必回调运行中的程序要
@@ -121,17 +124,27 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
   位移）。这时运行时在调用点旁边放一个 `jmp qword ptr [rip+2]` 桩，桩里是完整地址——这就是链接器的
   PLT 在做的事。实测中它真的被用到了：表里的游戏代码调用宿主的 `t2d::log_enabled` 时超距，靠桩接上。
 
-## 5.5 版本校验：不符合就拒绝加载
+## 5.5 公开面与版本：引擎说了算的只有清单里的符号
 
-引擎/本体一改就可能悄悄弄坏模组，而"什么改动算兼容"现在没有答案。所以规则是**拒绝**，不是猜：
+引擎/本体一改就可能悄悄弄坏模组。答案分两层：**符号层面有一张公开面清单**（`engine.api`，见
+`docs/ENGINE_API.md`），**版本层面按这张清单分档**。
 
+* `engine.api` 第一行是 `engine <major>.<minor>`，之后每行 `<层> <mangled 符号> <模块>`。A 层（`t2d/core`、
+  `t2d/text`）**冻结**；B 层（`t2d/render`、`t2d/net`、`ore/*`）**提供、但会随实现改**；C 层（本体内部、
+  沙盒、模组宿主）**拒绝**并指名。平台符号（libc / libstdc++）不属于我们的 API，校验时不问。
+* 版本规则（`t2d::api_verdict`）：模块**只用了公开面之内**的引擎符号 → 整个 major 之内都放行、一声不响；
+  **越出公开面** → 版本相同则静默放行，相差一个 minor **警告后仍然加载**（`kUnlistedMinorRange = 1`），
+  再远**拒绝**；**major 不同一律拒绝**，与用了什么无关。
 * 表里的 `requires`：`id` 或 `id@版本`。`id` 只要求"有人在"；`id@1.0` 要求**正好**是这个版本。
-* 加载器有 `declare_host(id, version)`：启动器用它声明"我是 mine 1.0"。
-* `load()` 在**放置任何东西之前**校验每个模块的 `requires`：没人提供、或版本对不上，这个模块被拒绝，
-  报告写明"它按 X 版本编的，这里的是 Y"，它的符号一个都不会进符号表。
-* 没有"兼容范围"这种规则，因为**凭什么算兼容还不存在**。等引擎自己的 ABI 写下来了，再谈范围。
+* 启动器 `declare_host("engine", <engine.api 里的版本>)`，并在**放置任何模块之前**校验 `requires`：没人提供、
+  或版本对不上，这个模块被拒绝，报告写明"它按 X 版本编的，这里的是 Y"，它的符号一个都不进符号表。
+* 越界与否是**实测**的，不是猜的：加载后看每个模块真正向宿主索取的符号（`host_symbols`），逐个查清单。
+  实测本体自己的表要宿主 **82** 个引擎符号，**全部**在清单内（启动器报告 0 个越界），另有 92 个平台符号。
+* 三处执行同一个规则：`codetab build|pack --api engine.api` 在**写表之前**拒绝越界（本体自己的表就是这么
+  打的，越界即构建失败）；`codetab api --surface engine.api <表>` 检查已经存在的表；启动器在加载时再查一遍，
+  并逐个指名越界的符号。
 
-工具链那边就是 `--requires mine@1.0`。
+工具链那边就是 `--requires engine@1.0 --api engine.api`。
 
 ## 6. 与现在这套模组系统的关系
 
@@ -150,9 +163,14 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 代码：
 
-* `t2d/core/object_file.h`：读 ELF64 目标文件（节、符号、重定位）。
-* `t2d/core/code_table.h`：表格式（读写）、`from_objects()`（多目标文件合并成一张表）、`CodeImage`（合并、重定位、运行）。
-* `t2d/tools/codetab`：工具链（驱动编译器 + 打包 + `dump`）。
+* `t2d/core/object_file.h`：读 ELF64 目标文件（节、符号、重定位、COMDAT 组）。
+* `t2d/core/code_table.h`：表格式（读写）、`from_objects()`（多目标文件合并成一张表）、`CodeImage`（合并、重定位、运行）、
+  `ApiSurface` / `api_verdict`（公开面与版本规则）。
+* `t2d/tools/codetab`：工具链——`build`（驱动编译器再打包）、`pack`（只打包）、`dump`、`api`（查公开面）、
+  `dumphead`（把表定义的东西导成给编辑器看的索引）。
+* `engine.api`：公开面清单（82 个符号：A 层 38 / B 层 44），随可执行文件走。
+* `games/mine/src/main.cpp`：**启动器**——收集表（`mine.codetab`、`--table`、`packs/*.codetab`）、合并、
+  校验公开面与版本、调用入口符号 `mine_game_main`。
 * 测试 `t2d/tests/test_code_table.cpp`：**13 用例 / 231 断言**，fixture 由构建过程用真实编译器编出目标文件。
 * 测试 `games/mine/tests/test_mine_table.cpp`：**3 用例 / 17 断言**——**游戏自己的代码进表**：
   `games/mine/src/registry.cpp`（本体真实源文件，不是副本）被编成表，合并后运行，回调宿主，
@@ -162,7 +180,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 | 证明了什么 | 数字 |
 |---|---|
-| 表能被读回、字节一致 | 往返 123 断言 |
+| 表能被读回、字节一致 | 往返用例 120 断言（整个 `test_code_table` 231 断言） |
 | 合并后能跑 | `use_base()` = 11 |
 | **模组覆盖本体函数，本体的调用改道** | 合并模组后 `use_base()` = **101**；报告 1 条覆盖（`base_value`，my_mod ← vanilla） |
 | 覆盖后还能调用原件（包装） | `find_previous("base_value")` = 10 |
@@ -171,11 +189,19 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 | **改类：覆盖虚函数，虚调用改道** | `machine_output()` 25 → **97**（9×10+7：虚函数与普通函数都被换掉） |
 | 弱符号合并而非冲突 | vtable `_ZTV…` 与 typeinfo `_ZTI…` 都是 weak，合并后只报 2 条强覆盖 |
 | 静态构造在重定位之后运行 | `.init_array` 跑过，全局值 = 41 |
-| 工具链端到端 | `codetab build` 两个源文件 → 15 节 / 16 符号 / 7 重定位 / 5 个可覆盖名，约 27 ms |
+| 工具链端到端 | `codetab build` 两个源文件 → 13 节 / 16 符号 / 3 重定位 / 5 个可覆盖名，约 26 ms |
 | **版本不符就拒绝加载** | 要求 `mine@2.0` 的模组被拒（报告同时写出 2.0 与 1.0），要求 `mine@1.0` 的正常合并；没人提供的依赖同样拒绝 |
 | **本体代码进表并运行** | `mine_core` 的 `registry.cpp` 编成表：注册两个 item（id 1、2）、重复注册 id 不变，`game_probe()` = 110 |
 | **模组覆盖本体表里的函数** | 加一张模组表后 `game_probe()` = **112**，报告 1 条覆盖（`game_bonus`，game_mod ← mine），`find_previous()` = 5 |
 | **表回调宿主** | 表里没定义的 `host_service` 与 `t2d::log_enabled` 由宿主解析（后者超距，走了桩） |
+| **整块本体进表，可执行文件变启动器** | release 表 **986 节 / 3000 符号 / 9828 重定位 / 1.13 MiB**；debug 表 **5602 / 23908 / 14165 / 3.40 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
+| **一份定义两个函数体不再出错** | GCC 在 `-O3` 下把同一个 vague linkage 函数吐成 253 与 744 字节两份（指令都不同）：两份各自入表、符号先到先得；被丢掉的拷贝连同它的重定位一起丢，越界即构建失败 |
+| **模组表端到端** | `--table mods/demo_mod/mod.codetab`：`mine_game_banner` 被 `demo_mod` 顶掉（报告 1 条覆盖），游戏自己的调用改道，输出从 `Mine, unmodified` 变成 `Mine, modded` |
+| **公开面执行** | 本体表向宿主索取 82 个引擎符号 + 92 个平台符号，越界 0 个；`codetab pack --api engine.api` 在构建期就拒绝越界 |
+
+打包（同一个构建出两个 zip）：release 包 = 启动器 + 表 + `engine.api` + 界面文本 + 本体内容包 + 着色器 + `packs/` 模板，
+`--strip-all` 之后约 0.9 MiB；dev 包 = 头文件（含生成的 `config.h`）+ `engine.api` + 本体表 + `codetab` 工具 + 模板 + 文档。
+两个包都从"只有一个解压目录"的环境里实跑过：`0 error(s)`，界面文本来自包内的 `assets/text/ui.ecfg`。
 
 预设：tile2d **debug / release / asan / tsan 25/25**、no-renderer **11/11**、Ore **13/13**。
 
@@ -191,14 +217,13 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 ## 9. 下一步（按顺序）
 
-1. **把本体整块编成表**（已确认要做，第一步已落地）：`mine_core` 的 `registry.cpp` 已经进表并跑通（§7），
-   接下来把 `mine::types`、`mine::world`、内容加载一起编成 `mine.codetab`，
-   `mine_game` 变成**启动器**：合并 `mine.codetab` + 模组表，再调用入口符号。
-   与这一步一起要做的是**公开符号表**（§9.2）：表能调用的宿主符号要固定下来并带版本。
-2. **引擎服务留在宿主**：渲染、字体、网络、文件系统仍在可执行文件里，表通过未定义符号回调（已经支持）。
-   哪些符号算"引擎服务"要有一张**公开符号表**，否则引擎升级会悄悄改掉模组脚下的地。
+1. ~~**把本体整块编成表**~~：**已落地**（§7）——`mine.codetab` 带上整个游戏，`mine_game` 是启动器，
+   入口符号 `mine_game_main`，`packs/*.codetab` 自动收集。剩下的是"表从哪来"的工程问题：
+   `mine_package` / `builddev` 已经把"谁拿到什么"分开了（§7）。
+2. ~~**公开符号表**~~：**已落地**（§5.5、`docs/ENGINE_API.md`）——`engine.api` 是清单，版本规则按它分档，
+   构建期、工具、加载期三处执行。剩下的：清单目前由实测产出，**生成器**（按头文件声明公开面）还没写。
 3. **模组清单接表**：`mod.ecfg` 增加 `table:"lib_x.codetab"`，`ContentPipeline` 把表合并报告并进内容列表
-   （谁覆盖了谁，在游戏里就能看见）。
+   （谁覆盖了谁，在游戏里就能看见）。现在表只能放在 `packs/` 里或由 `--table` 指名，内容清单看不见它。
 4. **数据侧的修改能力**：`.ecfg` 的 `patch::` / `remove::`（改贴图、改字段、删配方）——与代码侧覆盖是两件事，
    一起做才算"模组能改东西"。
 5. **引擎可读字段表**：`footprint` / 配方 / 层规则等字段的词表（需要设计者确认字段名），让"大多数模组不用写代码"。
@@ -206,9 +231,11 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 ## 10. 已经定下的三件事
 
-1. **本体进表：做**（§9.1）。第一步已落地——本体真实源文件 `registry.cpp` 编成表、合并、运行、被模组覆盖。
+1. **本体进表：做**（§9.1）。**已完成**：整个游戏在 `mine.codetab` 里，`mine_game` 是启动器，
+   模组表在启动时合并、可以顶掉本体自己的函数。
 2. **命名与 t2d 无关**：工具 `codetab`、文件 `.codetab`、magic `CODETABL`。这套东西不只为 Tile2D 服务：
    任何"要把编译好的代码当表合并"的程序都能用它。
-3. **兼容性：先拒绝，不猜**（§5.5）。加载时校验 `requires` 里的引擎/本体版本，不符合就拒绝加载并说明原因；
-   等引擎 ABI 写下来之后再谈"兼容范围"。
+3. **兼容性：公开面之内宽、之外严**（§5.5）。清单（`engine.api`）决定"能碰什么"，版本（`api_verdict`）
+   决定"差多远还能用"：清单内跨整个 major，清单外同版本静默、±1 minor 警告后加载、再远拒绝，
+   major 不同一律拒绝。
 4. 热重载：表模组按"启动时合并、改表重启"处理（`dlopen` 模组的热重载保留）。

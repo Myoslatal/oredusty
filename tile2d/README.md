@@ -19,7 +19,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, and the mod host (manifests, load order, the native ABI) | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table` |
 
 ## Layout
 
@@ -29,7 +29,10 @@ that direction. What is left is what the game actually uses, and it is all teste
     include/t2d/net       ILink, shared-memory link (mmap + lock-free SPSC rings), KCP, UDP, protocol
     include/t2d/render    sprite batch, glyph atlas, text renderer, tile map renderer, bitmap font
     games/mine            the sandbox/industrial-automation game: registry, content packs, mod host, map grid, sandbox
-    tools/codetab          the code table toolchain: source -> compiler -> object -> .codetab
+    tools/codetab         the code table toolchain: source -> compiler -> object -> .codetab
+    assets/text           the interface strings (ui.ecfg), looked for beside the executable at run time
+    engine.api            the published surface: what a code table may ask the engine for
+    packs/                the pack template and the guide; a run also loads the packs beside its executable
     tests                 unit tests and the shader fixture the offscreen render test needs
 
 ## Build and test
@@ -38,9 +41,9 @@ that direction. What is left is what the game actually uses, and it is all teste
     cmake --build build/debug
     ctest --test-dir build/debug --output-on-failure
 
-The whole suite is pure CPU work and finishes in about five seconds: the deterministic parts run in
-milliseconds, and the slowest suite is the CFF interpreter comparing every glyph of the Noto CJK
-collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
+The whole suite is pure CPU work and finishes in about four seconds (25 suites, measured with `ctest` on
+the debug preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
+interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
 without Vulkan, GLFW or the game — the split that lets a dedicated server exist later.
 
     tests/test_tilemap            17 cases / 359 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
@@ -51,8 +54,9 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
     tests/test_text                9 cases / 337 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
+    tests/test_code_table         13 cases / 231 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
-    tests/test_protocol           15 cases / 1265 checks framing, every payload, truncation, the shared-memory rings
+    tests/test_protocol           15 cases /1265 checks  framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
     tests/test_render_offscreen   10 cases /  71 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
     games/mine/tests/test_mine_menu      11 cases / 168 checks  the start screen as a state machine
@@ -66,6 +70,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
+    games/mine/tests/test_mine_table      3 cases /  17 checks  the game's own registry.cpp packed, merged, run, and overridden by a mod's table
 
 ## The tile map
 
@@ -375,14 +380,28 @@ builds one symbol table out of them, and fills in every relocation **after** the
 definition of a symbol replaces the game's everywhere, including inside the game's own code and inside
 its vtables.
 
-    codetab build game/*.cpp -o mine.codetab --id mine
-    codetab build mod.cpp    -o mod.codetab  --id my_mod --requires mine
+    codetab build <source.cpp>... -o <out.codetab> [--id mine --name Mine --version 1.0 --requires engine@1.0]
+    codetab pack  <object.o>...   -o <out.codetab>   # a build system that owns its own flags packs, not builds
+    codetab dump  <table.codetab>                    # sections, symbols, relocations, metadata
+    codetab api   --surface engine.api <table.codetab>...  # what it asks the engine for, and whether it may
+    codetab dumphead <table.codetab> [-o <names.h>]  # what it defines, as an index an editor can read
 
-    CodeImage image;
-    image.add(mine_table);      // first in: its definitions can be replaced
-    image.add(mod_table);
-    image.load();               // place, resolve, relocate, run the constructors
-    image.function<int()>("mine::produce")();
+**The game is one of those tables.** `mine_game` is a launcher: it places `mine.codetab` — which travels
+beside it — merges every other table it was given (`--table <path>`, then every `packs/*.codetab` in path
+order) and calls the entry symbol `mine_game_main`. The engine stays in the executable: the renderer, the
+fonts, the network, the file system, and the runtime that does the merging — which is why the launcher
+links the framework with `--whole-archive` and exports its own symbols.
+
+    mine-0.1.0/
+        mine_game            the launcher: the engine, and the table runtime
+        mine.codetab         the game: 986 sections, 3 000 symbols, 9 828 relocations (release)
+        engine.api           the published surface, and the version it belongs to
+        assets/text/ui.ecfg  the interface strings
+        content/  shaders/  packs/
+
+    ./mine_game --headless --frames 2                          # tables: 1 module(s) ... game: Mine, unmodified
+    ./mine_game --table mods/demo_mod/mod.codetab ...          # 'mine_game_banner' from 'demo_mod' replaced 'mine'
+                                                               #   tables: 2 module(s), 1 override(s) ... Mine, modded
 
 What that buys, measured on real compiler output (`test_code_table`, 13 cases / 231 checks):
 
@@ -397,20 +416,51 @@ What that buys, measured on real compiler output (`test_code_table`, 13 cases / 
 * a table calling back into the engine: undefined symbols are resolved from the running program — including
   when the call is more than 2 GiB away, which is what the stub beside the call is for;
 * a module that cannot be relocated is reported and skipped, never half loaded;
-* **a module built for another engine version is refused**: `requires` names an id, or `id@version` for
-  exactly that version, and `load()` checks it before anything of the module is placed. Refusing is the
-  honest answer while what makes two engine versions compatible is still unwritten.
+* **a module built for another engine version is refused, and the rule is about the surface it used**:
+  `requires` names an id, or `id@version` for the version it was built against; a module that stays inside
+  the published surface (`engine.api`) loads across the whole major version and says nothing, one that
+  reaches outside it is held to the same version quietly, one minor either way with a warning, further
+  refused — and a different major version is refused whatever it used. The check happens before anything
+  of the module is placed.
 
-The game's own code already goes through it (`games/mine/tests/test_mine_table.cpp`, 3 cases / 17 checks):
-`mine_core`'s **real `registry.cpp`** is compiled into a table — not linked into the test — merged, and
-called; the game's class registers its items (ids 1 and 2, registering twice changes nothing), the table
-calls back into the program that loaded it, and a mod table replaces one of the game's functions
-(`game_probe()` 110 → **112**). Making the whole game a table, with `mine_game` as the launcher, is the
-next step (`docs/TABLES.md` §9).
+**The published surface** is `engine.api`: 82 symbols, 38 in tier A (`t2d/core`, `t2d/text` — frozen) and
+44 in B (`t2d/render`, `t2d/net`, `ore/*` — provided, and allowed to change). `codetab build|pack --api
+engine.api` checks a table **before it is written** — the game's own table is packed that way, and a
+symbol outside the surface fails the build where its author can still do something about it —
+`codetab api --surface engine.api` checks a table that already exists, and the launcher repeats the check
+at load time and names every symbol that is outside. Tier C (the game's own internals, the sandbox, the
+mod host) is refused: a mod that wants to change behaviour overrides a symbol of the game's table instead,
+which is the point of the merge.
+
+Because the game's own code is in its table, `mine::` is answered inside the merge: the release table asks
+the host for **82** engine symbols (all inside the surface — the launcher reports 0 outside) and 92 from
+the platform (libc, libstdc++), and defines the other 2 826 itself. `test_mine_table` (3 cases / 17
+checks) is the same path in miniature: `mine_core`'s **real `registry.cpp`** is compiled into a table —
+not linked into the test — merged, and called; the game's class registers its items (ids 1 and 2,
+registering twice changes nothing), the table calls back into the program that loaded it, and a mod table
+replaces one of the game's functions (`game_probe()` 110 → **112**).
+
+The demo mod is one function in `games/mine/tests/data/tables/mod_banner.cpp`, packed into
+`mods/demo_mod/mod.codetab`, and it is what the run above shows: the game's own call to
+`mine_game_banner()` lands in the mod, and the merge report says who replaced what.
+
+### Packaging
+
+Two zips come out of a build, and they are for different people:
+
+    cmake --build build/release --target mine_package   # mine-0.1.0-Release.zip   what a player runs
+    cmake --build build/debug   --target builddev       # mine-dev-0.1.0-Debug.zip what a mod author compiles against
+
+The **release package** is the launcher, the game's table, the surface, the interface strings, the game's
+own content pack, the shaders and the `packs/` template — stripped, because the debug information is 19.8 MiB
+of a 1.23 MiB program and belongs to the build tree, where somebody is actually debugging
+(`-DMINE_PACKAGE_DEBUG_SYMBOLS=ON` keeps it for the one case that wants it). The **dev package** is what a
+mod is written against: the headers (`ore/`, `t2d/`, `mine/`, generated `config.h` files included),
+`engine.api`, the game's own table, the `codetab` binary, the pack template and the documents.
 
 `docs/TABLES.md` is the whole design: the file format, the merge rules, what the runtime does step by step,
-the honest limits (x86-64 ELF only, no TLS, no exception unwinding yet, weak definitions cannot be
-replaced) and the plan for turning the game itself into a table.
+the surface and the version rule, the honest limits (x86-64 ELF only, no TLS, no exception unwinding yet,
+weak definitions cannot be replaced) and what is next.
 
 ## The game on top of the framework
 
@@ -551,6 +601,11 @@ estimated.
 | `asan` (Address + UB sanitizers) | 25/25 tests green |
 | `tsan` (ThreadSanitizer) | 25/25 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
+
+The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
+both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,
+the strings read from `assets/text/ui.ecfg` inside the package, the window, the swapchain, the content
+pack — and the demo mod's table changes the game's own answer from `Mine, unmodified` to `Mine, modded`.
 
 Ore itself is a separate tree with its own suite (13/13 in `debug`, `release` and `asan`), which now includes
 `test_debug_input`: the debug input server's command parser and a real socket round trip that ends in an

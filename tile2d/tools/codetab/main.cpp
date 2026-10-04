@@ -135,7 +135,16 @@ void usage() {
                  "  --exceptions        compile with exceptions (unwinding through a table is not\n"
                  "                      registered with the runtime yet, so a throw is fatal)\n"
                  "  --keep              keep the objects the compiler produced\n"
-                 "  --verbose           print the compile commands\n";
+                 "  --verbose           print the compile commands\n"
+                 "\n"
+                 "the published surface (docs/ENGINE_API.md, engine.api in the repository root):\n"
+                 "  --api <file>        check what is being built against this surface before it is\n"
+                 "                      written (build and pack): a symbol the surface does not list is\n"
+                 "                      refused here, where the author can still do something about it\n"
+                 "  --surface <file>    the surface 'codetab api' checks tables against\n"
+                 "  --host <version>    pretend the engine is this version (default: what the surface\n"
+                 "                      says). 'codetab api --host 1.1' asks what a move would break\n"
+                 "  --engine <id>       what the host is called in a requirement (default: engine)\n";
 }
 
 /// One argument, quoted for the shell this runs the compiler through. A path with a space in it is

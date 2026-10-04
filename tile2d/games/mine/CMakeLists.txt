@@ -79,6 +79,7 @@ add_custom_command(
     OUTPUT "${MINE_TABLE_PATH}"
     COMMAND $<TARGET_FILE:codetab> pack $<TARGET_OBJECTS:mine_table>
             -o "${MINE_TABLE_PATH}" --id mine --name "Mine" --version 1.0 --requires engine@1.0
+            --api "${CMAKE_SOURCE_DIR}/engine.api"
     DEPENDS mine_table $<TARGET_OBJECTS:mine_table> codetab
     # The object list is a list, not one long argument: without this the shell sees the semicolons.
     COMMAND_EXPAND_LISTS
@@ -105,14 +106,14 @@ add_custom_command(
             -o "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod_banner.o"
     COMMAND $<TARGET_FILE:codetab> pack "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod_banner.o"
             -o "${MINE_DEMO_MOD}" --id demo_mod --version 1.0 --requires mine@1.0
+            --api "${CMAKE_SOURCE_DIR}/engine.api"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tables/mod_banner.cpp" codetab
     COMMENT "Building the demo mod's code table")
 add_custom_target(mine_demo_mod ALL DEPENDS "${MINE_DEMO_MOD}")
 
-# The app shell, linked normally: the executable still runs the game the way it always has. What is
-# new is that the same sources are also packed into a table (above), and switching the executable over
-# to being a launcher is the next step - it needs the table to place every COMDAT group a C++ compiler
-# emits before a whole program can arrive as one (docs/TABLES.md section 9).
+# The app shell, linked normally. The executable does not use it any more - the game arrives as the
+# table above and the executable is a launcher (src/main.cpp) - but the tests do: they link the shell
+# and drive the screens directly, which is a millisecond a case instead of a window and a GPU.
 add_library(mine_app STATIC
     src/app.cpp
 )

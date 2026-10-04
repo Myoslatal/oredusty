@@ -184,14 +184,13 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"font", "<path>", "Latin font file (default: the first system font found)"},
         {"cjk-font", "<path>", "CJK font file used for Chinese text"},
         {"ui-text", "<path>", "interface strings (.ecfg); defaults to assets/text/ui.ecfg"},
-        {"content", "<path>", "content data (.ecfg) for the sandbox; repeatable"},
+        {"content", "<dir>", "a content pack directory to load after the game's own; repeatable"},
         {"grid", "<WxH>", "sandbox map size (default 40x24)"},
         {"tile-layers", "<n>", "how many tile layers the sandbox map has (default 1)"},
         {"layer", "<n>", "which tile layer the sandbox starts on (default 0)"},
         {"fill", "<none|bands|scatter>", "sandbox debug fill: the palette laid out, never content"},
         {"fill-layer", "<n|all>", "which tile layers the fill writes into (default: the active one)"},
-        {"pack", "<file.ecfg>", "a content pack to load; repeatable"},
-        {"packs", "<dir>", "directory of content packs (*.ecfg); repeatable, defaults to ./packs"},
+        {"packs", "<dir>", "a pack directory, or a directory of them; repeatable, defaults to ./packs"},
         {"mods", "<dir>", "directory of mod packages to load; repeatable"},
         {"view", "<x,y[,zoom]>", "sandbox: look at this cell instead of fitting the whole map"},
         {"layout", "<path>", "sandbox layout file: loaded at startup, written by F2"},
@@ -200,6 +199,9 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"playtest", "<0|1>", "start the sandbox in the playtest: the layer as the game draws it"},
         {"pointer", "<x,y>", "playtest: put the pointer on this cell (a scripted run has no mouse)"},
         {"content-list", "<0|1>", "open the list of loaded content packs and mods at startup"},
+        {"world-view", "<0|1>", "open the world view at startup: into the mine, on --mine-layer"},
+        {"mine-layer", "<n>", "which layer of the mine the world view opens on (default 0)"},
+        {"layer-fill", "<none|bands|scatter>", "world view debug fill: the registry laid out in the layer"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }

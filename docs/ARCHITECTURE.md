@@ -25,8 +25,8 @@ Renderer/World(ECS)  InputMap
         ore/core           类型/日志/断言/计时/文件/图像(PNG)/空闲链表/命令行（不依赖 Vulkan）
 ```
 
-依赖方向严格单向：`core → math → rhi → renderer → app`，平台层只依赖 `core` 与 GLFW，
-`math` 只依赖 glm 与 `core`。因此 `core`、`math`、ECS 与输入映射都能在没有 GPU、
+依赖方向严格单向：`core → math → rhi → renderer → app`，平台层只依赖 `core`、GLFW 与 Vulkan 头
+（surface 用），`math` 只依赖 glm 与 `core`。因此 `core`、`math`、ECS 与输入映射都能在没有 GPU、
 没有窗口的情况下单测。
 
 命名与所有权约定：
