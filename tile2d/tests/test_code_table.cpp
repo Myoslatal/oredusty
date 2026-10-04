@@ -189,6 +189,53 @@ T2D_TEST(a_merged_image_runs_the_code_it_was_given) {
     T2D_CHECK(image.find("no_such_symbol") == nullptr);
 }
 
+// One definition, two bodies. A compiler is allowed to emit a vague linkage function differently in
+// each translation unit that uses it - it inlines a different amount of it into its own body - and both
+// bodies stand for the one symbol, which is why a linker keeps one of them and every caller uses it.
+// Release GCC does this with libstdc++'s std::__format sinks, and a table that assumed the copies were
+// the same bytes kept the small one while applying the big one's relocations to it: a relocation past
+// the end of a section, reported at load time, and a package that would not start.
+T2D_TEST(two_bodies_of_one_definition_are_two_sections_and_no_relocation_lands_past_one) {
+    std::string error;
+    std::optional<CodeTable> table =
+        pack({object_of("twin_small"), object_of("twin_big"), object_of("twin_caller")}, "twins", &error);
+    T2D_REQUIRE(table.has_value());
+
+    // The copies are not the same bytes, so both are carried: dropping one would mean dropping the code
+    // that is here for the other one's offsets. The first is what the symbol means, as in a link.
+    usize copies = 0;
+    usize small = 0;
+    usize big = 0;
+    for (const CodeTableSection& section : table->sections) {
+        if (section.name != ".text._Z10twin_widthi") continue;
+        if (copies == 0) small = section.data.size();
+        if (copies == 1) big = section.data.size();
+        ++copies;
+    }
+    T2D_CHECK_EQ(copies, 2u);
+    T2D_CHECK_MSG(small < big, "the fixture's two bodies are {} and {} bytes", small, big);
+
+    // The invariant the merge has to keep whatever it does with copies: every relocation patches a field
+    // that is inside the section it names.
+    for (const CodeTableRelocation& relocation : table->relocations) {
+        T2D_REQUIRE(relocation.section < table->sections.size());
+        const CodeTableSection& section = table->sections[relocation.section];
+        const u64 width = relocation.type == kRelocationAbsolute64 ? 8 : 4;
+        T2D_CHECK_MSG(relocation.offset + width <= section.data.size(), "'{}' + {:#x} is past its {} bytes",
+                      section.name, relocation.offset, section.data.size());
+    }
+
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+
+    // The call lands in the copy that came first, and that copy answers the way it was written.
+    const auto answer = image.function<int()>("twin_answer");
+    T2D_REQUIRE(answer != nullptr);
+    T2D_CHECK_EQ(answer(), 42);
+}
+
 T2D_TEST(a_later_table_replaces_a_symbol_and_every_call_to_it) {
     std::string error;
     std::optional<CodeTable> vanilla = pack({object_of("base"), object_of("caller")}, "vanilla", &error);

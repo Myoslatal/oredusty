@@ -43,7 +43,7 @@ set(T2D_TABLE_FIXTURE_FLAGS
     -fno-stack-protector -fno-exceptions
     -I${T2D_TABLE_FIXTURE_SOURCES})
 set(T2D_TABLE_FIXTURE_OBJECTS "")
-foreach(fixture base caller mod missing machine factory mod_machine)
+foreach(fixture base caller mod missing machine factory mod_machine twin_small twin_big twin_caller)
     add_custom_command(
         OUTPUT "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${T2D_TABLE_FIXTURE_DIR}"

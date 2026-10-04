@@ -37,6 +37,11 @@ inline constexpr const char* kContentDirectoryName = "content";
 /// registers first. Empty when the path names no directory.
 [[nodiscard]] std::string content_beside(const std::string& executable_path);
 
+/// Where the interface strings are, beside the executable: "assets/text/ui.ecfg", the same tree the
+/// source keeps them in. A package that carried no strings would show ids to a player, and a package
+/// that only found them in the source tree it was built from would show ids to everyone else.
+[[nodiscard]] std::string ui_text_beside(const std::string& executable_path);
+
 /// The directories a run looks in for content packs and mod packages when the command line does not
 /// say, in load order: "packs" beside the executable, then "packs" in \p working_directory. Only the
 /// ones that exist are in the list, and a directory both rules name is in it once.

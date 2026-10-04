@@ -56,7 +56,10 @@ choosing a face does not cost ten outline parses.
 
 ## Languages
 
-`assets/text/ui.ecfg` holds the shell's own strings, one table per language:
+`assets/text/ui.ecfg` holds the shell's own strings, one table per language. The file is looked for
+**beside the executable** first (`assets/text/ui.ecfg`), the way the content pack and the shaders are,
+and only then in the source tree a build ran from — a release package carries it, so a package copied
+to another machine still has text instead of ids:
 
     en::
         row.start:"START SINGLE PLAYER"

@@ -24,6 +24,12 @@ std::string content_beside(const std::string& executable_path) {
     return (fs::path(directory) / kContentDirectoryName).string();
 }
 
+std::string ui_text_beside(const std::string& executable_path) {
+    const std::string directory = t2d::parent_directory_of(executable_path);
+    if (directory.empty()) return {};
+    return (fs::path(directory) / "assets" / "text" / "ui.ecfg").string();
+}
+
 std::vector<std::string> default_content_directories(const std::string& executable_path,
                                                      const std::string& working_directory) {
     std::vector<std::string> directories;

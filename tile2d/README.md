@@ -384,14 +384,16 @@ its vtables.
     image.load();               // place, resolve, relocate, run the constructors
     image.function<int()>("mine::produce")();
 
-What that buys, measured on real compiler output (`test_code_table`, 10 cases / 201 checks):
+What that buys, measured on real compiler output (`test_code_table`, 13 cases / 231 checks):
 
 * a mod replacing a function the game defined: the game's own call goes to the mod (`use_base()` 11 → **101**),
   and `find_previous()` still reaches the original, so a mod can wrap rather than only replace;
 * a mod replacing a **virtual method**: the vtable's entry is a relocation, so the game's virtual call goes
   to the mod too (`machine_output()` 25 → **97**) — no patching, no vtable surgery;
 * weak symbols (inline functions, templates, vtables, typeinfo) **coalesce** instead of colliding, which is
-  what keeps one C++ program one program;
+  what keeps one C++ program one program — and when a compiler emits the *same* definition as two different
+  bodies, as it is allowed to, both are kept and the first is what the symbol means, with the dropped copy's
+  relocations going with it;
 * a table calling back into the engine: undefined symbols are resolved from the running program — including
   when the call is more than 2 GiB away, which is what the stub beside the call is for;
 * a module that cannot be relocated is reported and skipped, never half loaded;
@@ -523,13 +525,15 @@ separately.
   `text`, `shot`, `quit`), and `ok` means the frame loop has *applied* it, so a screenshot taken after a reply
   is a screenshot of the result. This is how every screenshot below was taken, including the headless ones.
 
-* **Code tables are merged and run for real.** `test_code_table` (10 cases / 201 checks) reads objects the
+* **Code tables are merged and run for real.** `test_code_table` (13 cases / 231 checks) reads objects the
   build compiled from `tests/data/tables/`, packs them into tables, merges two tables in memory and calls
   into the result: a mod's definition of a function the game defined takes over the game's own call (11 → 101),
   a mod's definition of a virtual method takes over the game's virtual call (25 → 97), weak vtable/typeinfo
   symbols coalesce, a static constructor runs, `strlen` is answered by the running program, a module
   asking for something nobody defines is reported and refused, and a module built for another engine version
-  is refused before it is merged. One case drives `codetab` itself, so the compiler is in the loop.
+  is refused before it is merged, and a definition a compiler emitted as two different bodies loads with
+  every relocation inside the section it patches. One case drives `codetab` itself, so the compiler is in the
+  loop.
   `test_mine_table` (3 cases / 17 checks) does the same with **the game's own `registry.cpp`**: it is
   compiled into a table, run, called back into the host, and overridden by a mod table.
 

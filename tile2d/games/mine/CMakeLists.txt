@@ -172,6 +172,10 @@ add_custom_target(mine_package
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/engine.api" "${MINE_PACKAGE_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/games/mine/content" "${MINE_PACKAGE_DIR}/content"
+    # The interface strings, where the game looks for them beside its executable. Without them a
+    # package shows ids instead of text, and only a machine that still had the source tree would not.
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/assets" "${MINE_PACKAGE_DIR}/assets"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_BINARY_DIR}/shaders" "${MINE_PACKAGE_DIR}/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -199,9 +203,12 @@ add_custom_target(builddev
             "${MINE_DEV_DIR}/include/t2d"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/games/mine/include/mine"
             "${MINE_DEV_DIR}/include/mine"
-    # The one header that is generated rather than written: t2d/config.h, which every t2d header includes.
+    # The headers that are generated rather than written: t2d/config.h, which every t2d header includes,
+    # and ore/config.h, which ore's headers include - a package without either does not compile.
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_BINARY_DIR}/generated/t2d"
             "${MINE_DEV_DIR}/include/t2d"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/ore/generated/ore"
+            "${MINE_DEV_DIR}/include/ore"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/engine.api" "${MINE_DEV_DIR}/engine.api"
     COMMAND ${CMAKE_COMMAND} -E copy "${MINE_TABLE_PATH}" "${MINE_DEV_DIR}/mine.codetab"
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:codetab> "${MINE_DEV_DIR}/codetab"

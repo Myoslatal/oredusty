@@ -205,9 +205,16 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
 }
 
 void MineApp::load_localisation() {
-    const std::string path = options_.ui_text_path.empty()
-                                 ? std::string(T2D_SOURCE_DIR) + "/assets/text/ui.ecfg"
-                                 : options_.ui_text_path;
+    // The strings are packaged beside the executable, the way the content and the shaders are; a run
+    // from the build tree finds the ones in the source tree instead, so the designer editing a string
+    // and the game showing it are the same file (see vanilla_content_pack above).
+    const std::string path = [&] {
+        if (!options_.ui_text_path.empty()) return options_.ui_text_path;
+        std::error_code code;
+        const std::string beside = ui_text_beside(t2d::executable_path());
+        if (!beside.empty() && std::filesystem::is_regular_file(beside, code)) return beside;
+        return std::string(T2D_SOURCE_DIR) + "/assets/text/ui.ecfg";
+    }();
     t2d::EcfgError error;
     std::vector<std::string> unknown;
     std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(path, &error);

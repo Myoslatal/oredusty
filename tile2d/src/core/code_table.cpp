@@ -73,6 +73,22 @@ void write_trampoline(u8* stub, u64 target) {
     return kDefaultPageSize;
 }
 
+/// How many bytes a relocation writes, or nothing for a type this runtime does not apply - which it
+/// refuses by name when a table that carries one is loaded, so how wide it is never comes up.
+[[nodiscard]] std::optional<u64> relocation_width(u32 type) {
+    switch (type) {
+        case kRelocationAbsolute64: return 8;
+        case kRelocationAbsolute32:
+        case kRelocationAbsolute32Signed:
+        case kRelocationPc32:
+        case kRelocationPlt32:
+        case kRelocationGotPcRel:
+        case kRelocationGotPcRelX:
+        case kRelocationRexGotPcRelX: return 4;
+        default: return std::nullopt;
+    }
+}
+
 [[nodiscard]] bool is_got_relocation(u32 type) {
     return type == kRelocationGotPcRel || type == kRelocationGotPcRelX || type == kRelocationRexGotPcRelX;
 }
@@ -177,21 +193,27 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
     // COMDAT: a group is one definition of one thing, emitted by every translation unit that uses it -
     // an inline function, a template instance, a vtable. A linker keeps one copy and points every
     // reference at it; a merge that kept them all would carry the same function once per object, which
-    // for C++ is most of the code there is. Groups are matched by their signature, and the sections
-    // inside one are matched by their position in it.
-    std::map<std::string, std::vector<u32>> kept_groups;
+    // for C++ is most of the code there is. A group is matched by its signature and its members by the
+    // name of the section that holds them - not by their position in the group, which is not the same
+    // in every object as soon as one of them carries a member the table does not (a relocation table,
+    // say).
+    //
+    // Two copies of one definition are not always the same bytes: a compiler may inline a different
+    // amount of a vague linkage function into its own body in each translation unit, and both bodies
+    // stand for the same symbol - a linker keeps one and every caller uses it. So a copy is only left
+    // out when it *is* the section the table already has: same name, kind, flags, alignment and bytes.
+    // Anything else is carried on its own, and the first definition of a symbol is still what every
+    // reference resolves to (see resolve_symbols).
+    std::map<std::string, std::map<std::string, std::vector<u32>>> kept_groups;
     for (const ObjectFile& object : objects) {
         const std::string label = object.source.empty() ? std::string("(object)") : object.source;
-        // Which group a section belongs to, and where it sits inside it.
+        // Which group a section belongs to.
         std::vector<u32> group_of(object.sections.size(), kInvalidId);
-        std::vector<u32> position_in_group(object.sections.size(), 0);
         for (usize group_index = 0; group_index < object.groups.size(); ++group_index) {
             const ObjectGroup& group = object.groups[group_index];
-            for (usize position = 0; position < group.members.size(); ++position) {
-                const u32 member = group.members[position];
+            for (const u32 member : group.members) {
                 if (member >= group_of.size()) continue;
                 group_of[member] = static_cast<u32>(group_index);
-                position_in_group[member] = static_cast<u32>(position);
             }
         }
         const auto signature_of = [&object](u32 group_index) -> std::string {
@@ -203,6 +225,11 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
         // the program runs - a comment, debug info, the symbol table itself - has nothing to place,
         // and a relocation that patched one of those goes with it.
         std::vector<u32> section_map(object.sections.size(), kInvalidId);
+        // A copy of a definition the table already has is not carried, and the relocations that patched
+        // it are not either: they describe bytes that are not here, and the copy that is here brought
+        // its own. Applying a copy's relocations to the section another copy became is what puts a
+        // relocation past the end of a section.
+        std::vector<u8> dropped(object.sections.size(), 0);
         for (usize index = 0; index < object.sections.size(); ++index) {
             const ObjectSection& section = object.sections[index];
             if (!section.is_alloc()) continue;
@@ -214,18 +241,6 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             // A frame description is only useful to an unwinder that was told about it, and nothing
             // registers a table's - it would sit in memory describing code nobody can unwind through.
             if (section.name == ".eh_frame" || section.name == ".gcc_except_table") continue;
-            // A group that is already in the table: this object's copy is the same definition, so it is
-            // not carried again - everything in this object that referred to it refers to that one.
-            const u32 group = group_of[index];
-            const std::string signature = group == kInvalidId ? std::string{} : signature_of(group);
-            if (!signature.empty()) {
-                const auto kept = kept_groups.find(signature);
-                const u32 position = position_in_group[index];
-                if (kept != kept_groups.end() && position < kept->second.size()) {
-                    section_map[index] = kept->second[position];
-                    continue;
-                }
-            }
             CodeTableSection packed;
             packed.name = section.name;
             packed.type = section.type;
@@ -235,8 +250,29 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             // A section that takes up room but has no bytes in the file (.bss) is zeros: that is
             // exactly what the linker would give it.
             if (packed.data.size() < section.size) packed.data.resize(section.size, 0);
-            section_map[index] = static_cast<u32>(table.sections.size());
-            if (!signature.empty()) kept_groups[signature].push_back(section_map[index]);
+            // A group that is already in the table: this object's copy is the same definition, so it is
+            // not carried again - everything in this object that referred to it refers to that one.
+            const u32 group = group_of[index];
+            const std::string signature = group == kInvalidId ? std::string{} : signature_of(group);
+            if (!signature.empty()) {
+                std::vector<u32>& variants = kept_groups[signature][packed.name];
+                const auto same_definition = [&table, &packed](u32 kept) {
+                    const CodeTableSection& other = table.sections[kept];
+                    return other.type == packed.type && other.flags == packed.flags &&
+                           other.align == packed.align && other.data.size() == packed.data.size() &&
+                           std::memcmp(other.data.data(), packed.data.data(), packed.data.size()) == 0;
+                };
+                const auto kept = std::find_if(variants.begin(), variants.end(), same_definition);
+                if (kept != variants.end()) {
+                    section_map[index] = *kept;
+                    dropped[index] = 1;
+                    continue;
+                }
+                section_map[index] = static_cast<u32>(table.sections.size());
+                variants.push_back(section_map[index]);
+            } else {
+                section_map[index] = static_cast<u32>(table.sections.size());
+            }
             table.sections.push_back(std::move(packed));
         }
 
@@ -305,6 +341,7 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
         }
         for (const ObjectRelocation& relocation : object.relocations) {
             if (relocation.section >= section_map.size()) continue;
+            if (dropped[relocation.section] != 0) continue;   // the copy it patched is not here
             const u32 section = section_map[relocation.section];
             if (section == kInvalidId) continue;   // a section the table does not carry
             if (relocation.symbol >= object.symbols.size()) {
@@ -318,6 +355,19 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             packed.symbol = symbol_base + relocation.symbol;
             packed.addend = relocation.addend;
             table.relocations.push_back(packed);
+        }
+    }
+
+    // What the whole merge rests on: a relocation patches bytes that are in the section it names. A
+    // copy of a definition the table does not carry must not bring its relocations with it, and a table
+    // that got this wrong is a package that dies at startup - so it is a build that fails instead.
+    for (const CodeTableRelocation& relocation : table.relocations) {
+        const std::optional<u64> width = relocation_width(relocation.type);
+        if (!width.has_value()) continue;
+        const CodeTableSection& section = table.sections[relocation.section];
+        if (relocation.offset + *width > section.data.size()) {
+            return fail(std::format("a relocation in '{}' + {:#x} runs past the {} bytes of that section",
+                                    section.name, relocation.offset, section.data.size()));
         }
     }
     return table;
