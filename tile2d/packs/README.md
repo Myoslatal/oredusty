@@ -1,11 +1,19 @@
 # 内容包工作区
 
-这里放**内容包项目**。游戏运行时如果工作目录下有 `packs/`，它会自动加载——所以在这个目录里
-（`tile2d/`）启动游戏，你写的包就已经生效了：
+这里放**内容包项目**。游戏会自动加载两个地方的 `packs/`：
+
+1. **可执行文件旁边**（`build/debug/games/mine/packs/`）：把包和模组放到游戏自己所在目录，
+   从任何地方启动游戏都会加载它——这是"发给别人玩"的形态；
+2. **工作目录下**（就是这里）：在这个目录里（`tile2d/`）启动游戏，你正在写的包就已经生效了。
+
+两个规则指向同一个目录时只算一次；`--packs` / `--mods` 一旦显式写了，就完全按你写的来。
 
     cd tile2d
-    ./build/debug/games/mine/mine_game --world sandbox --start 1        # 自动加载 ./packs
+    ./build/debug/games/mine/mine_game --world sandbox --start 1        # 自动加载 ./packs 与游戏目录下的 packs/
     ./build/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/template
+
+**一个 `packs/` 里可以同时放内容包和模组包**：`*.ecfg` 是内容包，带 `mod.ecfg` 的目录是模组包
+（模组包目录不会被当成内容包扫描，所以它的内容文件不会被注册两次）。
 
 ## 什么是内容包
 

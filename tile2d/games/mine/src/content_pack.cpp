@@ -106,15 +106,35 @@ std::vector<std::string> ContentPack::scan_directory(const std::string& director
         files.push_back(root.string());   // a caller that passed a file meant that file
         return files;
     }
+    // A directory that carries a mod.ecfg is a **mod package**, not a pack project: its content files
+    // belong to the mod host, which loads them in the order its manifest gives (mod_package.h). Loading
+    // them here as well would register every one of the mod's names twice, and the second registration
+    // is reported as a collision - which is what dropping a pack and a mod into one directory (the
+    // game's own "packs" directory, content_search.h) would produce.
+    if (fs::is_regular_file(root / "mod.ecfg", code)) return files;
+
     // Recursive, so a workspace can hold one *directory per pack project* - a pack is one .ecfg file,
     // but a project is a folder with that file, its notes and its art in it. Entries that start with a
-    // dot are skipped, which keeps .git and editor leftovers out of the load.
-    for (const fs::directory_entry& entry : fs::recursive_directory_iterator(root, code)) {
-        const std::string name = entry.path().filename().string();
-        if (!name.empty() && name[0] == '.') continue;
-        if (!entry.is_regular_file(code)) continue;
-        if (entry.path().extension() != ".ecfg") continue;
-        files.push_back(entry.path().string());
+    // dot are skipped, which keeps .git and editor leftovers out of the load, and a mod package is not
+    // descended into.
+    std::error_code walk;
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, walk), end;
+         it != end; it.increment(walk)) {
+        if (walk) break;
+        const fs::path& path = it->path();
+        const std::string name = path.filename().string();
+        if (!name.empty() && name[0] == '.') {
+            it.disable_recursion_pending();
+            continue;
+        }
+        std::error_code entry_code;
+        if (it->is_directory(entry_code)) {
+            if (fs::is_regular_file(path / "mod.ecfg", entry_code)) it.disable_recursion_pending();
+            continue;
+        }
+        if (!it->is_regular_file(entry_code)) continue;
+        if (path.extension() != ".ecfg") continue;
+        files.push_back(path.string());
     }
     // Sorted, so the load order does not depend on what the filesystem happens to return first.
     std::sort(files.begin(), files.end());

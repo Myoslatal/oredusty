@@ -2,6 +2,7 @@
 add_library(t2d_core STATIC
     core/camera2d.cpp
     core/ecfg.cpp
+    core/executable.cpp
     core/log.cpp
     core/module.cpp
     core/rng.cpp

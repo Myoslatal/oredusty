@@ -9,6 +9,7 @@ add_library(mine_core STATIC
     src/content_list.cpp
     src/content_loader.cpp
     src/content_pack.cpp
+    src/content_search.cpp
     src/menu.cpp
     src/mod_package.cpp
     src/registry.cpp

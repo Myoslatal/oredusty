@@ -251,8 +251,13 @@
 三者进同一个注册表，id 按注册顺序分配：
 
 * **纯 ecfg 内容包**：**一个 `.ecfg` 文件就是一个包**，可选一个 `pack::` 头（id / name / version / requires）。
-  `--pack <file>` 指定单个文件，`--packs <dir>` 把目录下每个 `*.ecfg` 当作一个包（按文件名排序，再按 `requires`
-  只移动必须移动的）；不写 `--packs` 时工作目录下存在的 `packs/` 会被自动加载。没有清单文件、没有目录结构、没有代码。
+  `--pack <file>` 指定单个文件，`--packs <dir>` 把目录下每个 `*.ecfg` 当作一个包（递归、按路径排序，再按 `requires`
+  只移动必须移动的）。没有清单文件、没有目录结构、没有代码。
+* **不写参数时游戏自己找**（§1 之外的一条已确认需求）：`packs/` 目录**在可执行文件旁边**，
+  把内容包与模组包丢进去就能跑，与启动时的工作目录无关；工作目录下的 `packs/` 是第二顺位（开发工作区）。
+  同一个目录里 `*.ecfg` 是内容包、带 `mod.ecfg` 的子目录是模组包，**模组包目录不会被当成内容包扫描**
+  （否则同一个名字会被注册两次）。两条都是缺省：目录不存在不报错，显式写出来的路径不存在会报错。
+  细节见 `docs/MODS.md` §0。
 * **模组包**：目录 + 清单 + 可选共享库，用于需要"跑点什么"的内容。
 
 * 包 = 目录 + `mod.ecfg` 清单 + 若干内容文件 + 可选的共享库。清单里出现未知的键、缺 id、依赖缺失或
@@ -592,6 +597,13 @@
   `--layer-fill bands|scatter` 是调试填充；`[ ]` 换层、`C` 复位、`F5` 重载并重建、
   `F6` 内容列表、`Esc` 回会话界面。绘制走 `draw_layer_images()`：**按不同图片分批**（`docs/MODS.md` §0）、
   每个地块画满自己的占地、`mirrored` 把 uv 的 u 轴反过来。
+* `[已实现]` **游戏自己找内容（框架 + 游戏）**：`t2d/core/executable.h`——`executable_path()`（Linux 走
+  `/proc/self/exe`、Windows 走模块句柄、macOS 走 `_NSGetExecutablePath`，拿不到就回空串）与
+  `parent_directory_of()`（纯字符串规则，可无文件系统测试）；`mine/content_search.h`——
+  `packs_beside()` 与 `default_content_directories()`：可执行文件旁边的 `packs/` 第一顺位、
+  工作目录下的第二顺位、同一目录只算一次、只有存在的才进列表。单测 `test_executable`（2 用例 / 18 断言）
+  与 `test_content_search`（4 用例 / 24 断言，含"一个目录里同时放包和模组、两者都加载且无冲突"）。
+  顺带定下一条规则：**带 `mod.ecfg` 的目录不是内容包项目**，`ContentPack::scan_directory` 不再往里递归。
 * `[已实现]` **框架修复（重载会丢设备）**：重载内容时替换纹理前先 `renderer().wait_idle()`——
   上一帧可能还在 GPU 上读那张纹理，销毁在用的纹理会 `VK_ERROR_DEVICE_LOST`（`sync.cpp:72`，
   退出码 134）。复现步骤与修后数字见 §8 的 M2 交付状态。
@@ -643,6 +655,18 @@
 
 | 版本 | 变更 |
 |---|---|
+| M2.2 | **游戏自己找内容**（设计者新要求）：① `t2d/core/executable.h`——`executable_path()` /
+  `executable_directory()` / `parent_directory_of()`，纯字符串的目录规则可脱离文件系统测试；
+  ② `mine/content_search.h`——默认内容目录：**可执行文件旁边的 `packs/`** 第一顺位，
+  工作目录下的 `packs/` 第二顺位，同一目录只算一次，只有存在的才进列表（缺省不是承诺：不存在不报错）；
+  ③ **一个 `packs/` 放两种东西**：`*.ecfg` 是内容包，带 `mod.ecfg` 的子目录是模组包；
+  `ContentPack::scan_directory` 不再递归进模组包目录（否则模组的内容文件会被当成包再注册一次，
+  报成"已注册、未替换"）；④ `main.cpp` 里包与模组**各自独立**套用默认目录（只写 `--packs` 时模组仍自动找），
+  并在启动日志里说明这次看了哪些目录。真机验证：把包与模组放进 `build/debug/games/mine/packs/`，
+  **从 `/tmp` 启动**仍然加载（1 包 + 1 模组 + 本体 = 3 项内容，0 错误；内容列表 3 个来源全 OK）。
+  单测 `test_executable`（2 用例 / 18 断言）、`test_content_search`（4 用例 / 24 断言）；
+  Tile2D 套件 21 → **23 个测试**（no-renderer 9 → 10）全绿；文档 `docs/MODS.md` §0、
+  `packs/README.md`、`docs/SANDBOX.md` §2、`tile2d/README.md` 同步 |
 | M2.1 | **世界（M2 第一段）**：① **`mine/world.h`**——`MineLayer`（地图格 + 地块 + 32×32 块索引 + 层自己的 `Rng`）与
   `MineWorld`（种子 + 层形状 + `LayerGenerator`，**只有被进入的那一层在内存里**，`enter(层号)` 现建现用，
   同一 `(seed, 层号)` 再进来是同一个矿场）。② **建层**：`place()` 走定义器造地块、**掷一次翻转骰子**、

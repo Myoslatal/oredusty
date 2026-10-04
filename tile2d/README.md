@@ -14,7 +14,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 
 | Module | What it does | Tested by |
 |---|---|---|
-| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, the **2D camera** (pan, zoom about an anchor, fit, clamp, world↔screen, the cell range a viewport touches), byte streams with varints, the `.ecfg` reader, the dynamic loader, CLI | `test_ecfg`, `test_module`, `test_camera2d` |
+| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, the **2D camera** (pan, zoom about an anchor, fit, clamp, world↔screen, the cell range a viewport touches), byte streams with varints, the `.ecfg` reader, the dynamic loader, **where the running program is** (so a game can find what travels with it), CLI | `test_ecfg`, `test_module`, `test_camera2d`, `test_executable` |
 | `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring) and the tileset (what a tile id means for physics, where it lives in an atlas) | `test_tilemap` |
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
@@ -45,6 +45,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_tilemap            17 cases / 359 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
     tests/test_camera2d            7 cases /1986 checks  screen/world mapping, zooming about an anchor, fitting a 512² map, bounding the view
     tests/test_ecfg               12 cases / 128 checks  the configuration format, including the shipped example.ecfg
+    tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
     tests/test_text                9 cases / 337 checks  UTF-8, language tables, the line box, the shipped interface strings
@@ -61,6 +62,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
     games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   11 cases / 155 checks  packs: headers, order, collisions, the three sources, engine fields
+    games/mine/tests/test_content_search  4 cases /  24 checks  the packs directory beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
 
@@ -267,16 +269,26 @@ A pack that has to *run* something is a mod package instead:
 
 ![Content from the game, from packs and from two mods](games/mine/docs/images/sandbox_mods_en.png)
 
-* **Pictures are the one field the engine reads.** A content entry says `image:"art/wall.png"`, a path
-  relative to its pack; the loader checks the file is there and is a PNG, decodes it with Ore's own
-  decoder and packs every picture into one atlas, which the sandbox draws instead of a stand-in
-  colour. The art *style* is polygonal, the resource is an ordinary image - no vector rendering.
+* **Pictures are one of the two fields the engine reads.** A content entry says `image:"art/wall.png"`,
+  a path relative to the file that declares it; the loader checks the file is there and is a PNG, decodes
+  it with Ore's own decoder and gives **every content entry its own texture** (no atlas, any size, the
+  batch is cut by picture), which the sandbox and the world view draw instead of a stand-in colour. The
+  other field is `random_reverse`. The art *style* is polygonal, the resource is an ordinary image - no
+  vector rendering.
 * **Data first.** A pack is one `.ecfg` file: its tables are content, exactly as in the game's own files,
-  and `pack::` is metadata (id, name, version, requires). `--packs <dir>` loads every `*.ecfg` in a
-  directory, ordered by file name and then by what they require; a `packs/` directory beside the game
-  is picked up on its own. Everything lands in the same registry the game's own content does, so ids,
-  saves and the name → id table work the same — and a name two sources both declare is **reported, never
-  merged**, with the game's own content always keeping its id.
+  and `pack::` is metadata (id, name, version, requires). `--packs <dir>` loads every `*.ecfg` under a
+  directory (recursively, ordered by path and then by what they require). Everything lands in the same
+  registry the game's own content does, so ids, saves and the name → id table work the same — and a name
+  two sources both declare is **reported, never merged**, with the game's own content always keeping its id.
+* **A game finds its own content.** Without any argument, a run looks in the `packs` directory **beside
+  its executable** — drop a pack or a mod there and the game loads it wherever you start it from — and
+  then in the working directory's own `packs`, which is the workspace a designer develops in. One
+  directory holds both kinds: `*.ecfg` files are packs, a subdirectory with a `mod.ecfg` is a mod
+  package, and a mod package directory is **not** scanned as packs (its content files belong to the mod
+  host, which loads them in the order its manifest gives — otherwise every name in it would be registered
+  twice and reported as a collision). Neither default is a promise: a missing one is silent, while an
+  explicit `--packs`/`--mods` that is not there is reported. `t2d/core/executable.h` is the framework
+  half, `mine/content_search.h` the game's.
 * **Code second, and optional.** A native mod is a shared library that exports one symbol. It compiles
   against `mine/mod_api.h` and **links nothing of the game** — nothing but plain data and function
   pointers crosses the line, and the interface grows by appending fields behind a `struct_size` and a

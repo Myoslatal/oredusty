@@ -1,9 +1,11 @@
 // Mine - the game executable. For now it is the start screen: pick a world, a language, a seed and a
 // role.
 #include <mine/app.h>
+#include <mine/content_search.h>
 
 #include <ore/ore.h>
 
+#include <t2d/core/executable.h>
 #include <t2d/core/log.h>
 #include <t2d/text/locale.h>
 
@@ -64,11 +66,28 @@ int main(int argc, char** argv) {
     for (const std::string& path : cli.values("pack")) options.pack_paths.push_back(path);
     for (const std::string& directory : cli.values("packs")) options.pack_directories.push_back(directory);
     for (const std::string& directory : cli.values("mods")) options.mod_directories.push_back(directory);
-    // A "packs" directory beside the game is a default, not a promise: when it is not there, nothing
-    // is reported, because nobody asked for it. An explicit --packs that is missing *is* reported.
-    if (options.pack_directories.empty()) {
-        std::error_code code;
-        if (std::filesystem::is_directory("packs", code)) options.pack_directories.push_back("packs");
+    // Where the game looks without being told (mine/content_search.h): the "packs" directory beside
+    // the executable - drop a pack or a mod there and run the game, wherever you are standing - and the
+    // working directory's own "packs", which is the workspace a designer develops in. Neither is a
+    // promise: a missing one is silent, because nobody asked for it, while an explicit --packs or
+    // --mods that is missing *is* reported.
+    //
+    // The two lists default independently: --packs on its own still lets the game find its own mods.
+    if (options.pack_directories.empty() || options.mod_directories.empty()) {
+        const bool packs_by_default = options.pack_directories.empty();
+        const bool mods_by_default = options.mod_directories.empty();
+        const std::vector<std::string> defaults =
+            mine::default_content_directories(t2d::executable_path(), std::filesystem::current_path().string());
+        if (packs_by_default) options.pack_directories = defaults;
+        if (mods_by_default) options.mod_directories = defaults;
+        for (const std::string& directory : defaults) {
+            // One line per directory, saying what it is being looked in for: "which directory did that
+            // come from" is the first question a designer asks of a load they did not spell out.
+            T2D_INFO("content: looking in '{}' for {} without being asked", directory,
+                     packs_by_default && mods_by_default
+                         ? "packs and mods"
+                         : (packs_by_default ? "packs" : "mod packages"));
+        }
     }
     if (const auto view = cli.value("view"); view.has_value()) {
         const std::size_t first = view->find(',');

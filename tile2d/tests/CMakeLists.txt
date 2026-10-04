@@ -5,6 +5,10 @@ t2d_add_test(test_camera2d test_camera2d.cpp)
 # The .ecfg configuration reader (format: example.ecfg in the repository root).
 t2d_add_test(test_ecfg test_ecfg.cpp)
 
+# Where the running program is: the path the platform reports, and the directory rule that turns it
+# into "what is next to the game".
+t2d_add_test(test_executable test_executable.cpp)
+
 # The font engine: containers, cmaps, metrics and TrueType outlines (CFF has its own suite).
 t2d_add_test(test_font test_font.cpp)
 target_link_libraries(test_font PRIVATE t2d::text)
