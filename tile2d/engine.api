@@ -1,0 +1,68 @@
+# engine.api - the symbols a code table may ask the engine for (docs/ENGINE_API.md).
+#
+#   <tier> <mangled symbol> <module>
+#
+# A: offered, frozen - a change to one of these is a deliberate act and bumps the engine version.
+# B: offered, and expected to change with the renderer, the network and the loading machinery.
+# Anything not listed is refused at load time with a message naming the symbol.
+#
+# Generated from the symbols the game's own table asks the host for (codetab dump), which is the
+# measured floor of the surface: what the game itself needs, a mod needs a subset of.
+
+A _ZN3t2d11log_enabledENS_8LogLevelE t2d/core   # t2d::log_enabled
+A _ZN3t2d12EcfgDocument4loadERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPNS_9EcfgErrorE t2d/core   # t2d::EcfgDocument::load
+A _ZN3t2d12EcfgDocument5parseESt17basic_string_viewIcSt11char_traitsIcEEPNS_9EcfgErrorE t2d/core   # t2d::EcfgDocument::parse
+A _ZN3t2d13language_codeENS_8LanguageE t2d/text   # t2d::language_code
+A _ZN3t2d13language_nameENS_8LanguageE t2d/text   # t2d::language_name
+A _ZN3t2d14parse_languageESt17basic_string_viewIcSt11char_traitsIcEE t2d/text   # t2d::parse_language
+A _ZN3t2d15executable_pathB5cxx11Ev t2d/core   # t2d::executable_path[abi:cxx11]
+A _ZN3t2d19parent_directory_ofB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE t2d/core   # t2d::parent_directory_of[abi:cxx11]
+A _ZN3t2d3Rng12next_boundedEj t2d/core   # t2d::Rng::next_bounded
+A _ZN3t2d3Rng4seedEm t2d/core   # t2d::Rng::seed
+A _ZN3t2d3Rng6chanceEf t2d/core   # t2d::Rng::chance
+A _ZN3t2d4Font10face_namesERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE t2d/text   # t2d::Font::face_names
+A _ZN3t2d4Font4loadERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEjPS6_ t2d/text   # t2d::Font::load
+A _ZN3t2d6Locale9from_ecfgERKNS_12EcfgDocumentEPSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaISA_EE t2d/text   # t2d::Locale::from_ecfg
+A _ZN3t2d8Camera2D12set_viewportENS_4Vec2E t2d/core   # t2d::Camera2D::set_viewport
+A _ZN3t2d8Camera2D14scroll_to_showENS_5Aabb2Ef t2d/core   # t2d::Camera2D::scroll_to_show
+A _ZN3t2d8Camera2D15set_zoom_limitsEff t2d/core   # t2d::Camera2D::set_zoom_limits
+A _ZN3t2d8Camera2D3panENS_4Vec2E t2d/core   # t2d::Camera2D::pan
+A _ZN3t2d8Camera2D7zoom_atENS_4Vec2Ef t2d/core   # t2d::Camera2D::zoom_at
+A _ZN3t2d8Camera2D8clamp_toENS_5Aabb2E t2d/core   # t2d::Camera2D::clamp_to
+A _ZN3t2d8Camera2D8set_zoomEf t2d/core   # t2d::Camera2D::set_zoom
+A _ZN3t2d8line_boxERKNS_7FontSetERKNS_9TextStyleE t2d/text   # t2d::line_box
+A _ZN3t2d8sleep_msEj t2d/core   # t2d::sleep_ms
+A _ZN3t2d9log_panicESt17basic_string_viewIcSt11char_traitsIcEERKSt15source_location t2d/core   # t2d::log_panic
+A _ZN3t2d9log_writeENS_8LogLevelESt17basic_string_viewIcSt11char_traitsIcEERKSt15source_location t2d/core   # t2d::log_write
+B _ZN3ore10FrameTimerC1Ev ore/app   # ore::FrameTimer::FrameTimer
+B _ZN3ore11Application3runEiPPc ore/app   # ore::Application::run
+B _ZN3ore11CommandLine5parseEiPPc ore/app   # ore::CommandLine::parse
+B _ZN3ore3rhi15GraphicsContext14create_textureERKNS_5ImageEbSt17basic_string_viewIcSt11char_traitsIcEE ore/rhi   # ore::rhi::GraphicsContext::create_texture
+B _ZN3ore3rhi15GraphicsContextD1Ev ore/rhi   # ore::rhi::GraphicsContext::~GraphicsContext
+B _ZN3ore3rhi7Sampler6createERNS0_6DeviceERKNS0_11SamplerDescE ore/rhi   # ore::rhi::Sampler::create
+B _ZN3ore3rhi7SamplerD1Ev ore/rhi   # ore::rhi::Sampler::~Sampler
+B _ZN3ore3rhi7TextureD1Ev ore/rhi   # ore::rhi::Texture::~Texture
+B _ZN3ore5Image8load_pngESt17basic_string_viewIcSt11char_traitsIcEE ore/platform   # ore::Image::load_png
+B _ZN3ore5debug11InputServerD1Ev ore/debug   # ore::debug::InputServer::~InputServer
+B _ZN3ore6WindowD1Ev ore/platform   # ore::Window::~Window
+B _ZN3ore8Renderer10begin_passERK12VkClearValuefj ore/renderer   # ore::Renderer::begin_pass
+B _ZN3ore8Renderer8end_passEv ore/renderer   # ore::Renderer::end_pass
+B _ZN3ore8Renderer9wait_idleEv ore/renderer   # ore::Renderer::wait_idle
+B _ZN3ore8RendererD1Ev ore/renderer   # ore::Renderer::~Renderer
+B _ZN3t2d11SpriteBatch15set_white_texelERKNS_4Vec2E t2d/render   # t2d::SpriteBatch::set_white_texel
+B _ZN3t2d11SpriteBatch17draw_rect_outlineERKNS_5Aabb2Efj t2d/render   # t2d::SpriteBatch::draw_rect_outline
+B _ZN3t2d11SpriteBatch3endEv t2d/render   # t2d::SpriteBatch::end
+B _ZN3t2d11SpriteBatch5beginERN3ore11RenderFrameERKN3glm3matILi4ELi4EfLNS4_9qualifierE0EEERNS1_3rhi7TextureEP11VkSampler_T t2d/render   # t2d::SpriteBatch::begin
+B _ZN3t2d11SpriteBatch6createERN3ore3rhi15GraphicsContextERKNS0_7OptionsE t2d/render   # t2d::SpriteBatch::create
+B _ZN3t2d11SpriteBatch9draw_quadERKNS_5Aabb2ES3_j t2d/render   # t2d::SpriteBatch::draw_quad
+B _ZN3t2d11SpriteBatch9draw_rectERKNS_5Aabb2Ej t2d/render   # t2d::SpriteBatch::draw_rect
+B _ZN3t2d11SpriteBatchD1Ev t2d/render   # t2d::SpriteBatch::~SpriteBatch
+B _ZN3t2d12TextRenderer4drawERNS_11SpriteBatchESt17basic_string_viewIcSt11char_traitsIcEERKNS_7FontSetERKNS_9TextStyleENS_4Vec2Ef t2d/render   # t2d::TextRenderer::draw
+B _ZN3t2d12TextRenderer6createERN3ore3rhi15GraphicsContextERKNS_10GlyphAtlas7OptionsE t2d/render   # t2d::TextRenderer::create
+B _ZN3t2d12TextRendererD1Ev t2d/render   # t2d::TextRenderer::~TextRenderer
+B _ZN3t2d22sprite_view_projectionERKNS_4Vec2ES2_ t2d/render   # t2d::sprite_view_projection
+B _ZN3t2d6Module4loadERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPS6_ t2d/net   # t2d::Module::load
+B _ZN3t2d6Module6symbolEPKc t2d/net   # t2d::Module::symbol
+B _ZN3t2d6ModuleC1EOS0_ t2d/net   # t2d::Module::Module
+B _ZN3t2d6ModuleD1Ev t2d/net   # t2d::Module::~Module
+B _ZN3t2d6ModuleaSEOS0_ t2d/net   # t2d::Module::operator=
