@@ -175,6 +175,8 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"layout", "<path>", "sandbox layout file: loaded at startup, written by F2"},
         {"save-layout", "<path>", "write the sandbox layout once at shutdown (scripted runs)"},
         {"dump-layer", "<0|1>", "write the sandbox layer as text to the log at shutdown"},
+        {"playtest", "<0|1>", "start the sandbox in the playtest: the layer as the game draws it"},
+        {"pointer", "<x,y>", "playtest: put the pointer on this cell (a scripted run has no mouse)"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
@@ -280,7 +282,7 @@ void MineApp::on_update(f32 delta_seconds) {
     switch (screen_) {
         case Screen::Start: handle_start_input(); break;
         case Screen::Session: handle_session_input(); break;
-        case Screen::Sandbox: handle_sandbox_input(); break;
+        case Screen::Sandbox: handle_sandbox_input(delta_seconds); break;
     }
     // Headless runs have no vsync: without pacing the loop would spin and a screenshot would be taken
     // before the interface settled.
@@ -546,6 +548,35 @@ void MineApp::set_status(std::string_view text, bool error) {
     else T2D_INFO("sandbox: {}", status_);
 }
 
+std::string MineApp::cell_text(GridPos pos) const {
+    // The cell is reported as the whole stack, topmost first: on a multi layer map "what is here" is a
+    // list, not one tile.
+    std::string text;
+    for (i32 layer = sandbox_.layer_count() - 1; layer >= 0; --layer) {
+        const CellView value = sandbox_.cell(layer, pos);
+        if (value.empty()) continue;
+        if (!text.empty()) text += " | ";
+        text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.shown_id(), value.name);
+        if (value.missing()) text += std::string(" ") + std::string(locale_.text("sandbox.cell.missing"));
+    }
+    if (text.empty()) text = locale_.text("sandbox.cell.empty");
+    return text;
+}
+
+std::string MineApp::view_text() const {
+    const t2d::TileRect visible = sandbox_.visible_cells();
+    std::string text = format_localized(locale_.text("sandbox.view.value"),
+                                        static_cast<t2d::f64>(sandbox_.cell_px()), std::max(visible.width, 0),
+                                        std::max(visible.height, 0));
+    // A frame that lost quads is not a frame to read a map off, so it says so on the line that
+    // describes the view. The count is the previous frame's: the panel is drawn before this frame's
+    // batches are submitted.
+    if (dropped_quads_ > 0) {
+        text += std::format("   {}", format_localized(locale_.text("sandbox.dropped"), dropped_quads_));
+    }
+    return text;
+}
+
 t2d::Aabb2 MineApp::sandbox_status_area() const {
     const f32 width = static_cast<f32>(renderer().width());
     const f32 height = static_cast<f32>(renderer().height());
@@ -564,11 +595,28 @@ t2d::Aabb2 MineApp::sandbox_panel_area() const {
 }
 
 t2d::Aabb2 MineApp::sandbox_grid_area() const {
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    // The playtest has no panel and no status bar, so the layer gets the whole window: this is the
+    // viewport the camera is given, which is what makes the culling range cover the screen.
+    if (playtest_) return t2d::Aabb2{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{std::max(1.0f, width), std::max(1.0f, height)}};
     const t2d::Aabb2 panel = sandbox_panel_area();
     const t2d::Aabb2 status = sandbox_status_area();
     // Anchored at the top left corner so the area's max is also the viewport size the camera expects.
     return t2d::Aabb2{t2d::Vec2{0.0f, 0.0f},
                       t2d::Vec2{std::max(1.0f, panel.min.x), std::max(1.0f, status.min.y)}};
+}
+
+void MineApp::set_playtest(bool on) {
+    if (playtest_ == on) return;
+    playtest_ = on;
+    // Only the viewport changes: the camera keeps looking at the same cell, and the space the chrome
+    // used to occupy now shows more of the map. A playtest that jumped somewhere else would be
+    // useless for looking at the bit of the layer that was just being edited.
+    const t2d::Aabb2 area = sandbox_grid_area();
+    sandbox_.set_viewport(t2d::Vec2{area.max.x, area.max.y});
+    sandbox_.clear_pointer();
+    T2D_INFO("sandbox: playtest {}", on ? "on" : "off");
 }
 
 void MineApp::fit_sandbox_view() {
@@ -605,11 +653,19 @@ void MineApp::open_sandbox() {
     // overwritten by a fill they asked for to see the palette.
     apply_fill();
     if (!options_.layout_path.empty()) load_layout();
+    // The playtest draws over the whole window, so a run that starts in it enters it before the view is
+    // fitted: the fit then frames the layer in the space the playtest actually has.
+    if (options_.playtest) set_playtest(true);
     fit_sandbox_view();
     // Where to look is decided last: a run that names a cell wants that cell, whatever the fit did.
     if (options_.has_view) {
         sandbox_.look_at(GridPos{static_cast<i32>(options_.view_cell.x), static_cast<i32>(options_.view_cell.y)},
                          options_.view_zoom);
+    }
+    // The pointer is placed after the mode: entering the playtest forgets a stale pointer on purpose.
+    if (options_.has_pointer) {
+        sandbox_.point_at_cell(
+            GridPos{static_cast<i32>(options_.pointer_cell.x), static_cast<i32>(options_.pointer_cell.y)});
     }
     T2D_INFO("sandbox: {}x{} map, {} tile layer(s), {} palette entries, {} cells filled", sandbox_.width(),
              sandbox_.height(), sandbox_.layer_count(), sandbox_.palette_count(), sandbox_.filled_cells());
@@ -751,7 +807,48 @@ void MineApp::handle_session_input() {
     if (window->input().key_pressed(ore::Key::Escape)) screen_ = Screen::Start;
 }
 
-void MineApp::handle_sandbox_input() {
+void MineApp::handle_playtest_input(f32 delta_seconds) {
+    const ore::Window* window = this->window();
+    if (window == nullptr) return;
+    const ore::InputState& input = window->input();
+    const t2d::Aabb2 area = sandbox_grid_area();
+    const t2d::Vec2 centre{area.max.x * 0.5f, area.max.y * 0.5f};
+    const t2d::Vec2 mouse{input.mouse_x(), input.mouse_y()};
+
+    // What the game's input is (docs/GAME_DESIGN.md section 1.11): the camera and the pointer. There
+    // is no character to move and nothing here paints - the brush belongs to the editor, and the
+    // action table belongs to content the designer has not given yet (section 7.14).
+    //
+    // Held keys move the view continuously rather than one cell per press: a playtest is looked at,
+    // and stepping a cell at a time is how the editor's cursor moves, not how a view does.
+    constexpr f32 kLookCellsPerSecond = 12.0f;
+    const f32 step = kLookCellsPerSecond * sandbox_.cell_px() * delta_seconds;
+    t2d::Vec2 look{};   // in cells: where the view is asked to go
+    if (input.key_down(ore::Key::Left) || input.key_down(ore::Key::A)) look.x -= 1.0f;
+    if (input.key_down(ore::Key::Right) || input.key_down(ore::Key::D)) look.x += 1.0f;
+    if (input.key_down(ore::Key::Up) || input.key_down(ore::Key::W)) look.y -= 1.0f;
+    if (input.key_down(ore::Key::Down) || input.key_down(ore::Key::S)) look.y += 1.0f;
+    if (look.x != 0.0f || look.y != 0.0f) {
+        // pan() takes a drag: the map follows the pointer, so looking right drags the map left.
+        sandbox_.pan(t2d::Vec2{-look.x * step, -look.y * step});
+    }
+    if (input.key_pressed(ore::Key::Equal) || input.key_pressed(ore::Key::KpAdd)) sandbox_.zoom_at(centre, 1.25f);
+    if (input.key_pressed(ore::Key::Minus) || input.key_pressed(ore::Key::KpSubtract)) {
+        sandbox_.zoom_at(centre, 0.8f);
+    }
+    if (input.mouse_down(ore::MouseButton::Middle)) {
+        sandbox_.pan(t2d::Vec2{input.mouse_delta_x(), input.mouse_delta_y()});
+    }
+    if (input.scroll_y() != 0.0f) {
+        sandbox_.zoom_at(mouse, input.scroll_y() > 0.0f ? 1.15f : 1.0f / 1.15f);
+    }
+
+    // The pointer selects what is under it. It is asked again every frame, because the camera can move
+    // under a mouse that is standing still.
+    sandbox_.point_at(mouse);
+}
+
+void MineApp::handle_sandbox_input(f32 delta_seconds) {
     const ore::Window* window = this->window();
     if (window == nullptr) return;
     const ore::InputState& input = window->input();
@@ -762,15 +859,25 @@ void MineApp::handle_sandbox_input() {
     const bool over_grid = mouse.x >= area.min.x && mouse.x < area.max.x && mouse.y >= area.min.y &&
                            mouse.y < area.max.y;
 
-    if (input.key_pressed(ore::Key::Escape)) {
-        screen_ = Screen::Start;
-        return;
-    }
+    // Editing and playtesting share the keys that are about the layer and its files rather than about
+    // the brush: reloading the content files while playtesting is the whole point of playtesting them.
+    if (input.key_pressed(ore::Key::P)) set_playtest(!playtest_);
     if (input.key_pressed(ore::Key::F5)) reload_content();
     if (input.key_pressed(ore::Key::F2)) save_layout();
     if (input.key_pressed(ore::Key::F3)) load_layout();
     if (input.key_pressed(ore::Key::F4)) dump_layer();
     if (input.key_pressed(ore::Key::C)) fit_sandbox_view();
+    if (input.key_pressed(ore::Key::Escape)) {
+        // Escape leaves the playtest first, the sandbox second: inside a playtest it is the way back
+        // to the editor, and only the editor's Escape is "back to the start screen".
+        if (playtest_) set_playtest(false);
+        else screen_ = Screen::Start;
+        return;
+    }
+    if (playtest_) {
+        handle_playtest_input(delta_seconds);
+        return;
+    }
 
     const auto step = [&](ore::Key key, i32 dx, i32 dy) {
         if (!input.key_pressed(key)) return;
@@ -1005,19 +1112,8 @@ void MineApp::draw_sandbox_screen() {
     const f32 value_column = left + label_width + 2.0f * unit_;
     const f32 middle_column = middle + label_width + 2.0f * unit_;
 
-    // The cell is reported as the whole stack at the cursor, topmost first: on a multi layer map
-    // "what is here" is a list, not one tile.
     const CellView under = sandbox_.cell(sandbox_.cursor());
-    std::string cell_text;
-    for (i32 layer = sandbox_.layer_count() - 1; layer >= 0; --layer) {
-        const CellView value = sandbox_.cell(layer, sandbox_.cursor());
-        if (value.empty()) continue;
-        if (!cell_text.empty()) cell_text += " | ";
-        cell_text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.shown_id(),
-                                 value.name);
-        if (value.missing()) cell_text += std::string(" ") + std::string(locale_.text("sandbox.cell.missing"));
-    }
-    if (cell_text.empty()) cell_text = locale_.text("sandbox.cell.empty");
+    const std::string cell_text_value = cell_text(sandbox_.cursor());
     std::string content_text{locale_.text("sandbox.content.none")};
     if (!sandbox_.content_paths().empty()) {
         content_text.clear();
@@ -1048,7 +1144,7 @@ void MineApp::draw_sandbox_screen() {
     draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.cursor"),
               std::format("{},{}", sandbox_.cursor().x, sandbox_.cursor().y), kPalette.text_dim, kPalette.text,
               left_width);
-    draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.cell"), cell_text, kPalette.text_dim,
+    draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.cell"), cell_text_value, kPalette.text_dim,
               under.missing() ? kPalette.missing : kPalette.text, right_width);
     y += line;
     draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.grid"),
@@ -1083,20 +1179,11 @@ void MineApp::draw_sandbox_screen() {
     // What the view costs and what the map costs: the two numbers that say whether a map of this
     // size is actually being handled - the zoom the camera is at, how many cells are on screen, and
     // how many bytes the cells occupy (a layer nobody painted on occupies none).
-    const t2d::TileRect visible = sandbox_.visible_cells();
-    std::string view_text = format_localized(locale_.text("sandbox.view.value"),
-                                             static_cast<t2d::f64>(sandbox_.cell_px()),
-                                             std::max(visible.width, 0), std::max(visible.height, 0));
-    // A frame that lost quads is not a frame to read a map off, so it says so on the line that
-    // describes the view. The count is the previous frame's: the panel is drawn before this frame's
-    // batches are submitted.
-    if (dropped_quads_ > 0) {
-        view_text += std::format("   {}", format_localized(locale_.text("sandbox.dropped"), dropped_quads_));
-    }
+    const std::string view_line = view_text();
     // Rounded up: a map that occupies 3840 bytes costs 4 KiB, not "0 KiB".
     const std::string storage_text =
         format_localized(locale_.text("sandbox.cells.value"), (sandbox_.cell_bytes() + 1023) / 1024);
-    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.view"), view_text, kPalette.text_dim,
+    draw_pair(left, y, value_column, body_px_, locale_.text("sandbox.view"), view_line, kPalette.text_dim,
               kPalette.text, left_width);
     draw_pair(middle, y, middle_column, body_px_, locale_.text("sandbox.cells"), storage_text,
               kPalette.text_dim, kPalette.text, right_width);
@@ -1107,6 +1194,81 @@ void MineApp::draw_sandbox_screen() {
     y += line;
     draw_fitted(left, y, body_px_, kPalette.text_dim, locale_.text("sandbox.hint.keys"), full_width);
     draw_fitted(left, y + line, body_px_, kPalette.text_dim, locale_.text("sandbox.hint.keys2"), full_width);
+}
+
+void MineApp::draw_playtest_screen() {
+    const t2d::Aabb2 area = sandbox_grid_area();
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const f32 cell = sandbox_.cell_px();
+    const SandboxDrawRange range = sandbox_draw_range();
+    const i32 step = range.step;
+    const f32 span = cell * static_cast<f32>(step);
+    const i32 sample = step / 2;   // the cell in the middle of a block names the block
+
+    batch_->draw_rect(area, kPalette.grid_background);
+    // Every layer bottom to top at full strength, and no grid lines, no labels and no dimming: those
+    // are what the layer is edited against, and a playtest is for seeing what a player would.
+    for (i32 layer = 0; layer < sandbox_.layer_count(); ++layer) {
+        for (i32 y = range.y0; y <= range.y1; y += step) {
+            for (i32 x = range.x0; x <= range.x1; x += step) {
+                const GridPos pos{std::min(x + sample, range.x1), std::min(y + sample, range.y1)};
+                const CellView value = sandbox_.cell(layer, pos);
+                if (value.empty()) continue;
+                const t2d::Vec2 at = sandbox_.screen_of_cell(GridPos{x, y});
+                const t2d::Aabb2 rect{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + span, at.y + span}};
+                // Content without a picture gets the sandbox's name colour: the game would draw its
+                // art there, and a playtest of a content set that has none has to show something.
+                batch_->draw_rect(rect, debug_color_for(value.name));
+                // The one editor marking the playtest keeps: content that went missing is a data
+                // error, and playtesting is exactly when it would be noticed.
+                if (value.missing()) batch_->draw_rect_outline(rect, 2.0f, kPalette.missing);
+            }
+        }
+    }
+
+    // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
+    if (const std::optional<GridPos> hovered = sandbox_.hovered(); hovered.has_value()) {
+        const t2d::Vec2 at = sandbox_.screen_of_cell(*hovered);
+        batch_->draw_rect_outline(t2d::Aabb2{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f,
+                                  kPalette.accent);
+    }
+
+    // One line of HUD: what the pointer is over, what the view costs, and the way back to editing. The
+    // game's own HUD is not designed yet (docs/GAME_DESIGN.md section 7), so this says only what the
+    // sandbox already knows and nothing about a game state that does not exist.
+    const f32 inset = 4.0f * unit_;
+    const t2d::Aabb2 bar{t2d::Vec2{area.min.x, area.max.y - line - inset * 2.0f},
+                         t2d::Vec2{area.max.x, area.max.y}};
+    batch_->draw_rect(bar, kPalette.panel_fill);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{bar.min.x, bar.min.y}, t2d::Vec2{bar.max.x, bar.min.y + 2.0f}},
+                      kPalette.panel_edge);
+
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    const std::string hint{locale_.text("playtest.hint")};
+    const f32 gap = 6.0f * unit_;
+    const f32 hint_x = bar.max.x - padding - text_->measure(hint, fonts_, style).width;
+    // The middle slot: what the view costs, or - when something went wrong - the message. A reload that
+    // failed while playtesting must not be invisible, and a message about a reload that worked is not
+    // shown: what it describes is on the screen.
+    const bool failed = status_is_error_ && !status_.empty();
+    const std::string middle = failed ? status_ : view_text();
+    const f32 middle_width =
+        std::min(text_->measure(middle, fonts_, style).width, std::max(16.0f, (hint_x - bar.min.x) * 0.5f));
+    const f32 middle_x = hint_x - gap - middle_width;
+    const f32 cell_x = bar.min.x + padding;
+    const f32 cell_width = std::max(16.0f, middle_x - cell_x - gap);
+    const f32 text_y = bar.min.y + inset;
+    if (const std::optional<GridPos> hovered = sandbox_.hovered(); hovered.has_value()) {
+        draw_fitted(cell_x, text_y, body_px_, kPalette.text,
+                    format_localized(locale_.text("playtest.cell"), hovered->x, hovered->y, cell_text(*hovered)),
+                    cell_width);
+    } else {
+        draw_fitted(cell_x, text_y, body_px_, kPalette.text_dim, locale_.text("playtest.off"), cell_width);
+    }
+    draw_fitted(middle_x, text_y, body_px_, failed ? kPalette.error : kPalette.text_dim, middle, middle_width);
+    draw_line(hint_x, text_y, body_px_, kPalette.accent, hint);
 }
 
 void MineApp::draw_sandbox_images() {
@@ -1129,17 +1291,19 @@ void MineApp::draw_sandbox_images() {
                 const std::string key = image_key(value.kind, value.name);
                 if (!image_atlas_->has(key)) continue;
                 const t2d::Vec2 at = sandbox_.screen_of_cell(GridPos{x, y});
-                const f32 inset = span * 0.08f;
+                // The editor insets a picture so the cell under it stays readable; the playtest draws
+                // it edge to edge, which is how a tilemap draws a tile, and dims nothing.
+                const f32 inset = playtest_ ? 0.0f : span * 0.08f;
                 batch_->draw_quad(t2d::Aabb2{t2d::Vec2{at.x + inset, at.y + inset},
                                              t2d::Vec2{at.x + span - inset, at.y + span - inset}},
-                                  image_atlas_->uv(key), active ? 0xFFFFFFFFu : 0x80FFFFFFu);
+                                  image_atlas_->uv(key), (playtest_ || active) ? 0xFFFFFFFFu : 0x80FFFFFFu);
             }
         }
     }
 
     // The palette's swatches: the same picture the cell would get, so a designer can tell two entries
-    // apart by looking at them.
-    if (sandbox_.palette_count() == 0) return;
+    // apart by looking at them. The playtest has no palette, so it draws none.
+    if (playtest_ || sandbox_.palette_count() == 0) return;
     const PaletteLayout layout = palette_layout();
     for (usize index = layout.first_visible; index < sandbox_.palette_count() &&
                                               index < layout.first_visible + layout.visible; ++index) {
@@ -1157,7 +1321,10 @@ void MineApp::draw_sandbox_images() {
 void MineApp::on_resize(u32 width, u32 height) {
     (void)width;
     (void)height;
-    // The layer is fitted to the grid area, so a resize is a refit.
+    // A resize is a refit in both modes, and the first one is not optional: a scaled display reports the
+    // window at its logical size before the compositor hands over the real framebuffer, so the fit that
+    // ran at startup was made against the wrong viewport. Switching modes is the case that keeps the
+    // view (set_playtest), not resizing.
     if (screen_ == Screen::Sandbox && batch_ != nullptr) fit_sandbox_view();
 }
 
@@ -1175,7 +1342,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
     switch (screen_) {
         case Screen::Start: draw_start_screen(); break;
         case Screen::Session: draw_session_screen(); break;
-        case Screen::Sandbox: draw_sandbox_screen(); break;
+        case Screen::Sandbox: playtest_ ? draw_playtest_screen() : draw_sandbox_screen(); break;
     }
     batch_->end();
     dropped_quads_ = batch_->dropped_quads();

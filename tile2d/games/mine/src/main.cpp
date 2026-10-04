@@ -88,6 +88,17 @@ int main(int argc, char** argv) {
     if (const auto layout = cli.value("layout"); layout.has_value()) options.layout_path = *layout;
     if (const auto save = cli.value("save-layout"); save.has_value()) options.save_layout_path = *save;
     if (const auto dump = cli.bool_value("dump-layer"); dump.has_value()) options.dump_layer = *dump;
+    if (const auto playtest = cli.bool_value("playtest"); playtest.has_value()) options.playtest = *playtest;
+    if (const auto pointer = cli.value("pointer"); pointer.has_value()) {
+        const std::size_t separator = pointer->find(',');
+        if (separator == std::string::npos) {
+            T2D_ERROR("--pointer wants a cell like 12,7, got '{}'", *pointer);
+            return 1;
+        }
+        options.pointer_cell.x = static_cast<mine::f32>(std::strtof(pointer->substr(0, separator).c_str(), nullptr));
+        options.pointer_cell.y = static_cast<mine::f32>(std::strtof(pointer->substr(separator + 1).c_str(), nullptr));
+        options.has_pointer = true;
+    }
 
     mine::MineApp application(std::move(options));
     return application.run(argc, argv);

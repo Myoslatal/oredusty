@@ -81,6 +81,9 @@ en::
     sandbox.dropped:"{} QUADS DROPPED (FRAME INCOMPLETE)"
     sandbox.cells:"STORAGE"
     sandbox.cells.value:"{} KIB"
+    playtest.cell:"CELL {},{}   {}"
+    playtest.off:"POINTER OFF THE MAP"
+    playtest.hint:"P EDIT   ESC BACK"
 
 zh-Hans::
     title:"矿场"
@@ -157,6 +160,9 @@ zh-Hans::
     sandbox.dropped:"已丢弃 {} 个图元（画面不完整）"
     sandbox.cells:"格子存储"
     sandbox.cells.value:"{} KiB"
+    playtest.cell:"格子 {},{}   {}"
+    playtest.off:"指针在图外"
+    playtest.hint:"P 返回编辑   ESC 返回"
 
 zh-Hant::
     title:"礦場"
@@ -233,3 +239,6 @@ zh-Hant::
     sandbox.dropped:"已丟棄 {} 個圖元（畫面不完整）"
     sandbox.cells:"格子儲存"
     sandbox.cells.value:"{} KiB"
+    playtest.cell:"格子 {},{}   {}"
+    playtest.off:"指標在圖外"
+    playtest.hint:"P 返回編輯   ESC 返回"

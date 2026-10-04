@@ -57,7 +57,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
-    games/mine/tests/test_sandbox        26 cases / 696 checks  the sandbox: map, palette, camera, reload by name, layouts
+    games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack    9 cases / 116 checks  packs: headers, order, collisions, the three sources
     games/mine/tests/test_mod_package     9 cases / 102 checks  mod manifests, dependency order, collisions, a native module
 
@@ -328,6 +328,8 @@ separately.
 
 ![Sandbox, three tile layers](games/mine/docs/images/sandbox_layers_en.png)
 
+![Playtest: the layer as the game draws it](games/mine/docs/images/sandbox_playtest_zh_hans.png)
+
 * **The palette is the registry**, printed with the ids the registry handed out (`structure #3`), so a
   designer can see both the names and the numbers a save would store.
 * **F5 reloads the content files without restarting**, and every placed cell is re-pointed at its
@@ -341,6 +343,13 @@ separately.
   is deleted.
 * **No content in the code**: the placeholder names used by the tool's own tests are marked as such in
   `games/mine/tests/data/placeholder_content.ecfg`.
+* **Press `P` to playtest the layer** (`--playtest 1` starts in it): the same map, the same camera, drawn the way
+  the game draws it — every tile layer bottom to top, no dimming, art edge to edge, no grid lines, no labels, no
+  panel, no status bar. The input is the game's input (docs/GAME_DESIGN.md §1.11): the camera and the pointer, and
+  nothing else. Holding a direction pans, the wheel zooms about the pointer, and the cell under the pointer is
+  outlined with one line of HUD naming it. It is not a game mode — nothing simulates, nothing is demanded and a
+  click does nothing yet (the action table is content, §7.14) — it is the engine half, and the first user of M2's
+  world view.
 
 Usage, keys and limits: [docs/SANDBOX.md](docs/SANDBOX.md).
 
@@ -351,11 +360,11 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 16/16 tests green |
-| `release` | 16/16 tests green |
-| `asan` (Address + UB sanitizers) | 16/16 tests green |
-| `tsan` (ThreadSanitizer) | 16/16 tests green |
-| `no-renderer` | 8/8 tests green, no Vulkan, GLFW or game binary |
+| `debug` | 18/18 tests green |
+| `release` | 18/18 tests green |
+| `asan` (Address + UB sanitizers) | 18/18 tests green |
+| `tsan` (ThreadSanitizer) | 18/18 tests green |
+| `no-renderer` | 9/9 tests green, no Vulkan, GLFW or game binary |
 
 Hardware: **Intel Arc Pro 130T/140T (Arrow Lake-P), Mesa 26.2.3, Wayland**. The windowed path is
 verified by real screenshots, and the offscreen path is what the render test asserts on.

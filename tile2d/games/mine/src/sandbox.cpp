@@ -286,6 +286,17 @@ void SandboxModel::look_at(GridPos cell, f32 pixels_per_cell) {
     camera_.look_at(Vec2{static_cast<f32>(cell.x) + 0.5f, static_cast<f32>(cell.y) + 0.5f});
 }
 
+// ---------------------------------------------------------- the playtest pointer ---
+
+void SandboxModel::point_at(Vec2 screen) {
+    const GridPos under = cell_at_screen(screen);
+    // Off the map is not a cell: the pointer remembers nothing rather than clamping to the nearest
+    // edge, or hovering the void beside a small map would select its last column.
+    hovered_ = inside(under) ? std::optional<GridPos>{under} : std::nullopt;
+}
+
+void SandboxModel::point_at_cell(GridPos cell) { hovered_ = inside(cell) ? std::optional<GridPos>{cell} : std::nullopt; }
+
 void SandboxModel::scroll_to_show(GridPos cell_position, Vec2 viewport) {
     camera_.set_viewport(viewport);
     const f32 x = static_cast<f32>(cell_position.x);

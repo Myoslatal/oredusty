@@ -77,6 +77,13 @@ struct MineOptions {
     std::vector<std::string> mod_directories;
     /// Write the layer as text to the log at shutdown (a scripted run has no keyboard for F4).
     bool dump_layer = false;
+    /// Start in the playtest: the same layer, drawn as the game draws it (no panel, no grid lines, no
+    /// labels, no dimming), driven by the game's input - the camera and the pointer, nothing else.
+    bool playtest = false;
+    /// Where the playtest's pointer starts, in cell coordinates. A scripted run has no mouse, and a
+    /// playtest screenshot without the pointer would not show the half of it that is the pointer.
+    bool has_pointer = false;
+    t2d::Vec2 pointer_cell{};
 };
 
 class MineApp final : public ore::Application {
@@ -98,7 +105,12 @@ private:
 
     void handle_start_input();
     void handle_session_input();
-    void handle_sandbox_input();
+    /// The playtest half of the sandbox screen: the camera and the pointer, and nothing that edits.
+    void handle_playtest_input(f32 delta_seconds);
+    void handle_sandbox_input(f32 delta_seconds);
+    /// Switches between editing the layer and playtesting it. The camera keeps its place; only the
+    /// viewport changes, because the playtest draws over the space the editor's chrome occupies.
+    void set_playtest(bool on);
     void begin_session(const SessionConfig& session);
     void open_sandbox();
     void apply_fill();
@@ -140,12 +152,21 @@ private:
     void draw_start_screen();
     void draw_session_screen();
     void draw_sandbox_screen();
+    /// The layer as the game draws it, plus the pointer and one line saying what it is over.
+    void draw_playtest_screen();
 
     [[nodiscard]] t2d::Aabb2 sandbox_grid_area() const;
     [[nodiscard]] t2d::Aabb2 sandbox_panel_area() const;
     [[nodiscard]] t2d::Aabb2 sandbox_status_area() const;
     /// Replaces the status line; \p error picks the colour.
     void set_status(std::string_view text, bool error = false);
+
+    /// What is at \p pos, topmost layer first ("L1 machine #3 name | L0 structure #1 name", or "EMPTY").
+    /// The status bar and the playtest's HUD both report a cell through this, so the two never disagree.
+    [[nodiscard]] std::string cell_text(GridPos pos) const;
+    /// The view as the status bar reports it: pixels per cell, visible cells, and a warning when the
+    /// last frame lost quads.
+    [[nodiscard]] std::string view_text() const;
 
     /// One row of the interface at \p size_px: the font's own line box, never tighter than the
     /// 1.45 x size rhythm the panels are laid out with. A row, the background behind it and the text
@@ -175,6 +196,10 @@ private:
     ContentPipeline content_{};
     std::string status_{};
     bool status_is_error_ = false;
+    /// True while the sandbox is being playtested rather than edited. It is a mode of the sandbox
+    /// screen, not a fourth screen: the layer, the camera and the content stay the same, only the
+    /// chrome and the input change.
+    bool playtest_ = false;
 
     t2d::Locale locale_{};
     Scope<t2d::Font> latin_font_;

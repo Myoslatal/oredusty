@@ -188,10 +188,18 @@ void Window::refresh_pixel_scale() {
     int framebuffer_height = 0;
     glfwGetWindowSize(impl_->handle, &window_width, &window_height);
     glfwGetFramebufferSize(impl_->handle, &framebuffer_width, &framebuffer_height);
+    const PixelScale previous = pixel_scale_;
     pixel_scale_ = PixelScale::of(static_cast<u32>(std::max(window_width, 0)),
                                   static_cast<u32>(std::max(window_height, 0)),
                                   static_cast<u32>(std::max(framebuffer_width, 0)),
                                   static_cast<u32>(std::max(framebuffer_height, 0)));
+    // A scaled display only says so once the surface has been configured, which is after the startup
+    // log line: a scale that appears (or changes) later is worth a line of its own, because everything
+    // measured before it - the pointer, a view fitted to the framebuffer - was measured unscaled.
+    if (!(pixel_scale_ == previous) && !pixel_scale_.identity()) {
+        ORE_INFO("window: {}x{} framebuffer ({:.4f}x{:.4f} framebuffer pixels per screen unit)", width_,
+                 height_, static_cast<f64>(pixel_scale_.x), static_cast<f64>(pixel_scale_.y));
+    }
 }
 
 Window::~Window() {

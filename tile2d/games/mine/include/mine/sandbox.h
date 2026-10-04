@@ -34,6 +34,7 @@
 #include <t2d/core/math2d.h>
 #include <t2d/core/types.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -209,6 +210,22 @@ public:
     void look_at(GridPos cell, f32 pixels_per_cell = 0.0f);
     /// Scrolls the least amount that brings \p cell inside a viewport, keeping a margin of one cell.
     void scroll_to_show(GridPos cell, Vec2 viewport);
+    /// Changes the viewport without moving the view: the world point at the centre stays there and the
+    /// new space simply shows more of the map. Going from the editor's chrome to the playtest's full
+    /// window is a viewport change, not a camera reset.
+    void set_viewport(Vec2 size) { camera_.set_viewport(size); }
+
+    // --- the playtest pointer (the game's pointer, not the editor's cursor) ---
+    /// Points at \p screen and remembers the cell under it; a pointer outside the map remembers
+    /// nothing, because the game's pointer selects what is under it and there is nothing there
+    /// (docs/GAME_DESIGN.md section 1.11). The camera can move under a still pointer, so a caller
+    /// points again every frame it draws rather than only when the mouse moves.
+    void point_at(Vec2 screen);
+    /// Points at \p cell directly: what a scripted run needs, because a headless one has no mouse to
+    /// move. A cell outside the map leaves the pointer pointing at nothing, like a real one would.
+    void point_at_cell(GridPos cell);
+    void clear_pointer() { hovered_.reset(); }
+    [[nodiscard]] std::optional<GridPos> hovered() const { return hovered_; }
 
     // --- content-agnostic debug fills (they fill the active layer) ---
     /// One horizontal band per palette entry, filled with it: a legible catalogue of what is registered.
@@ -269,6 +286,9 @@ private:
     /// Which layer the brush writes into. What a layer means is the designer's business.
     i32 active_layer_ = 0;
     GridPos cursor_{};
+    /// What the playtest's pointer is over, if anything. Not the cursor: the cursor is the editor's
+    /// brush, this is the game's pointer, and the two never move each other.
+    std::optional<GridPos> hovered_{};
     t2d::Camera2D camera_{};
     std::vector<std::string> content_paths_;
 };

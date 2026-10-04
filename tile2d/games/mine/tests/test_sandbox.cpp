@@ -895,4 +895,84 @@ T2D_TEST(a_layout_written_while_content_was_missing_repairs_itself) {
     T2D_CHECK_EQ(loaded.cell(GridPos{1, 1}).id, restored.find(ContentKind::Structure, "sample_b"));
 }
 
+T2D_TEST(the_playtest_pointer_selects_what_is_under_it_and_nothing_off_the_map) {
+    SandboxModel model(8, 6);
+    model.set_cell_px(10.0f);
+    model.set_origin(t2d::Vec2{0.0f, 0.0f});
+
+    // Nothing is pointed at until a pointer arrives: a playtest that has not seen a mouse is not
+    // pointing at cell (0,0) by accident.
+    T2D_CHECK_FALSE(model.hovered().has_value());
+
+    // The middle of a cell selects that cell, and so does its far corner.
+    T2D_CHECK_EQ(model.cell_at_screen(t2d::Vec2{25.0f, 35.0f}), (GridPos{2, 3}));
+    model.point_at(t2d::Vec2{25.0f, 35.0f});
+    T2D_REQUIRE(model.hovered().has_value());
+    T2D_CHECK_EQ(*model.hovered(), (GridPos{2, 3}));
+    model.point_at(t2d::Vec2{29.9f, 39.9f});
+    T2D_CHECK_EQ(*model.hovered(), (GridPos{2, 3}));
+
+    // Off the map is not a cell, and it is not clamped to the nearest edge either: pointing at the
+    // void beside a small map must not select its last column.
+    model.point_at(t2d::Vec2{-1.0f, 5.0f});
+    T2D_CHECK_FALSE(model.hovered().has_value());
+    model.point_at(t2d::Vec2{5.0f, -1.0f});
+    T2D_CHECK_FALSE(model.hovered().has_value());
+    model.point_at(t2d::Vec2{80.0f, 35.0f});   // one pixel past the right edge of an 8 wide map
+    T2D_CHECK_FALSE(model.hovered().has_value());
+    model.point_at(t2d::Vec2{79.0f, 35.0f});
+    T2D_CHECK_EQ(*model.hovered(), (GridPos{7, 3}));
+
+    // A scripted run has no mouse, so it can point at a cell directly. A cell that is not on the map
+    // leaves the pointer pointing at nothing, exactly like a real one would.
+    model.point_at_cell(GridPos{1, 1});
+    T2D_CHECK_EQ(*model.hovered(), (GridPos{1, 1}));
+    model.point_at_cell(GridPos{8, 1});
+    T2D_CHECK_FALSE(model.hovered().has_value());
+    model.point_at_cell(GridPos{-1, 1});
+    T2D_CHECK_FALSE(model.hovered().has_value());
+
+    // The pointer is a screen position, not a remembered cell: the same mouse position after a pan is
+    // over whatever the camera has moved under it. This is why the app points again every frame.
+    model.point_at_cell(GridPos{2, 3});
+    model.point_at(t2d::Vec2{25.0f, 35.0f});
+    T2D_CHECK_EQ(*model.hovered(), (GridPos{2, 3}));
+    model.pan(t2d::Vec2{-30.0f, 0.0f});   // dragging left moves the view right by three cells
+    T2D_CHECK_EQ(model.cell_at_screen(t2d::Vec2{25.0f, 35.0f}), (GridPos{5, 3}));
+    model.point_at(t2d::Vec2{25.0f, 35.0f});
+    T2D_CHECK_EQ(*model.hovered(), (GridPos{5, 3}));
+
+    // And leaving the playtest forgets it: a pointer from before the chrome came back would be drawn
+    // over a cell nobody is pointing at.
+    model.clear_pointer();
+    T2D_CHECK_FALSE(model.hovered().has_value());
+
+    // The pointer is not the cursor: pointing moves nothing the brush writes at.
+    model.set_cursor(GridPos{4, 4});
+    model.point_at(t2d::Vec2{25.0f, 35.0f});
+    T2D_CHECK_EQ(model.cursor(), (GridPos{4, 4}));
+}
+
+T2D_TEST(changing_the_viewport_keeps_the_cell_the_view_is_centred_on) {
+    SandboxModel model(40, 24);
+    model.set_cell_px(20.0f);
+    const t2d::Vec2 editor{800.0f, 500.0f};
+    model.center_view(editor);
+    // Somewhere specific, so the check is not about the middle of the map.
+    model.look_at(GridPos{11, 7});
+    const GridPos centred = model.cell_at_screen(editor * 0.5f);
+    T2D_CHECK_EQ(centred, (GridPos{11, 7}));
+
+    // The playtest has the whole window instead of the editor's chrome: the viewport grows, the cell
+    // in the middle stays the one that was being looked at, and the extra space shows more map.
+    const t2d::Vec2 playtest{1280.0f, 720.0f};
+    model.set_viewport(playtest);
+    T2D_CHECK_EQ(model.cell_at_screen(playtest * 0.5f), centred);
+    const t2d::TileRect wider = model.visible_cells();
+    model.set_viewport(editor);
+    const t2d::TileRect narrower = model.visible_cells();
+    T2D_CHECK_GT(wider.width, narrower.width);
+    T2D_CHECK_GT(wider.height, narrower.height);
+}
+
 T2D_TEST_MAIN

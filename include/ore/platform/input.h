@@ -55,6 +55,8 @@ struct PixelScale {
     [[nodiscard]] bool identity() const { return x == 1.0f && y == 1.0f; }
     [[nodiscard]] f32 to_pixels_x(f32 screen_x) const { return screen_x * x; }
     [[nodiscard]] f32 to_pixels_y(f32 screen_y) const { return screen_y * y; }
+
+    friend bool operator==(const PixelScale&, const PixelScale&) = default;
 };
 
 class InputState {
