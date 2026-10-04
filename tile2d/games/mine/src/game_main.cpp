@@ -17,7 +17,13 @@
 #include <filesystem>
 #include <format>
 
+/// The one function a mod replaces to show that the merge reaches the game's own code: it is called
+/// below, from inside the game, and a mod table that defines it takes the call over. Everything else
+/// about a mod overriding the game is the same mechanism with a longer name (docs/TABLES.md).
+extern "C" const char* mine_game_banner() { return "Mine, unmodified"; }
+
 extern "C" int mine_game_main(int argc, char** argv) {
+    T2D_INFO("game: {}", mine_game_banner());
     const ore::CommandLine cli = ore::CommandLine::parse(argc, argv);
 
     mine::MineOptions options;

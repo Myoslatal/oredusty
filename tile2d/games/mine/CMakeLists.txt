@@ -86,6 +86,22 @@ add_custom_command(
 add_custom_target(mine_game_table ALL DEPENDS "${MINE_TABLE_PATH}")
 add_dependencies(mine_game_table mine_table)
 
+# A demo mod: one table that replaces a function of the game's own table. It is built, not installed:
+# the game only loads it when it is asked to (--table), so a plain run stays a plain run.
+set(MINE_DEMO_MOD "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod.codetab")
+add_custom_command(
+    OUTPUT "${MINE_DEMO_MOD}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod"
+    COMMAND ${CMAKE_CXX_COMPILER} -std=c++20 -O2 -fPIC -fsemantic-interposition -ffunction-sections
+            -fdata-sections -fno-stack-protector -fno-exceptions
+            -c "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tables/mod_banner.cpp"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod_banner.o"
+    COMMAND $<TARGET_FILE:codetab> pack "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod_banner.o"
+            -o "${MINE_DEMO_MOD}" --id demo_mod --version 1.0 --requires mine@1.0
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tables/mod_banner.cpp" codetab
+    COMMENT "Building the demo mod's code table")
+add_custom_target(mine_demo_mod ALL DEPENDS "${MINE_DEMO_MOD}")
+
 # The app shell, linked normally: the executable still runs the game the way it always has. What is
 # new is that the same sources are also packed into a table (above), and switching the executable over
 # to being a launcher is the next step - it needs the table to place every COMDAT group a C++ compiler
