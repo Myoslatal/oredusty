@@ -42,6 +42,10 @@ imgui.ini
 !assets/**/*.png
 !docs/**/*.png
 !**/docs/**/*.png
+# Content art is content, not a capture: what the game ships, what a pack project keeps beside its
+# .ecfg, and the pictures the tests load.
+!**/content/art/**/*.png
+!**/packs/**/art/**/*.png
 
 # Scratch space used while developing
 .recon/
