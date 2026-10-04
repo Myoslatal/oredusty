@@ -26,7 +26,7 @@
 | 这一层大概长什么样？ | `--fill scatter` 用注册到的内容铺一层（同 seed 完全可复现） |
 | 这一层**玩起来**是什么样？ | 按 `P` 进**试玩**（§9）：同一层，按游戏的方式画——没有面板、网格线、标签与压暗，输入只有相机与指针 |
 | **谁**加载了、谁没加载？ | 按 `F6` 打开**内容列表**（§10）：一行一个来源（本体文件 / 内容包 / 模组包），没加载成功的也在里面，展开能看它注册的每一条内容 |
-| 游戏自己带的内容是什么样？ | 面板里就有：`floor #1 dirt`（泥地，`games/mine/content/floors.ecfg`）——空格键铺到格子上，画的就是它的贴图 |
+| 游戏自己带的内容是什么样？ | 面板里就有：`floor #1 dirt`（泥地，`games/mine/content/` 这个本体内容包）——空格键铺到格子上，画的就是它的贴图 |
 
 ## 2. 运行
 
@@ -35,18 +35,18 @@
 # 网格仍然是空的——不按填充、不画格子，就什么都不画
 ./build/debug/games/mine/mine_game --world sandbox --start 1
 
-# 再加一份内容数据：面板列出它注册出的全部内容（本体内容在前，这里是在其后追加）
+# 再加一个内容包目录：面板列出它注册出的全部内容（本体内容在前，这里是在其后追加）
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-    --content <你的内容.ecfg>
+    --content <你的内容包目录>
 
 # 直接看“这一层可能长什么样”，并导出/读回布局
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-    --content <你的内容.ecfg> --fill scatter --seed 7 \
+    --content <你的内容包目录> --fill scatter --seed 7 \
     --layout /tmp/layer.bin
 
 # 几百格见方、多层：512x512、四层各铺一份，并直接停在 (200,150) 放大 20 像素/格看
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-    --content <你的内容.ecfg> --grid 512x512 --tile-layers 4 --fill-layer all \
+    --content <你的内容包目录> --grid 512x512 --tile-layers 4 --fill-layer all \
     --fill scatter --view 200,150,20
 ```
 
@@ -59,9 +59,8 @@
 | 选项 | 含义 |
 |---|---|
 | `--world sandbox` | 直接进沙盒（等价于界面里切到沙盒） |
-| `--content <path>` | 内容数据文件，**可重复**（多个文件按顺序注册）。**在游戏本体内容之后追加**：`games/mine/content/` 里的 `*.ecfg` 永远先加载，不需要参数 |
-| `--pack <file.ecfg>` | 加载一个纯 ecfg 内容包（可重复）：一个文件就是一个包，可选 `pack::` 头。见 `docs/MODS.md` |
-| `--packs <dir>` | 内容包目录：每个 `*.ecfg` 是一个包，**递归**（可重复）。缺省时自动加载**可执行文件旁边的 `packs/`** 与工作目录下的 `packs/`（见 `docs/MODS.md` §0） |
+| `--content <dir>` | 额外的**内容包目录**，**可重复**（按顺序注册）。**在游戏本体内容之后、内容包之前**：`games/mine/content/`（或可执行文件旁边的 `content/`）永远先加载，不需要参数 |
+| `--packs <dir>` | 内容包目录（可重复）：**它本身是一个包就用它，否则它里面的每个包目录都是包**。缺省时自动加载**可执行文件旁边的 `packs/`** 与工作目录下的 `packs/`（见 `docs/MODS.md` §0） |
 | `--mods <dir>` | 模组包目录（可重复）。缺省时用与内容包同一批默认目录，所以模组也可以直接放进游戏目录下的 `packs/`。包里的内容与本体内容进同一个注册表，本体先注册 |
 | `--grid <WxH>` | 这一层多大，默认 `40x24`（地图尺寸是 §7 待设计者给的内容，所以它是参数） |
 | `--tile-layers <n>` | 这张图有几个**瓦片层**，默认 1（上限 32） |
@@ -133,12 +132,12 @@ cd tile2d
 D=games/mine/tests/data
 # A：铺一层散点并存盘
 ./build/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
-    --content $D/placeholder_content.ecfg --fill scatter --seed 1 --save-layout /tmp/a.bin
+    --content $D/placeholder_content --fill scatter --seed 1 --save-layout /tmp/a.bin
 # B：换成 v2（id 整体位移）读入 A 的布局；C：换成 v3（少一条内容）读同一个布局
 ./build/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
-    --content $D/placeholder_content_v2.ecfg --layout /tmp/a.bin --dump-layer 1
+    --content $D/placeholder_content_v2 --layout /tmp/a.bin --dump-layer 1
 ./build/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
-    --content $D/placeholder_content_v3.ecfg --layout /tmp/a.bin --dump-layer 1
+    --content $D/placeholder_content_v3 --layout /tmp/a.bin --dump-layer 1
 ```
 
 | 运行 | 数据文件 | 做了什么 | 结果 |

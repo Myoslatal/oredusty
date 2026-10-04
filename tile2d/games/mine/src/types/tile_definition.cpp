@@ -62,10 +62,9 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
 }
 
 std::vector<TileDefinition> tile_definitions(const t2d::EcfgDocument& document,
-                                             std::vector<std::string>* errors, std::string_view ignore_table) {
+                                             std::vector<std::string>* errors) {
     std::vector<TileDefinition> definitions;
     for (const t2d::EcfgValue& table : document.root().children()) {
-        if (!ignore_table.empty() && table.key() == ignore_table) continue;
         const ContentKind kind = kind_of_table(table.key());
         if (kind == ContentKind::Count || !kind_is_a_tile(kind)) continue;
         if (!table.is_table()) continue;

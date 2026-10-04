@@ -50,8 +50,8 @@ struct MineOptions {
     std::string cjk_font_path;
     std::string ui_text_path;
 
-    /// Sandbox: the designer's content files (repeated --content), the layer size, the layout file that
-    /// is loaded at startup and written by F2, and the debug fill.
+    /// The designer's own content packs (repeated --content): pack directories loaded with the game's
+    /// own content, before anything else - the same stage, so the game's ids still come first.
     std::vector<std::string> content_paths;
     u32 grid_width = SandboxModel::kDefaultWidth;
     u32 grid_height = SandboxModel::kDefaultHeight;
@@ -72,10 +72,9 @@ struct MineOptions {
     std::string fill;
     /// Which tile layers --fill writes into: "" (the active layer), "all", or a layer number.
     std::string fill_layer;
-    /// What the game loads into its content registry, in this order: its own files (--content), then
-    /// content packs (--pack files and --packs directories of pure .ecfg), then mod packages (--mods,
-    /// which may also carry native code).
-    std::vector<std::string> pack_paths;
+    /// What the game loads into its content registry, in this order: the game's own content pack and
+    /// whatever --content added to it, then content packs (--packs directories, each a pack or a
+    /// directory of packs), then mod packages (--mods, which may also carry native code).
     std::vector<std::string> pack_directories;
     std::vector<std::string> mod_directories;
     /// Write the layer as text to the log at shutdown (a scripted run has no keyboard for F4).
@@ -317,9 +316,10 @@ private:
     std::unordered_map<std::string, Scope<ore::rhi::Texture>> content_textures_;
     Scope<ore::rhi::Sampler> image_sampler_;
     std::vector<std::string> image_errors_;
-    /// The content files the game itself ships (games/mine/content), scanned once at startup: they are
-    /// the game's own content and are loaded before anything a command line names.
-    std::vector<std::string> shipped_content_;
+    /// The game's own content pack, found once at startup: beside the executable, or in the source
+    /// tree when the game is being run out of a build directory (vanilla_content_pack). It is loaded
+    /// before anything a command line names.
+    std::string shipped_content_;
     /// Quads the batch refused in the last frame (both passes): a frame that lost quads is a frame the
     /// screen must not pretend is complete.
     u32 dropped_quads_ = 0;

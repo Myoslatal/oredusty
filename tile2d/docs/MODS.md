@@ -5,7 +5,7 @@
 
 | 形式 | 是什么 | 能带代码吗 |
 |---|---|---|
-| **内容包**（纯 ecfg） | **一个 `.ecfg` 文件就是一个包**，可选一个 `pack::` 头说明自己是谁 | 不能 |
+| **内容包**（纯 ecfg） | **一个目录**：若干 `.ecfg` 内容文件 + 它们的资源，可选一个 `pack.ecfg` 说明自己是谁 | 不能 |
 | **模组包** | 一个目录 + `mod.ecfg` 清单 + 若干内容文件 + 可选的共享库 | 能（C ABI，见 §3） |
 
 大多数内容只需要第一种；需要"跑点什么"（按参数生成内容、将来挂 tick 钩子）时才用第二种。
@@ -23,15 +23,18 @@
     <游戏目录>/
       mine_game                 # 可执行文件
       packs/
-        my_pack.ecfg            # 一个内容包（一个 *.ecfg 文件）
+        my_pack/                # 一个内容包（目录：内容文件 + 资源）
+          pack.ecfg             #   可选：这个包是谁
+          items.ecfg            #   内容文件
+          art/wall.png          #   资源
         my_mod/                 # 一个模组包（目录 + mod.ecfg）
           mod.ecfg
           content/things.ecfg
-      content/                  # 游戏自带的内容（见下面第二条）
+      content/                  # 游戏自带的内容包（同样的形态，见下一条）
 
     cd /tmp && /path/to/mine_game --world sandbox --start 1     # 照样加载上面两个
 
-* **同一个 `packs/` 放两种东西**：`*.ecfg` 是内容包，带 `mod.ecfg` 的子目录是模组包
+* **同一个 `packs/` 放两种东西**：一个**包目录**是内容包，带 `mod.ecfg` 的子目录是模组包
   （目录本身是包也行：`packs/` 里直接放 `mod.ecfg`）。
 * **模组包目录不会被当成内容包扫描**：它的内容文件由模组宿主按清单里 `content:` 的顺序加载（§2）。
   没有这条规则，同一个名字会被注册两次，第二次会被报成"已注册、未替换"的冲突——所以一个目录里
@@ -45,38 +48,55 @@
   （`docs/SANDBOX.md` §10）。
 * 想换个地方（比如把工作区的包和游戏自带的包分开）：`--packs <目录>` / `--mods <目录>` 显式指定，
   它们可重复，且一旦写了就不再套用默认目录。
+* **游戏自带的内容也是一个包**（`content/`，同样的目录形态）：它跟着可执行文件走，
+  找不到时才回退到源码树（开发时跑构建目录里的游戏）。它是加载顺序的第一段，所以它的 id 不会变——
+  `--content <目录>` 可以在它之后再加几个自己的包（同一段）。
 
-### 一个包就是一个 `.ecfg` 文件
+### 一个包就是一个**目录**
 
-    packs/
-      01_base.ecfg            # pack:: 头可选
-      02_extra.ecfg           # 没有头：文件名就是它的身份
+一个内容包是**多个 `.ecfg` 内容文件 + 它们的资源**，所以它的形态是目录：
+
+    packs/my_pack/
+      pack.ecfg               # 可选：这个包是谁（id / name / version / requires）
+      items.ecfg              # 内容文件，想放几个放几个，放子目录里也行
+      structures.ecfg
+      art/wall.png            # 资源：内容条目用相对**声明它的那个文件**的路径引用
+      README.md               # 不是 .ecfg 的东西都是你的（说明、草稿、配色表……）
 
     ./build/debug/games/mine/mine_game --world story --start 1 --packs packs
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 --pack packs/01_base.ecfg
+    ./build/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/my_pack
 
 ![会话界面里的内容包](../games/mine/docs/images/session_packs_en.png)
 
+`pack.ecfg`（可选）里是**顶层键**，和模组的 `mod.ecfg` 同一套：
+
 ```
-pack::                        # 可选。没有它，包的身份就是文件名（去掉扩展名）
-    id:"base_pack"            # 唯一；其它包用这个名字 require
-    name:"Base pack"          # 可选，给人看的
-    version:"2.0"             # 可选
-    requires:["other_pack"]   # 可选：先加载这个包（字符串或数组）
-item::                        # 其余的表就是内容，和本体内容文件的写法完全一样
+id:"my_pack"                  # 唯一；其它包用这个 id 来 require。不写就是目录名
+name:"My pack"                # 可选，给人看的
+version:"1.0"                 # 可选
+requires:["other_pack"]       # 可选：先加载这些包（字符串或数组）
+```
+
+内容文件里的表和本体内容文件的写法完全一样：
+
+```
+item::                        # 表名是内容类别，其余的表就是内容
     <name>::
         <设计者的字段>
 structure::
     <name>::
 ```
 
-* `--packs <dir>` 把目录下**每个 `*.ecfg`** 当作一个包，**递归**（按路径排序），所以一个"包项目"
-  目录（`.ecfg` + 说明 + `art/`）也能直接指；`--pack <file>` 直接指定一个文件。两者都可重复。
-  不写 `--packs` 时用默认目录（见本节开头）。**带 `mod.ecfg` 的目录会被跳过**——那是模组包的地盘。
-* 顺序：先按文件名，再按 `requires` 调整——**只移动必须移动的**，所以按 01/02/03 命名的文件会保持
-  你写的顺序。
-* 同名内容、重复的包 id、依赖缺失或成环、语法错（带行列号）、`pack::` 里的未知键——全部**报告**，
-  该包不加载或只加载不冲突的部分；`pack::` 表本身是元数据，不会被当成"不是内容类别的表"来报警告。
+* `--packs <dir>` 给一个目录：**它本身是一个包就用它，否则它里面的每个包目录都是包**
+  （一个"工作区"）。不写 `--packs` 时用默认目录（见本节开头）。
+* **模组包目录不会被当成内容包**：带 `mod.ecfg` 的目录是模组宿主的地盘（§2），它的内容文件按清单里
+  `content:` 的顺序加载。所以一个 `packs/` 里同时放内容包与模组包是安全的。
+* **散落的 `.ecfg` 文件会被报告**，不会被当成包：包是目录。旧写法（一个文件就是一个包）会得到一条
+  明确的错误，而不是被静默忽略——静默不加载就是内容悄悄消失。
+* 顺序：先按目录名，再按 `requires` 调整——**只移动必须移动的**，所以按 01/02/03 命名的包目录会保持
+  你写的顺序；一个包内部的文件按**路径**排序加载。
+* 同名内容、重复的包 id、依赖缺失或成环、语法错（带行列号）、`pack.ecfg` 里的未知键、一个内容文件里
+  还写着旧的 `pack::` 表——全部**报告**，该包不加载或只加载不冲突的部分（列表上显示 PARTIAL）。
 * **引擎只读两个字段**，其余字段是你的：
 
   | 字段 | 含义 |
@@ -256,13 +276,15 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 
 ## 4.5 游戏自己带的内容
 
-`games/mine/content/` 是**游戏本体内容**：加载顺序的第一段，不需要任何命令行参数就会加载，
-`--content` 是在它之后**追加**（不是替换）。目录里每个 `*.ecfg` 是一个内容文件（按文件名排序），
-它的贴图放在旁边（比如 `content/art/`），条目里用**相对该文件**的路径引用。
+`games/mine/content/` 是**游戏本体内容包**：它就是一个普通的内容包目录（同样的形态、同样的规则），
+不同的是它在加载顺序的第一段，不需要任何命令行参数——而且它跟着**可执行文件**走：游戏目录下的
+`content/` 优先，找不到时才回退到源码树（开发时跑构建目录里的游戏，编辑的就是正在跑的那份文件）。
+`--content <目录>` 是在它之后**追加**（不是替换，同一段，所以本体 id 仍然不会变）。
 
 现在里面有：
 
     games/mine/content/
+        pack.ecfg             id:"mine" name:"Mine"  —— 这个包是谁
         floors.ecfg           floor:: dirt::  —— 泥地，贴图 art/floor_dirt.png
         art/floor_dirt.png
 
@@ -274,7 +296,8 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 
 加载结果不只在日志里。**开始界面**的 `CONTENT` 行（值就是 `1 PACK(S), 0 MOD(S)`）回车打开**内容列表**，
 沙盒里按 `F6` 打开同一个列表，`--content-list 1` 直接以它启动。一行一个来源，按加载顺序排：
-本体文件 → 内容包 → 模组包；**没加载成功的也在列表里**——"哪个包没进来"正是打开它的原因。
+本体内容包 → 内容包 → 模组包；**没加载成功的也在列表里**——"哪个包没进来"正是打开它的原因。
+每一行的路径是**包目录**（本体内容那行显示的是 `games/mine/content`）。
 
 ![内容列表](../games/mine/docs/images/content_list_en.png)
 

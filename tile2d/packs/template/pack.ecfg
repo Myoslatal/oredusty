@@ -1,0 +1,25 @@
+# 内容包模板：这个包是谁
+#
+# 一个**内容包就是一个目录**：目录里的每个 .ecfg 都是它的内容文件，资源（图片等）放在目录里，
+# 而 pack.ecfg（就是本文件）可选地说这个包是谁。没有清单、没有文件列表、没有代码——
+# 需要"跑点什么"时才用模组包（docs/MODS.md §1）。
+#
+# 复制整个目录、改个名字就是你的包：
+#
+#     cp -r packs/template packs/my_pack
+#     # 改下面的 id，然后去 content.ecfg 里开始写内容
+#
+# 四个键都是可选的，写错了会**报错**而不是被忽略：
+#
+#     id         唯一标识；别的包用这个 id 来 require。不写就是目录名
+#     name       给人看的名字。不写就是 id
+#     version    版本字符串，随你
+#     requires   先加载哪些包（字符串或数组），按 id 引用
+#
+# 目录名与 id 的关系：**id 默认是目录名**。所以 packs/my_pack/ 不写 pack.ecfg 也是一个包，
+# 它的 id 就是 "my_pack"。
+
+id:"template"
+name:"内容包模板"
+version:"0.1"
+# requires:["other_pack"]

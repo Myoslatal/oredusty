@@ -1,0 +1,7 @@
+# The pictures below are ordinary PNGs in the pack's art/ directory: the art style is polygonal, the
+# resource is an image. Paths are relative to the file that declares them, and the engine resolves and
+# checks every one of them when the pack loads.
+item::
+    pack_ore::
+        note:"placeholder content: the real tables come from the designer"
+        image:"art/floor.png"

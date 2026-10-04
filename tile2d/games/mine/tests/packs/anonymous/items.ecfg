@@ -1,0 +1,4 @@
+# A pack with no header of its own: its identity is the directory name. This is the smallest possible
+# pack - a directory with one content file in it.
+item::
+    pack_scrap::

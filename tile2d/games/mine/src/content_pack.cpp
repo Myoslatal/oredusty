@@ -13,11 +13,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-/// The one table a pack may carry besides content. It is metadata, not content, so the walk over the
-/// document has to skip it - and a pack that misspells it gets told, because "packk::" would otherwise
-/// be reported as an unknown content kind and the pack would look anonymous.
-constexpr const char* kPackTable = "pack";
-
+/// The keys a pack header may carry: the same ones a mod's manifest has, so the two forms of "a
+/// directory of content" are read the same way.
 constexpr const char* kPackKeys[] = {"id", "name", "version", "requires"};
 
 [[nodiscard]] bool is_pack_key(std::string_view key) {
@@ -40,83 +37,88 @@ constexpr const char* kPackKeys[] = {"id", "name", "version", "requires"};
     return out;
 }
 
-} // namespace
-
-std::optional<ContentPack> ContentPack::load(const std::string& path, std::string* error) {
-    const auto fail = [&](std::string message) -> std::optional<ContentPack> {
-        if (error != nullptr) *error = std::move(message);
-        return std::nullopt;
-    };
-
-    t2d::EcfgError parse_error;
-    std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(path, &parse_error);
-    if (!document.has_value()) return fail(parse_error.describe(path));
-
-    ContentPack pack;
-    pack.path = path;
-    const fs::path file(path);
-    pack.id = file.stem().string();
-    pack.content = std::move(*document);
-
-    const t2d::EcfgValue* header = pack.content.root().find(kPackTable);
-    if (header != nullptr) {
-        if (!header->is_table()) return fail(std::format("{}: '{}' must be a table", path, kPackTable));
-        pack.declared = true;
-        for (const t2d::EcfgValue& entry : header->children()) {
-            if (!is_pack_key(entry.key())) {
-                return fail(std::format("{}: '{}' is not a pack key (pack:: takes id, name, version, requires)",
-                                        path, entry.key()));
-            }
-        }
-        if (const t2d::EcfgValue* id = header->find("id"); id != nullptr) {
-            if (!id->is_string() || id->as_string().empty()) {
-                return fail(std::format("{}: pack::id must be a non empty string", path));
-            }
-            pack.id = std::string(id->as_string());
-        }
-        if (const t2d::EcfgValue* name = header->find("name"); name != nullptr) {
-            if (!name->is_string()) return fail(std::format("{}: pack::name must be a string", path));
-            pack.name = std::string(name->as_string());
-        }
-        if (const t2d::EcfgValue* version = header->find("version"); version != nullptr) {
-            if (!version->is_string()) return fail(std::format("{}: pack::version must be a string", path));
-            pack.version = std::string(version->as_string());
-        }
-        if (const t2d::EcfgValue* requirements = header->find("requires"); requirements != nullptr) {
-            pack.requirements = read_string_list(*requirements);
-            if (pack.requirements.empty() && !requirements->is_array() && !requirements->is_string()) {
-                return fail(std::format("{}: pack::requires must be a name or a list of names", path));
-            }
-        }
-    }
-    if (pack.name.empty()) pack.name = pack.id;
-    return pack;
+/// True when \p directory carries a mod.ecfg: it is a **mod package**, so its files belong to the mod
+/// host (mod_package.h), which loads them in the order its manifest gives. Loading them as a pack as
+/// well would register every name in them twice, and the second registration is reported as a
+/// collision - which is what dropping a pack and a mod into one directory (the game's own "packs"
+/// directory, content_search.h) would produce.
+[[nodiscard]] bool is_mod_package(const fs::path& directory) {
+    std::error_code code;
+    return fs::is_regular_file(directory / "mod.ecfg", code);
 }
 
-std::vector<std::string> ContentPack::scan_directory(const std::string& directory,
-                                                     std::vector<std::string>* errors) {
+/// What reading one pack's files into the registry did.
+struct PackFileResult {
+    usize registered = 0;
+    usize images = 0;
+    usize images_failed = 0;
+};
+
+/// Reads every file of \p pack into \p registry: the names it declares, the pictures it names (each
+/// resolved against the file that declares it, because that is what a relative path in the file
+/// means), and the two fields the engine reads. Everything that goes wrong is reported against
+/// \p label - "content" for the game's own content, "pack 'x'" for a pack - and marks the pack not-ok,
+/// so the content list says so instead of showing a source that quietly lost something.
+PackFileResult load_pack_files(ContentPack& pack, ContentRegistry& registry, ContentPipelineReport& report,
+                               std::string_view label) {
+    PackFileResult result;
+    for (usize index = 0; index < pack.documents.size(); ++index) {
+        const t2d::EcfgDocument& document = pack.documents[index];
+        const std::string& file = pack.files[index];
+        std::vector<std::string> unknown_tables;
+        const std::vector<ContentEntry> declared = content_declarations(document, &unknown_tables);
+        for (ResolvedImage& image : resolve_content_images(document, file)) {
+            if (!image.ok) {
+                const std::string message = std::format("{}: {} '{}': {}", label,
+                                                        content_kind_name(image.kind), image.content,
+                                                        image.error);
+                report.errors.push_back(message);
+                if (pack.error.empty()) pack.error = message;
+                ++result.images_failed;
+            } else {
+                ++result.images;
+            }
+            report.images.push_back(std::move(image));
+        }
+        // The other field the engine reads: a "random_reverse" it cannot read is a data error, not a
+        // plot that quietly never turns around. The definitions are what building a layer reads
+        // (world.h), so they are kept rather than only checked.
+        std::vector<std::string> definition_errors;
+        for (types::TileDefinition& definition : types::tile_definitions(document, &definition_errors)) {
+            report.definitions.add(std::move(definition));
+        }
+        for (const std::string& definition_error : definition_errors) {
+            const std::string message = std::format("{}: {}", label, definition_error);
+            report.errors.push_back(message);
+            if (pack.error.empty()) pack.error = message;
+        }
+        std::vector<ContentEntry> added;
+        const ContentRegistrationReport registered = register_declared_content(registry, declared, &added);
+        result.registered += registered.registered;
+        for (const ContentEntry& entry : added) pack.registered.push_back(entry);
+        for (const ContentEntry& clash : registered.collisions) {
+            const std::string message = std::format("{}: {} '{}' is already registered and was not replaced",
+                                                    label, content_kind_name(clash.kind), clash.name);
+            report.errors.push_back(message);
+            if (pack.error.empty()) pack.error = message;
+        }
+        for (const std::string& table : unknown_tables) {
+            report.warnings.push_back(std::format("{}: '{}' is not a content kind", label, table));
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+std::vector<std::string> ContentPack::content_files(const std::string& directory) {
     std::vector<std::string> files;
     std::error_code code;
     const fs::path root(directory);
-    if (!fs::exists(root, code)) {
-        if (errors != nullptr) errors->push_back(std::format("packs: '{}' does not exist", directory));
-        return files;
-    }
-    if (fs::is_regular_file(root, code)) {
-        files.push_back(root.string());   // a caller that passed a file meant that file
-        return files;
-    }
-    // A directory that carries a mod.ecfg is a **mod package**, not a pack project: its content files
-    // belong to the mod host, which loads them in the order its manifest gives (mod_package.h). Loading
-    // them here as well would register every one of the mod's names twice, and the second registration
-    // is reported as a collision - which is what dropping a pack and a mod into one directory (the
-    // game's own "packs" directory, content_search.h) would produce.
-    if (fs::is_regular_file(root / "mod.ecfg", code)) return files;
-
-    // Recursive, so a workspace can hold one *directory per pack project* - a pack is one .ecfg file,
-    // but a project is a folder with that file, its notes and its art in it. Entries that start with a
-    // dot are skipped, which keeps .git and editor leftovers out of the load, and a mod package is not
-    // descended into.
+    if (!fs::is_directory(root, code)) return files;
+    // Recursive, so a pack can hold its content in whatever files it likes - one per kind, one per
+    // feature, or a content/ subdirectory. Entries that start with a dot are skipped, which keeps .git
+    // and editor leftovers out of a load, and a mod package is not descended into.
     std::error_code walk;
     for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, walk), end;
          it != end; it.increment(walk)) {
@@ -129,11 +131,12 @@ std::vector<std::string> ContentPack::scan_directory(const std::string& director
         }
         std::error_code entry_code;
         if (it->is_directory(entry_code)) {
-            if (fs::is_regular_file(path / "mod.ecfg", entry_code)) it.disable_recursion_pending();
+            if (is_mod_package(path)) it.disable_recursion_pending();
             continue;
         }
         if (!it->is_regular_file(entry_code)) continue;
         if (path.extension() != ".ecfg") continue;
+        if (name == kPackHeaderName) continue;   // the header says who the pack is; it is not content
         files.push_back(path.string());
     }
     // Sorted, so the load order does not depend on what the filesystem happens to return first.
@@ -141,8 +144,146 @@ std::vector<std::string> ContentPack::scan_directory(const std::string& director
     return files;
 }
 
-void ContentPipeline::set_base_files(std::vector<std::string> paths) { base_files_ = std::move(paths); }
-void ContentPipeline::set_pack_files(std::vector<std::string> paths) { pack_files_ = std::move(paths); }
+bool ContentPack::is_pack(const std::string& directory) {
+    std::error_code code;
+    const fs::path root(directory);
+    if (!fs::is_directory(root, code)) return false;
+    if (is_mod_package(root)) return false;
+    if (fs::is_regular_file(root / kPackHeaderName, code)) return true;
+    return !content_files(directory).empty();
+}
+
+std::vector<std::string> ContentPack::find_packs(const std::string& directory,
+                                                 std::vector<std::string>* errors) {
+    std::vector<std::string> found;
+    std::error_code code;
+    const fs::path root(directory);
+    if (!fs::exists(root, code)) {
+        if (errors != nullptr) errors->push_back(std::format("packs: '{}' does not exist", directory));
+        return found;
+    }
+    if (!fs::is_directory(root, code)) {
+        if (errors != nullptr) {
+            errors->push_back(std::format("packs: '{}' is a file: a content pack is a directory holding its "
+                                          ".ecfg files and its art",
+                                          directory));
+        }
+        return found;
+    }
+    if (is_mod_package(root)) return found;   // a mod package is the mod host's business
+
+    // The packs directly inside come first: a directory that holds packs is a **workspace**, not a pack
+    // itself, and that is what makes "drop your pack folder into packs/" the whole installation story.
+    std::vector<fs::path> children;
+    for (const fs::directory_entry& entry : fs::directory_iterator(root, code)) {
+        const std::string name = entry.path().filename().string();
+        if (!name.empty() && name[0] == '.') continue;
+        if (!entry.is_directory(code)) continue;
+        if (is_pack(entry.path().string())) children.push_back(entry.path());
+    }
+    std::sort(children.begin(), children.end());
+    if (!children.empty()) {
+        for (const fs::path& child : children) found.push_back(child.string());
+        // A loose *.ecfg file at the top of a workspace is reported: a pack is a directory now, and a
+        // file that is silently not loaded is content that silently disappeared.
+        for (const fs::directory_entry& entry : fs::directory_iterator(root, code)) {
+            if (!entry.is_regular_file(code)) continue;
+            if (entry.path().extension() != ".ecfg") continue;
+            if (errors != nullptr) {
+                errors->push_back(std::format("packs: '{}' is a loose file: a pack is a directory holding "
+                                              "its .ecfg files and its art",
+                                              entry.path().string()));
+            }
+        }
+        return found;
+    }
+
+    // Nothing that is a pack sits inside: the directory the caller named is the pack.
+    if (is_pack(directory)) found.push_back(root.string());
+    return found;
+}
+
+std::optional<ContentPack> ContentPack::load(const std::string& directory, std::string* error) {
+    const auto fail = [&](std::string message) -> std::optional<ContentPack> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    std::error_code code;
+    const fs::path root(directory);
+    if (!fs::is_directory(root, code)) {
+        return fail(std::format("'{}' is not a directory: a content pack is a directory holding its .ecfg "
+                                "files and its art, not a single file",
+                                directory));
+    }
+    if (is_mod_package(root)) {
+        return fail(std::format("'{}' is a mod package (it has a mod.ecfg): its content files are loaded by "
+                                "the mod host, in the order its manifest gives",
+                                directory));
+    }
+
+    ContentPack pack;
+    pack.directory = directory;
+    pack.id = root.filename().string();
+    if (pack.id.empty()) return fail(std::format("'{}' has no name to be a pack under", directory));
+
+    // The header, when there is one: a file of its own at the top of the pack.
+    const fs::path header_path = root / kPackHeaderName;
+    if (fs::is_regular_file(header_path, code)) {
+        t2d::EcfgError parse_error;
+        std::optional<t2d::EcfgDocument> header = t2d::EcfgDocument::load(header_path.string(), &parse_error);
+        if (!header.has_value()) return fail(parse_error.describe(header_path.string()));
+        pack.declared = true;
+        for (const t2d::EcfgValue& entry : header->root().children()) {
+            if (!is_pack_key(entry.key())) {
+                return fail(std::format("{}: '{}' is not a pack key ({} takes id, name, version, requires)",
+                                        header_path.string(), entry.key(), kPackHeaderName));
+            }
+        }
+        if (const t2d::EcfgValue* id = header->find("id"); id != nullptr) {
+            if (!id->is_string() || id->as_string().empty()) {
+                return fail(std::format("{}: id must be a non empty string", header_path.string()));
+            }
+            pack.id = std::string(id->as_string());
+        }
+        if (const t2d::EcfgValue* name = header->find("name"); name != nullptr) {
+            if (!name->is_string()) return fail(std::format("{}: name must be a string", header_path.string()));
+            pack.name = std::string(name->as_string());
+        }
+        if (const t2d::EcfgValue* version = header->find("version"); version != nullptr) {
+            if (!version->is_string()) {
+                return fail(std::format("{}: version must be a string", header_path.string()));
+            }
+            pack.version = std::string(version->as_string());
+        }
+        if (const t2d::EcfgValue* requirements = header->find("requires"); requirements != nullptr) {
+            pack.requirements = read_string_list(*requirements);
+            if (pack.requirements.empty() && !requirements->is_array() && !requirements->is_string()) {
+                return fail(std::format("{}: requires must be a name or a list of names", header_path.string()));
+            }
+        }
+    }
+    if (pack.name.empty()) pack.name = pack.id;
+
+    pack.files = content_files(directory);
+    if (pack.files.empty()) return fail(std::format("'{}' holds no .ecfg file", directory));
+    for (const std::string& file : pack.files) {
+        t2d::EcfgError parse_error;
+        std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(file, &parse_error);
+        if (!document.has_value()) return fail(parse_error.describe(file));
+        // The header is a file of its own now: the "pack::" table that used to sit at the top of a
+        // single file pack is told where it went, rather than being reported as an unknown content kind.
+        if (document->find("pack") != nullptr) {
+            return fail(std::format("{}: the pack header is '{}' now, not a 'pack::' table inside a content file",
+                                    file, kPackHeaderName));
+        }
+        pack.documents.push_back(std::move(*document));
+    }
+    return pack;
+}
+
+void ContentPipeline::set_base_packs(std::vector<std::string> directories) {
+    base_packs_ = std::move(directories);
+}
 
 void ContentPipeline::set_pack_directories(std::vector<std::string> directories) {
     pack_directories_ = std::move(directories);
@@ -153,123 +294,74 @@ void ContentPipeline::set_mod_directories(std::vector<std::string> directories) 
 }
 
 bool ContentPipeline::empty() const {
-    return base_files_.empty() && pack_files_.empty() && pack_directories_.empty() && mod_directories_.empty();
+    return base_packs_.empty() && pack_directories_.empty() && mod_directories_.empty();
 }
 
 void ContentPipeline::unload() {
     mods_.unload();
     packs_.clear();
 }
-
 const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     unload();
     report_ = ContentPipelineReport{};
     registry.clear();
 
     // --- the game's own content -------------------------------------------------------------------
-    // One record per file before anything is read, so a file that never gets read - the ones behind a
-    // file that failed - is on the list with the reason, instead of quietly missing from it.
-    for (const std::string& path : base_files_) {
+    // The first stage, and the reason its ids never move: whatever it registers is registered before
+    // anything else, so a pack can only append. It is a pack like any other - a directory of .ecfg
+    // files and art - and one that is not there is a line on the list saying so.
+    for (const std::string& directory : base_packs_) {
+        std::string error;
+        std::optional<ContentPack> base = ContentPack::load(directory, &error);
+        if (!base.has_value()) {
+            report_.errors.push_back(error);
+            ContentSource source;
+            source.kind = SourceKind::File;
+            source.path = directory;
+            source.id = fs::path(directory).filename().string();
+            source.name = source.id;
+            source.ok = false;
+            source.error = std::move(error);
+            report_.sources.push_back(std::move(source));
+            continue;
+        }
+        const PackFileResult result = load_pack_files(*base, registry, report_, "content");
+        report_.base_files += base->files.size();
+        report_.base_registered += result.registered;
+        report_.base_images += result.images;
+        ++report_.base_packs;
         ContentSource source;
         source.kind = SourceKind::File;
-        source.path = path;
-        source.id = fs::path(path).stem().string();
-        source.name = source.id;
+        source.path = base->directory;
+        source.id = base->id;
+        source.name = base->name;
+        source.version = base->version;
+        source.requirements = base->requirements;
+        source.entries = base->registered;
+        source.images = result.images;
+        source.images_failed = result.images_failed;
+        source.ok = base->ok;
+        source.error = base->error;
         report_.sources.push_back(std::move(source));
-    }
-    std::vector<t2d::EcfgDocument> base_documents;
-    bool base_ok = true;
-    usize failed_at = 0;
-    for (usize index = 0; index < base_files_.size(); ++index) {
-        t2d::EcfgError parse_error;
-        std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(base_files_[index], &parse_error);
-        if (!document.has_value()) {
-            const std::string message = parse_error.describe(base_files_[index]);
-            report_.errors.push_back(message);
-            report_.sources[index].ok = false;
-            report_.sources[index].error = message;
-            base_ok = false;
-            failed_at = index;
-            break;
-        }
-        base_documents.push_back(std::move(*document));
-        ++report_.base_files;
-    }
-    if (!base_ok) {
-        // The game's own content is all or nothing - one file that does not parse means none of them
-        // register - so the files behind it were never read at all.
-        for (usize index = failed_at + 1; index < base_files_.size(); ++index) {
-            report_.sources[index].ok = false;
-            report_.sources[index].error =
-                std::format("not read: '{}' failed first", base_files_[failed_at]);
-        }
-    } else {
-        for (usize index = 0; index < base_documents.size(); ++index) {
-            std::vector<std::string> unknown_tables;
-            const std::vector<ContentEntry> declared = content_declarations(base_documents[index], &unknown_tables);
-            // The game's own content ships its own art, and names it the way everything else does:
-            // relative to the file that declares it.
-            for (ResolvedImage& image : resolve_content_images(base_documents[index], base_files_[index])) {
-                if (!image.ok) {
-                    const std::string message =
-                        std::format("content: {} '{}': {}", content_kind_name(image.kind), image.content,
-                                    image.error);
-                    report_.errors.push_back(message);
-                    if (report_.sources[index].error.empty()) report_.sources[index].error = message;
-                } else {
-                    ++report_.base_images;
-                    ++report_.sources[index].images;
-                }
-                if (!image.ok) ++report_.sources[index].images_failed;
-                report_.images.push_back(std::move(image));
-            }
-            // The other field the engine reads: a "random_reverse" it cannot read is a data error, not
-            // a plot that quietly never turns around. The definitions are what building a layer reads
-            // (world.h), so they are kept rather than only checked.
-            std::vector<std::string> definition_errors;
-            for (types::TileDefinition& definition :
-                 types::tile_definitions(base_documents[index], &definition_errors)) {
-                report_.definitions.add(std::move(definition));
-            }
-            for (const std::string& definition_error : definition_errors) {
-                const std::string message = std::format("content: {}", definition_error);
-                report_.errors.push_back(message);
-                if (report_.sources[index].error.empty()) report_.sources[index].error = message;
-            }
-            const ContentRegistrationReport registered =
-                register_declared_content(registry, declared, &report_.sources[index].entries);
-            report_.base_registered += registered.registered;
-            for (const ContentEntry& clash : registered.collisions) {
-                const std::string message =
-                    std::format("content: {} '{}' is registered twice in the game's own files",
-                                content_kind_name(clash.kind), clash.name);
-                report_.errors.push_back(message);
-                // The file loaded and lost a name doing it: the list says PARTIAL, not OK.
-                if (report_.sources[index].error.empty()) report_.sources[index].error = message;
-            }
-            for (const std::string& table : unknown_tables) {
-                report_.warnings.push_back(std::format("content: '{}' is not a content kind", table));
-            }
-        }
     }
 
     // --- content packs ----------------------------------------------------------------------------
-    std::vector<std::string> pack_paths = pack_files_;
+    std::vector<std::string> pack_directories;
     for (const std::string& directory : pack_directories_) {
-        const std::vector<std::string> found = ContentPack::scan_directory(directory, &report_.errors);
-        pack_paths.insert(pack_paths.end(), found.begin(), found.end());
+        const std::vector<std::string> found = ContentPack::find_packs(directory, &report_.errors);
+        pack_directories.insert(pack_directories.end(), found.begin(), found.end());
     }
     std::vector<ContentPack> parsed;
-    for (const std::string& path : pack_paths) {
+    for (const std::string& directory : pack_directories) {
         std::string error;
-        std::optional<ContentPack> pack = ContentPack::load(path, &error);
+        std::optional<ContentPack> pack = ContentPack::load(directory, &error);
         if (!pack.has_value()) {
+            // A pack that does not read is a pack: the list names it and says why it is not there.
             report_.errors.push_back(error);
-            // A pack that does not parse is a pack: the list names it and says why it is not there.
             ContentSource source;
             source.kind = SourceKind::Pack;
-            source.path = path;
-            source.id = fs::path(path).stem().string();
+            source.path = directory;
+            source.id = fs::path(directory).filename().string();
             source.name = source.id;
             source.ok = false;
             source.error = std::move(error);
@@ -288,11 +380,11 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
             if (same != unique.end()) {
                 // The message names the pack that owns the id, which is not always the first one parsed.
                 const std::string message = std::format("pack '{}' is defined twice ('{}' and '{}')",
-                                                        pack.id, same->path, pack.path);
+                                                        pack.id, same->directory, pack.directory);
                 report_.errors.push_back(message);
                 ContentSource source;
                 source.kind = SourceKind::Pack;
-                source.path = pack.path;
+                source.path = pack.directory;
                 source.id = pack.id;
                 source.name = pack.name;
                 source.version = pack.version;
@@ -318,66 +410,27 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     }
     for (const usize index : order.order) {
         ContentPack& pack = parsed[index];
-        std::vector<std::string> unknown_tables;
-        const std::vector<ContentEntry> declared =
-            content_declarations(pack.content, &unknown_tables, kPackTable);
-        const ContentRegistrationReport registered =
-            register_declared_content(registry, declared, &pack.registered);
-        report_.pack_content += registered.registered;
-        for (const ContentEntry& clash : registered.collisions) {
-            const std::string message = std::format("pack '{}': {} '{}' is already registered and was not replaced",
-                                                    pack.id, content_kind_name(clash.kind), clash.name);
-            report_.errors.push_back(message);
-            if (pack.error.empty()) pack.error = message;
-        }
-        for (const std::string& table : unknown_tables) {
-            report_.warnings.push_back(std::format("pack '{}': '{}' is not a content kind", pack.id, table));
-        }
-        // The pictures: a field of the designer's data the engine reads, because it has to be able to
-        // draw what the data describes. Paths are relative to the pack, and a picture that is not there
-        // (or is not something the engine can decode) is reported rather than drawn blank.
-        for (ResolvedImage& image : resolve_content_images(pack.content, pack.path, kPackTable)) {
-            if (!image.ok) {
-                report_.errors.push_back(std::format("pack '{}': {} '{}': {}", pack.id,
-                                                     content_kind_name(image.kind), image.content, image.error));
-                if (pack.error.empty()) pack.error = image.error;
-            } else {
-                ++report_.pack_images;
-            }
-            report_.images.push_back(std::move(image));
-        }
-        // The other field the engine reads, read here so a typo in a pack is caught when the pack
-        // loads rather than when a layer is built out of it - and kept, because building a layer needs
-        // it.
-        std::vector<std::string> definition_errors;
-        for (types::TileDefinition& definition :
-             types::tile_definitions(pack.content, &definition_errors, kPackTable)) {
-            report_.definitions.add(std::move(definition));
-        }
-        for (const std::string& definition_error : definition_errors) {
-            const std::string message = std::format("pack '{}': {}", pack.id, definition_error);
-            report_.errors.push_back(message);
-            if (pack.error.empty()) pack.error = message;
-        }
+        const PackFileResult result =
+            load_pack_files(pack, registry, report_, std::format("pack '{}'", pack.id));
+        report_.pack_content += result.registered;
+        report_.pack_images += result.images;
+        pack.images = result.images;
+        pack.images_failed = result.images_failed;
         ++report_.packs;
         packs_.push_back(std::move(pack));
     }
-    // The packs that got as far as being parsed, in the order the pipeline handled them.
+    // The packs that got as far as being read, in the order the pipeline handled them.
     for (const ContentPack& pack : packs_) {
         ContentSource source;
         source.kind = SourceKind::Pack;
-        source.path = pack.path;
+        source.path = pack.directory;
         source.id = pack.id;
         source.name = pack.name;
         source.version = pack.version;
         source.requirements = pack.requirements;
         source.entries = pack.registered;
-        // What it ships: counted from the load's own list, so a source's line and the atlas agree.
-        for (const ResolvedImage& image : report_.images) {
-            if (image.source != pack.path) continue;
-            if (image.ok) ++source.images;
-            else ++source.images_failed;
-        }
+        source.images = pack.images;
+        source.images_failed = pack.images_failed;
         source.ok = pack.ok;
         source.error = pack.error;
         report_.sources.push_back(std::move(source));
@@ -426,10 +479,11 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     }
 
     report_.total_content = registry.total_count();
-    T2D_INFO("content: {} base, {} pack(s) with {} and {} image(s), {} mod(s) with {} -> {} registered, "
-             "{} plot definition(s), {} error(s)",
-             report_.base_registered, report_.packs, report_.pack_content, report_.pack_images, report_.mods,
-             report_.mod_content, report_.total_content, report_.definitions.size(), report_.errors.size());
+    T2D_INFO("content: {} base pack(s) with {} and {} image(s), {} pack(s) with {} and {} image(s), "
+             "{} mod(s) with {} -> {} registered, {} plot definition(s), {} error(s)",
+             report_.base_packs, report_.base_registered, report_.base_images, report_.packs,
+             report_.pack_content, report_.pack_images, report_.mods, report_.mod_content,
+             report_.total_content, report_.definitions.size(), report_.errors.size());
     for (const std::string& error : report_.errors) T2D_WARN("content: {}", error);
     for (const std::string& warning : report_.warnings) T2D_WARN("content: {}", warning);
     return report_;

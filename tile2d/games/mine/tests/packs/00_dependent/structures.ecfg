@@ -1,0 +1,5 @@
+# One content file of the pack: a pack is a directory, so its tables can be split the way they are
+# written - one file per kind, one file per feature, whatever reads best.
+structure::
+    pack_tower::
+        image:"art/tower.png"

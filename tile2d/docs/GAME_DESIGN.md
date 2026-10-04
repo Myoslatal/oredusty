@@ -250,9 +250,10 @@
 内容不必编译进本体，有两种外部形式（`docs/MODS.md`），加载顺序固定为**本体内容 → 内容包 → 模组包**，
 三者进同一个注册表，id 按注册顺序分配：
 
-* **纯 ecfg 内容包**：**一个 `.ecfg` 文件就是一个包**，可选一个 `pack::` 头（id / name / version / requires）。
-  `--pack <file>` 指定单个文件，`--packs <dir>` 把目录下每个 `*.ecfg` 当作一个包（递归、按路径排序，再按 `requires`
-  只移动必须移动的）。没有清单文件、没有目录结构、没有代码。
+* **纯 ecfg 内容包**：**一个包就是一个目录**——若干 `.ecfg` 内容文件 + 它们的资源，可选一个
+  `pack.ecfg`（顶层键 id / name / version / requires，与模组的 `mod.ecfg` 同一套）。没有清单、没有
+  文件列表、没有代码。`--packs <dir>` 给一个目录：它本身是包就用它，否则它里面的每个包目录都是包；
+  包内部按路径排序，包之间按目录名再按 `requires` 调整。**散落的 `.ecfg` 文件会被报告**（包是目录）。
 * **不写参数时游戏自己找**（§1 之外的一条已确认需求）：`packs/` 目录**在可执行文件旁边**，
   把内容包与模组包丢进去就能跑，与启动时的工作目录无关；工作目录下的 `packs/` 是第二顺位（开发工作区）。
   同一个目录里 `*.ecfg` 是内容包、带 `mod.ecfg` 的子目录是模组包，**模组包目录不会被当成内容包扫描**
@@ -347,13 +348,13 @@
   复现（在 `tile2d/` 下）：
   ```
   # A：散布并存盘
-  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content.ecfg \
+  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content \
       --fill scatter --seed 1 --save-layout /tmp/a.bin
-  # B / C：用变化后的数据文件读回同一份布局
-  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content_v2.ecfg --layout /tmp/a.bin
-  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content_v3.ecfg --layout /tmp/a.bin
+  # B / C：用变化后的内容包读回同一份布局
+  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content_v2 --layout /tmp/a.bin
+  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content_v3 --layout /tmp/a.bin
   # D：三个瓦片层
-  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content.ecfg \
+  mine_game --world sandbox --start --content games/mine/tests/data/placeholder_content \
       --tile-layers 3 --layer 1 --fill-layer all --fill scatter --seed 1 --save-layout /tmp/layers.bin
   ```
 
@@ -533,8 +534,9 @@
   从窗口系统的 screen coordinates 换算成帧缓冲像素（逐轴；窗口尺寸为 0 时退化为 1.0），窗口尺寸或帧缓冲
   尺寸变化时重算，因子进启动日志；`Window::pixel_scale()` 供应用自己换算。单测 `test_input_map`（含 2 倍
   与 1.6667 倍缩放、退化尺寸、进入窗口后的首个事件不带增量）。
-* `[已实现]` **内容包与模组包**：`mine/content_pack.h`（一个 `.ecfg` = 一个内容包，可选 `pack::` 头；
-  目录扫描；依赖排序）与 `ContentPipeline`（本体文件 → 内容包 → 模组包，同一个注册表、同一份报告）；
+* `[已实现]` **内容包与模组包**：`mine/content_pack.h`（**一个目录 = 一个内容包**：若干内容文件 + 资源，
+  可选 `pack.ecfg`；目录发现——它本身是包就用它，否则里面的每个包目录都是包；依赖排序）与
+  `ContentPipeline`（本体内容包 → 内容包 → 模组包，同一个注册表、同一份报告）；
   `t2d/core/module.h`（动态库加载：`dlopen`/`LoadLibrary`、符号解析、
   错误报告、移动语义）与 `mine/mod_package.h`（清单解析、目录扫描、依赖拓扑排序、冲突报告、
   原生模块宿主与 C ABI 实现）；模组 SDK 头 `mine/mod_api.h`（版本化、只追加的 C ABI）；示例包
@@ -655,6 +657,20 @@
 
 | 版本 | 变更 |
 |---|---|
+| M2.3 | **内容包是一个目录**（设计者新要求）+ **本体内容按同一条规则加载**：① **一个内容包 = 一个目录**
+  （若干 `.ecfg` 内容文件 + 资源），`pack.ecfg`（可选）用**顶层键** id / name / version / requires
+  说明这个包是谁——与模组的 `mod.ecfg` 同一套；没有它时目录名就是 id。旧写法（一个 `.ecfg` 文件就是一个包）
+  被**报告**而不是静默忽略，内容文件里残留的 `pack::` 表也被指名（"header 现在在 `pack.ecfg` 里"）。
+  ② **发现规则**：给一个目录，它本身是包就用它，否则它里面的每个包目录都是包（工作区）；工作区顶层散落的
+  `.ecfg` 文件报告为"loose file"；带 `mod.ecfg` 的目录仍然归模组宿主，**不会**被当成内容包扫描。
+  ③ **本体内容包**（`games/mine/content/`）走同一条规则：可执行文件旁边的 `content/`（`content_beside()`）
+  优先，源码树兜底（开发时跑构建目录里的游戏）；它是加载顺序第一段，`--content <目录>` 在它之后追加
+  （同一段，所以本体 id 仍然不会变）。④ `--pack <file>` 取消（`--packs <dir>` 覆盖两种用法：
+  指一个包或指一个工作区）。⑤ **PARTIAL 与 FAILED 的界线**：包读到了但丢了东西（重名、贴图缺失、
+  字段读不懂）是 PARTIAL，只有读不出来的包才是 FAILED。单测 `test_content_pack` 11 → **13 用例 /
+  196 断言**、`test_content_search` 4 → **5 用例 / 41 断言**（含"一个 `packs/` 里同时放内容包与模组包、
+  两者都加载且无冲突"、"本体内容包就在游戏旁边被找到"、"多文件包 + 相对各文件的贴图路径"）；
+  截图全部按新形态重生成（内容列表里的来源现在是一行一个**包目录**，本体内容显示为 `FILE mine`）|
 | M2.2 | **游戏自己找内容**（设计者新要求）：① `t2d/core/executable.h`——`executable_path()` /
   `executable_directory()` / `parent_directory_of()`，纯字符串的目录规则可脱离文件系统测试；
   ② `mine/content_search.h`——默认内容目录：**可执行文件旁边的 `packs/`** 第一顺位，

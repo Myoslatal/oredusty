@@ -64,11 +64,8 @@ private:
 /// registered). register_content_from_ecfg() is this walk plus registration; a loader that fills the
 /// registry from several sources needs the list *before* it registers anything, so a name another
 /// source already took can be reported instead of silently merged.
-/// \p ignore_table names a table the caller handles itself (a pack's "pack::" header, for instance):
-/// it is skipped silently instead of being reported as a table that is not a content kind.
 [[nodiscard]] std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
-                                                             std::vector<std::string>* unknown_tables = nullptr,
-                                                             std::string_view ignore_table = {});
+                                                             std::vector<std::string>* unknown_tables = nullptr);
 
 /// One content entry's picture. The engine does not read the designer's fields - with one exception:
 /// it has to be able to draw what the designer describes, so "image" is read, and its path is kept
@@ -80,8 +77,7 @@ struct ContentImage {
 };
 
 /// Every "image" field \p document declares, in file order. Entries without one are simply absent.
-[[nodiscard]] std::vector<ContentImage> content_images(const t2d::EcfgDocument& document,
-                                                       std::string_view ignore_table = {});
+[[nodiscard]] std::vector<ContentImage> content_images(const t2d::EcfgDocument& document);
 
 /// One picture a content file ships, and what the engine made of it.
 struct ResolvedImage {
@@ -102,8 +98,7 @@ struct ResolvedImage {
 /// else is a record with ok == false and an error saying so, never a silent blank. The caller decides
 /// how to report it: a record carries everything a message needs, including where it came from.
 [[nodiscard]] std::vector<ResolvedImage> resolve_content_images(const t2d::EcfgDocument& document,
-                                                                const std::string& source_path,
-                                                                std::string_view ignore_table = {});
+                                                                const std::string& source_path);
 
 /// What one register_declared_content() call did.
 struct ContentRegistrationReport {

@@ -24,10 +24,18 @@ namespace mine {
 /// designer sees, so it lives here rather than being spelled out in three places.
 inline constexpr const char* kPacksDirectoryName = "packs";
 
+/// The name of the directory the game's own content pack lives in, beside the executable.
+inline constexpr const char* kContentDirectoryName = "content";
+
 /// The "packs" directory of the game at \p executable_path - the path of the executable itself, as
 /// t2d::executable_path() reports it. Empty when that path names no directory of its own (a bare file
 /// name), in which case there is nothing "beside" it to look in.
 [[nodiscard]] std::string packs_beside(const std::string& executable_path);
+
+/// The game's own content pack: the "content" directory beside the executable, found the same way the
+/// packs directory is - the game's own content is a pack like any other (content_pack.h), it just
+/// registers first. Empty when the path names no directory.
+[[nodiscard]] std::string content_beside(const std::string& executable_path);
 
 /// The directories a run looks in for content packs and mod packages when the command line does not
 /// say, in load order: "packs" beside the executable, then "packs" in \p working_directory. Only the

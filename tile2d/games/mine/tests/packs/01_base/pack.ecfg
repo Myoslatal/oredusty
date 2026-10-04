@@ -1,0 +1,5 @@
+# A content pack: a directory with a header, the .ecfg files that describe its content, and the art
+# they name. No manifest listing files, no code - that is a mod package (docs/MODS.md section 1).
+id:"base_pack"
+name:"Base pack"
+version:"2.0"

@@ -12,32 +12,37 @@
     ./build/debug/games/mine/mine_game --world sandbox --start 1        # 自动加载 ./packs 与游戏目录下的 packs/
     ./build/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/template
 
-**一个 `packs/` 里可以同时放内容包和模组包**：`*.ecfg` 是内容包，带 `mod.ecfg` 的目录是模组包
-（模组包目录不会被当成内容包扫描，所以它的内容文件不会被注册两次）。
+**一个 `packs/` 里可以同时放内容包和模组包**：一个**包目录**是内容包，带 `mod.ecfg` 的目录是模组包
+（模组包目录不会被当成内容包扫描，所以它的内容文件不会被注册两次）。散落在这里的 `.ecfg` 文件会被
+**报告**——包是目录。
 
 ## 什么是内容包
 
-**一个 `.ecfg` 文件就是一个包**，可选一个 `pack::` 头说明自己是谁。没有清单文件、没有目录结构、
-没有代码——需要"跑点什么"时才用模组包（`docs/MODS.md`）。
+**一个内容包就是一个目录**：目录里的每个 `.ecfg` 都是它的内容文件，资源（图片、说明、草稿）也放在
+里面；`pack.ecfg`（可选）说明这个包是谁。没有清单、没有文件列表、没有代码——需要"跑点什么"时才用
+模组包（`docs/MODS.md`）。
 
     packs/
-      template/                  # 一个包项目 = 一个目录
-        template.ecfg            #   包本体（一个 .ecfg）
+      template/                  # 一个包 = 一个目录（这个就是模板）
+        pack.ecfg                #   可选：id / name / version / requires
+        content.ecfg             #   内容文件：想放几个放几个，表名是内容类别
         README.md                #   怎么写这个包
+        art/                     #   图片与其它资源，内容条目用相对声明文件的路径引用
       my_pack/                   # 复制 template/ 改个名就是新包
-        my_pack.ecfg
-        art/                     #   多边形贴图的坐标草稿、配色表……随便放什么，只要不是 .ecfg
-        README.md
+        pack.ecfg
+        items.ecfg
+        structures.ecfg
+        art/wall.png
 
-`--packs <dir>` 会**递归**找出目录下所有 `.ecfg`（跳过以 `.` 开头的项），按路径排序，再按 `requires` 调整顺序。
-所以一个工作区里放多少个包项目都可以。
+`--packs <dir>` 给一个目录：**它本身是一个包就用它，否则它里面的每个包目录都是包**。包内部的文件按
+**路径**排序加载，包之间按目录名再按 `requires` 调整顺序。所以一个工作区里放多少个包都可以。
 
 ## 写完之后怎么试
 
 1. 跑起来看：`mine_game --world sandbox --start 1`，右侧面板列出注册到的每一个名字与它拿到的 id。
 2. 改文件按 **F5**：不重启重新加载全部来源（本体内容 → 内容包 → 模组包），已放置的格子按**名字**重新定位。
 3. 校验：`ctest --test-dir build/debug -R test_content_pack` 里有一个用例专门加载这个工作区——
-   模板包语法错、`pack::` 里写错键、依赖成环，测试就会红。
+   模板包语法错、`pack.ecfg` 里写错键、依赖成环，测试就会红。
 
 ## 两条已确认的美术/操作需求（见 docs/GAME_DESIGN.md §1）
 

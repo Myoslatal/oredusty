@@ -102,7 +102,7 @@ private:
 T2D_TEST(the_three_stages_are_one_list_in_load_order) {
     ContentRegistry registry;
     ContentPipeline pipeline;
-    pipeline.set_base_files({std::string(T2D_SOURCE_DIR) + "/games/mine/tests/data/placeholder_content.ecfg"});
+    pipeline.set_base_packs({std::string(T2D_SOURCE_DIR) + "/games/mine/tests/data/placeholder_content"});
     pipeline.set_pack_directories({T2D_TEST_PACKS_DIR});
     pipeline.set_mod_directories({T2D_TEST_MODS_DIR});
     const ContentPipelineReport& report = pipeline.load(registry);
@@ -126,7 +126,7 @@ T2D_TEST(the_three_stages_are_one_list_in_load_order) {
 
     // The game's own file first, then the packs, then the mods.
     T2D_CHECK_EQ(list.source(0).kind, SourceKind::File);
-    T2D_CHECK_EQ(list.source(0).id, std::string("placeholder_content"));
+    T2D_CHECK_EQ(list.source(0).id, std::string("placeholder_content"));   // no header: the directory name
     T2D_CHECK_EQ(list.source(0).entries.size(), report.base_registered);
     T2D_CHECK_EQ(list.source(1).kind, SourceKind::Pack);
     T2D_CHECK_EQ(list.source(1).id, std::string("base_pack"));
@@ -163,8 +163,9 @@ T2D_TEST(the_three_stages_are_one_list_in_load_order) {
 
 T2D_TEST(a_pack_that_does_not_parse_is_a_line_and_not_a_silence) {
     Scratch scratch;
-    scratch.write("good.ecfg", "pack::\n    id:\"good\"\nitem::\n    fine::\n");
-    scratch.write("bad.ecfg", "item::\n    good_one::\n    bad_one:unquoted\n");
+    scratch.write("good/pack.ecfg", "id:\"good\"\n");
+    scratch.write("good/items.ecfg", "item::\n    fine::\n");
+    scratch.write("bad/items.ecfg", "item::\n    good_one::\n    bad_one:unquoted\n");
     ContentRegistry registry;
     ContentPipeline pipeline;
     pipeline.set_pack_directories({scratch.root()});
@@ -172,7 +173,7 @@ T2D_TEST(a_pack_that_does_not_parse_is_a_line_and_not_a_silence) {
     T2D_CHECK_FALSE(report.clean());
     const ContentListModel list = list_of(pipeline);
 
-    // Both files are packs, and the broken one says why it is not there.
+    // Both directories are packs, and the broken one says why it is not there.
     T2D_CHECK_EQ(list.totals().packs, 2u);
     T2D_CHECK_EQ(list.totals().failed, 1u);
     const ContentSource* bad = find_source(list, "bad");
@@ -192,7 +193,8 @@ T2D_TEST(a_pack_that_does_not_parse_is_a_line_and_not_a_silence) {
 
     // A warning is nobody's line: a table that is not a content kind lands in the message block.
     Scratch typo;
-    typo.write("typo.ecfg", "pack::\n    id:\"typo\"\nstructurs::\n    wall::\nitem::\n    ore::\n");
+    typo.write("typo/pack.ecfg", "id:\"typo\"\n");
+    typo.write("typo/items.ecfg", "structurs::\n    wall::\nitem::\n    ore::\n");
     ContentRegistry typo_registry;
     ContentPipeline typo_pipeline;
     typo_pipeline.set_pack_directories({typo.root()});
@@ -206,12 +208,13 @@ T2D_TEST(a_pack_that_does_not_parse_is_a_line_and_not_a_silence) {
 
 T2D_TEST(a_source_that_lost_a_name_reads_as_partial) {
     Scratch scratch;
-    scratch.write("base.ecfg", "item::\n    shared_thing::\n");
-    scratch.write("pack.ecfg", "pack::\n    id:\"greedy\"\nitem::\n    shared_thing::\n    its_own::\n");
+    scratch.write("base/content.ecfg", "item::\n    shared_thing::\n");
+    scratch.write("greedy/pack.ecfg", "id:\"greedy\"\n");
+    scratch.write("greedy/items.ecfg", "item::\n    shared_thing::\n    its_own::\n");
     ContentRegistry registry;
     ContentPipeline pipeline;
-    pipeline.set_base_files({scratch.root() + "/base.ecfg"});
-    pipeline.set_pack_files({scratch.root() + "/pack.ecfg"});
+    pipeline.set_base_packs({scratch.root() + "/base"});
+    pipeline.set_pack_directories({scratch.root() + "/greedy"});
     const ContentPipelineReport& report = pipeline.load(registry);
     T2D_CHECK_FALSE(report.clean());
     const ContentListModel list = list_of(pipeline);
@@ -232,7 +235,8 @@ T2D_TEST(a_source_that_lost_a_name_reads_as_partial) {
 
 T2D_TEST(a_pack_whose_requirement_is_missing_is_listed_as_failed) {
     Scratch scratch;
-    scratch.write("needy.ecfg", "pack::\n    id:\"needy\"\n    requires:[\"nope\"]\nitem::\n    thing::\n");
+    scratch.write("needy/pack.ecfg", "id:\"needy\"\nrequires:[\"nope\"]\n");
+    scratch.write("needy/items.ecfg", "item::\n    thing::\n");
     ContentRegistry registry;
     ContentPipeline pipeline;
     pipeline.set_pack_directories({scratch.root()});

@@ -22,11 +22,9 @@ const types::TileDefinition* ContentDefinitions::find(ContentKind kind, std::str
 }
 
 std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
-                                               std::vector<std::string>* unknown_tables,
-                                               std::string_view ignore_table) {
+                                               std::vector<std::string>* unknown_tables) {
     std::vector<ContentEntry> declared;
     for (const t2d::EcfgValue& table : document.root().children()) {
-        if (!ignore_table.empty() && table.key() == ignore_table) continue;
         ContentKind kind = ContentKind::Count;
         bool known = false;
         for (usize index = 0; index < kContentKindCount; ++index) {
@@ -55,10 +53,9 @@ std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document
     return declared;
 }
 
-std::vector<ContentImage> content_images(const t2d::EcfgDocument& document, std::string_view ignore_table) {
+std::vector<ContentImage> content_images(const t2d::EcfgDocument& document) {
     std::vector<ContentImage> images;
     for (const t2d::EcfgValue& table : document.root().children()) {
-        if (!ignore_table.empty() && table.key() == ignore_table) continue;
         ContentKind kind = ContentKind::Count;
         bool known = false;
         for (usize index = 0; index < kContentKindCount; ++index) {
@@ -85,11 +82,10 @@ std::vector<ContentImage> content_images(const t2d::EcfgDocument& document, std:
 }
 
 std::vector<ResolvedImage> resolve_content_images(const t2d::EcfgDocument& document,
-                                                        const std::string& source_path,
-                                                        std::string_view ignore_table) {
+                                                        const std::string& source_path) {
     std::vector<ResolvedImage> images;
     const std::filesystem::path base_directory = std::filesystem::path(source_path).parent_path();
-    for (const ContentImage& declared : content_images(document, ignore_table)) {
+    for (const ContentImage& declared : content_images(document)) {
         ResolvedImage entry;
         entry.kind = declared.kind;
         entry.content = declared.name;

@@ -1,6 +1,9 @@
 #include <mine/app.h>
 
+#include <mine/content_search.h>
+
 #include <t2d/core/cli.h>
+#include <t2d/core/executable.h>
 #include <t2d/core/log.h>
 #include <t2d/core/time.h>
 
@@ -95,17 +98,21 @@ template <class... Args>
     return std::vformat(pattern, std::make_format_args(args...));
 }
 
-/// The content files the game itself ships, in file name order. They are the game's own content - the
-/// first stage of the load order (docs/MODS.md) - so a run does not have to be told about them. A
-/// missing directory is reported rather than silently leaving the game empty.
-[[nodiscard]] std::vector<std::string> shipped_content_files() {
-    const std::string directory = std::string(T2D_SOURCE_DIR) + "/games/mine/content";
+/// The game's own content pack: the "content" directory beside the executable, which is where a game
+/// that has been copied somewhere finds itself (content_search.h). A build tree has no such directory,
+/// so the one in the source tree is the fallback - the game the designer is editing and the game that
+/// is running are then the same files, which is the whole point of the content debug loop.
+///
+/// It is a pack like any other (content_pack.h); what makes it the game's own is that it registers
+/// first (docs/MODS.md), so the ids it hands out are the ones that never move.
+[[nodiscard]] std::string vanilla_content_pack() {
     std::error_code code;
-    if (!std::filesystem::is_directory(directory, code)) {
-        T2D_WARN("content: the game's own content directory '{}' is missing", directory);
-        return {};
-    }
-    return ContentPack::scan_directory(directory);
+    const std::string beside = content_beside(t2d::executable_path());
+    if (!beside.empty() && std::filesystem::is_directory(beside, code)) return beside;
+    const std::string source = std::string(T2D_SOURCE_DIR) + "/games/mine/content";
+    if (std::filesystem::is_directory(source, code)) return source;
+    T2D_WARN("content: the game's own content pack is missing (looked in '{}' and '{}')", beside, source);
+    return {};
 }
 
 /// Writes a whole file; false when it cannot be written.
@@ -248,7 +255,7 @@ void MineApp::on_start() {
     body_px_ = static_cast<u16>(std::max(14.0f, 5.0f * unit_));
 
     load_localisation();
-    shipped_content_ = shipped_content_files();
+    shipped_content_ = vanilla_content_pack();
     // The game's content, its packs and its mods, loaded once at startup: a session reports what it
     // has before anything is created, and the sandbox reloads the same set with F5.
     (void)load_content();
@@ -930,8 +937,8 @@ void MineApp::open_sandbox() {
     }
     sandbox_.set_active_layer(options_.start_layer);
     sandbox_.set_content_paths(options_.content_paths);
-    if (shipped_content_.empty() && options_.content_paths.empty() && options_.pack_paths.empty() &&
-        options_.pack_directories.empty() && options_.mod_directories.empty()) {
+    if (shipped_content_.empty() && options_.content_paths.empty() && options_.pack_directories.empty() &&
+        options_.mod_directories.empty()) {
         sandbox_.rebind(registry_);
         set_status(locale_.text("sandbox.no.content"), true);
     } else {
@@ -1221,11 +1228,12 @@ const ContentPipelineReport& MineApp::load_content() {
     // the registry first, so ids come out the same every time.
     //
     // The game's own content is the game: what it ships is loaded first, and --content adds to it
-    // rather than replacing it.
-    std::vector<std::string> base_files = shipped_content_;
-    base_files.insert(base_files.end(), options_.content_paths.begin(), options_.content_paths.end());
-    content_.set_base_files(std::move(base_files));
-    content_.set_pack_files(options_.pack_paths);
+    // rather than replacing it. Both are packs - directories of .ecfg files and art - and they are one
+    // stage, so the ids the game ships never move (docs/MODS.md).
+    std::vector<std::string> base_packs;
+    if (!shipped_content_.empty()) base_packs.push_back(shipped_content_);
+    base_packs.insert(base_packs.end(), options_.content_paths.begin(), options_.content_paths.end());
+    content_.set_base_packs(std::move(base_packs));
     content_.set_pack_directories(options_.pack_directories);
     content_.set_mod_directories(options_.mod_directories);
     const ContentPipelineReport& report = content_.load(registry_);

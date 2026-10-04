@@ -37,7 +37,7 @@ struct ContentSource {
     SourceKind kind = SourceKind::File;
     std::string path;      ///< the file or directory it came from
     std::string id;        ///< pack/mod id; for one of the game's own files, the file's stem
-    std::string name;      ///< pack::name or the manifest's name; defaults to the id
+    std::string name;      ///< pack.ecfg's name or the manifest's name; defaults to the id
     std::string version;   ///< may be empty
     std::vector<std::string> requirements;   ///< pack ids / mod ids this one needs first
     /// What it added to the registry, in registration order: the ids a save would store, and the

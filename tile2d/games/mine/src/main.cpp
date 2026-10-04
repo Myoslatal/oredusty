@@ -63,7 +63,6 @@ int main(int argc, char** argv) {
     }
     if (const auto fill = cli.value("fill"); fill.has_value()) options.fill = *fill;
     if (const auto fill_layer = cli.value("fill-layer"); fill_layer.has_value()) options.fill_layer = *fill_layer;
-    for (const std::string& path : cli.values("pack")) options.pack_paths.push_back(path);
     for (const std::string& directory : cli.values("packs")) options.pack_directories.push_back(directory);
     for (const std::string& directory : cli.values("mods")) options.mod_directories.push_back(directory);
     // Where the game looks without being told (mine/content_search.h): the "packs" directory beside

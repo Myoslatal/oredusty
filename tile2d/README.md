@@ -61,8 +61,8 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_mine_types     13 cases / 167 checks  plots: identity, footprints, the two kinds, the dice, the definer
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
     games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   11 cases / 155 checks  packs: headers, order, collisions, the three sources, engine fields
-    games/mine/tests/test_content_search  4 cases /  24 checks  the packs directory beside the executable, and a pack and a mod sharing one
+    games/mine/tests/test_content_pack   13 cases / 196 checks  packs: a directory per pack, several files each, headers, order, collisions, art
+    games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
 
@@ -245,16 +245,19 @@ Content — definitions *and* logic — can live outside the game, in two forms:
 
 | Form | What it is | Code? |
 |---|---|---|
-| **Content pack** | **one `.ecfg` file**, optionally prefixed by a `pack::` header that says who it is | no |
-| **Mod package** | a directory with a `mod.ecfg` manifest, content files and an optional shared library | yes |
+| **Content pack** | **a directory**: any number of `.ecfg` content files, their resources, and an optional `pack.ecfg` header that says who it is | no |
+| **Mod package** | the same directory, plus a `mod.ecfg` manifest that lists its content files, and an optional shared library | yes |
 
 Most content only needs the first. The load order is fixed — **the game's own files, then packs, then
 mods** — and all three fill the same registry, so the game's ids stay stable and everything else appends.
 
-    packs/01_base.ecfg               # pack::  + content tables
+    packs/base_pack/
+        pack.ecfg                    # optional: id, name, version, requires
+        items.ecfg                   # content tables, as many files as you like
+        art/wall.png                 # resources, named relative to the file that declares them
 
     ./build/debug/games/mine/mine_game --world story --start 1 --packs packs
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 --pack packs/01_base.ecfg
+    ./build/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/base_pack
 
 ![Packs loaded by the game itself](games/mine/docs/images/session_packs_en.png)
 
@@ -265,7 +268,7 @@ A pack that has to *run* something is a mod package instead:
         libexample_native.so     a shared library exporting mine_mod_entry()
 
     ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-        --content games/mine/tests/data/placeholder_content.ecfg --mods mods
+        --content games/mine/tests/data/placeholder_content --mods mods
 
 ![Content from the game, from packs and from two mods](games/mine/docs/images/sandbox_mods_en.png)
 
@@ -275,20 +278,26 @@ A pack that has to *run* something is a mod package instead:
   batch is cut by picture), which the sandbox and the world view draw instead of a stand-in colour. The
   other field is `random_reverse`. The art *style* is polygonal, the resource is an ordinary image - no
   vector rendering.
-* **Data first.** A pack is one `.ecfg` file: its tables are content, exactly as in the game's own files,
-  and `pack::` is metadata (id, name, version, requires). `--packs <dir>` loads every `*.ecfg` under a
-  directory (recursively, ordered by path and then by what they require). Everything lands in the same
+* **Data first.** A pack is a **directory**: any number of `.ecfg` files whose tables are content exactly
+  as in the game's own files, the art they name, and an optional `pack.ecfg` whose top level keys are
+  metadata (id, name, version, requires) — the same shape a mod's `mod.ecfg` has. `--packs <dir>` takes a
+  directory: the directory itself when it is a pack, otherwise every pack directly inside it, so one
+  directory is a workspace of packs. Files inside a pack load in path order, packs in directory order and
+  then by what they require. A loose `.ecfg` file in a workspace is **reported** — a pack is a directory
+  now, and a file that is silently not loaded is content that disappeared. Everything lands in the same
   registry the game's own content does, so ids, saves and the name → id table work the same — and a name
   two sources both declare is **reported, never merged**, with the game's own content always keeping its id.
 * **A game finds its own content.** Without any argument, a run looks in the `packs` directory **beside
   its executable** — drop a pack or a mod there and the game loads it wherever you start it from — and
   then in the working directory's own `packs`, which is the workspace a designer develops in. One
-  directory holds both kinds: `*.ecfg` files are packs, a subdirectory with a `mod.ecfg` is a mod
-  package, and a mod package directory is **not** scanned as packs (its content files belong to the mod
-  host, which loads them in the order its manifest gives — otherwise every name in it would be registered
-  twice and reported as a collision). Neither default is a promise: a missing one is silent, while an
-  explicit `--packs`/`--mods` that is not there is reported. `t2d/core/executable.h` is the framework
-  half, `mine/content_search.h` the game's.
+  directory holds both kinds: a pack directory, and a directory with a `mod.ecfg` in it, which is **not**
+  scanned as a pack (its content files belong to the mod host, which loads them in the order its manifest
+  gives — otherwise every name in it would be registered twice and reported as a collision). The game's
+  **own content follows the same rule**: the `content` directory beside the executable, falling back to
+  the source tree when the game is run out of a build directory, which is what keeps "edit the file, press
+  F5" working while a copied game still finds itself. Neither default is a promise: a missing one is
+  silent, while an explicit `--packs`/`--mods` that is not there is reported. `t2d/core/executable.h` is
+  the framework half, `mine/content_search.h` the game's.
 * **Code second, and optional.** A native mod is a shared library that exports one symbol. It compiles
   against `mine/mod_api.h` and **links nothing of the game** — nothing but plain data and function
   pointers crosses the line, and the interface grows by appending fields behind a `struct_size` and a
@@ -432,7 +441,7 @@ separately.
 
     ./build/debug/games/mine/mine_game --world sandbox --start 1
     ./build/debug/games/mine/mine_game --world sandbox --start 1 \
-        --content games/mine/tests/data/placeholder_content.ecfg --tile-layers 3 --fill-layer all
+        --content games/mine/tests/data/placeholder_content --tile-layers 3 --fill-layer all
 
 ![Sandbox, three tile layers](games/mine/docs/images/sandbox_layers_en.png)
 
@@ -451,7 +460,7 @@ separately.
   (687 → 687 → 575 + 112 across three tile layers). Reloading the file under a painted layer moves
   **123** cell ids in the one layer case and **331** in the three layer one, and loses none of them.
 * **No content in the code**: the placeholder names used by the tool's own tests are marked as such in
-  `games/mine/tests/data/placeholder_content.ecfg`.
+  `games/mine/tests/data/placeholder_content/`.
 * **Press `P` to playtest the layer** (`--playtest 1` starts in it): the same map, the same camera, drawn the way
   the game draws it — every tile layer bottom to top, no dimming, art edge to edge, no grid lines, no labels, no
   panel, no status bar. The input is the game's input (docs/GAME_DESIGN.md §1.11): the camera and the pointer, and

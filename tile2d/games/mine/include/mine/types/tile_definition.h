@@ -47,10 +47,9 @@ struct TileDefinition {
                                                                 std::string* error = nullptr);
 
 /// Every plot definition \p document declares, in file order. Tables that are not tile kinds are
-/// skipped; \p ignore_table names one the caller handles itself (a pack's "pack::" header).
+/// skipped.
 [[nodiscard]] std::vector<TileDefinition> tile_definitions(const t2d::EcfgDocument& document,
-                                                           std::vector<std::string>* errors = nullptr,
-                                                           std::string_view ignore_table = {});
+                                                           std::vector<std::string>* errors = nullptr);
 
 /// Builds the plot a definition describes, at \p anchor on \p layer, with the id the registry handed
 /// out for it. Returns nullptr for a definition that is not a plot at all.

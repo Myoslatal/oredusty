@@ -1,0 +1,6 @@
+# A pack that requires another one. Its directory sorts *before* the one it needs, so this is also the
+# test that the load order comes from "requires" and not from the directory listing.
+id:"dependent_pack"
+name:"Depends on base_pack"
+version:"1.0"
+requires:["base_pack"]
