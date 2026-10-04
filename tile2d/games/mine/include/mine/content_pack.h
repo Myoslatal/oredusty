@@ -21,6 +21,7 @@
 // "requires" asks for.
 #pragma once
 
+#include <mine/content_list.h>
 #include <mine/content_loader.h>
 #include <mine/mod_package.h>
 #include <mine/registry.h>
@@ -79,6 +80,13 @@ struct ContentPipelineReport {
     usize native_mods = 0;
     usize mod_content = 0;
     usize total_content = 0;     ///< everything in the registry afterwards
+    /// One record per thing the pipeline was asked to load, in the order it handled them: the game's
+    /// own files, then the packs (the ones that could not even be parsed first, then the ones it
+    /// loaded, in dependency order), then the mod packages. The failures are in here too - a pack that
+    /// does not parse is as much a part of "what is loaded" as one that does, and a list that only
+    /// shows successes is exactly the list a broken pack hides from. The content list screen
+    /// (content_list.h) is built from this.
+    std::vector<ContentSource> sources;
     std::vector<std::string> errors;
     std::vector<std::string> warnings;
 

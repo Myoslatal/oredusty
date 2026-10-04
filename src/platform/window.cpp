@@ -38,6 +38,14 @@ struct Window::Impl {
 Scope<Window> Window::create(const WindowDesc& desc) {
     if (!g_glfw_ready) {
         glfwSetErrorCallback(&glfw_error_callback);
+        // The platform hint has to be in place before GLFW picks one, and it can only be picked once
+        // per process: a second window follows whatever the first one chose.
+        switch (desc.platform) {
+            case WindowPlatform::Wayland: glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND); break;
+            case WindowPlatform::X11: glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11); break;
+            case WindowPlatform::Null: glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL); break;
+            case WindowPlatform::Auto: break;
+        }
         if (glfwInit() != GLFW_TRUE) {
             ORE_ERROR("failed to initialise the window system (no display?). "
                       "Use --headless to render offscreen.");

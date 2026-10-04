@@ -29,7 +29,7 @@ T2D_TEST(the_story_screen_offers_the_actions_and_no_seed_row) {
     MenuModel menu;
     T2D_CHECK_EQ(menu.mode(), Mode::Story);
     T2D_CHECK_FALSE(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 6u); // world, single, host, join, quit
+    T2D_CHECK_EQ(menu.row_count(), 7u); // world, language, content, single, host, join, quit
     T2D_CHECK_EQ(id_of(menu, 0), std::string("row.world"));
     T2D_CHECK_EQ(menu.selected(), 0u);
 
@@ -45,21 +45,22 @@ T2D_TEST(selecting_endless_adds_the_seed_row_and_leaving_it_removes_it) {
     (void)menu.handle(MenuKey::Right);
     T2D_CHECK_EQ(menu.mode(), Mode::Endless);
     T2D_CHECK(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 7u); // world, language, seed, single, host, join, quit
+    T2D_CHECK_EQ(menu.row_count(), 8u); // world, language, content, seed, single, host, join, quit
     T2D_CHECK_EQ(id_of(menu, 1), std::string("row.language"));
-    T2D_CHECK_EQ(id_of(menu, 2), std::string("row.seed"));
+    T2D_CHECK_EQ(id_of(menu, 2), std::string("row.content"));
+    T2D_CHECK_EQ(id_of(menu, 3), std::string("row.seed"));
 
     // Left/Right on the world row switches back, and the seed row goes away with it.
     menu.select(0);
     (void)menu.handle(MenuKey::Left);
     T2D_CHECK_EQ(menu.mode(), Mode::Story);
     T2D_CHECK_FALSE(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 6u);
+    T2D_CHECK_EQ(menu.row_count(), 7u);
 
     // Focus the seed row, then leave endless mode through the model: the focus must land on an
     // action, not on whatever slid into the seed row's place.
     menu.set_mode(Mode::Endless);
-    menu.select(2);
+    menu.select(3);
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Seed);
     menu.set_mode(Mode::Story);
     T2D_CHECK_FALSE(menu.seed_visible());
@@ -137,7 +138,7 @@ T2D_TEST(the_focused_row_decides_the_session) {
 T2D_TEST(the_seed_stays_readable_and_wraps_at_the_ends) {
     MenuModel menu;
     menu.set_mode(Mode::Endless);
-    menu.select(2); // the seed row (world, language, seed)
+    menu.select(3); // the seed row (world, language, content, seed)
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Seed);
 
     menu.set_seed(MenuModel::kMinSeed);
@@ -210,15 +211,15 @@ T2D_TEST(the_sandbox_offers_one_local_row_and_no_hosting) {
     MenuModel menu;
     menu.set_mode(Mode::Sandbox);
     T2D_CHECK_FALSE(menu.seed_visible());
-    T2D_CHECK_EQ(menu.row_count(), 4u); // world, language, open the sandbox, quit
-    T2D_CHECK_EQ(std::string(menu.row(2).id), std::string("row.sandbox"));
-    T2D_CHECK_EQ(menu.row(2).kind, RowKind::Action);
-    T2D_CHECK_EQ(menu.row(2).role, Role::Single);
+    T2D_CHECK_EQ(menu.row_count(), 5u); // world, language, content, open the sandbox, quit
+    T2D_CHECK_EQ(std::string(menu.row(3).id), std::string("row.sandbox"));
+    T2D_CHECK_EQ(menu.row(3).kind, RowKind::Action);
+    T2D_CHECK_EQ(menu.row(3).role, Role::Single);
     // Hosting and joining are not offered: the sandbox is one local layer with no server behind it.
     T2D_CHECK_EQ(action_row(menu, MenuAction::StartSession, Role::Host), menu.row_count());
     T2D_CHECK_EQ(action_row(menu, MenuAction::StartSession, Role::Join), menu.row_count());
 
-    menu.select(2);
+    menu.select(3);
     T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::StartSession);
     T2D_CHECK_EQ(menu.session_config().mode, Mode::Sandbox);
     T2D_CHECK_EQ(menu.session_config().role, Role::Single);
@@ -226,7 +227,7 @@ T2D_TEST(the_sandbox_offers_one_local_row_and_no_hosting) {
     // The seed row goes away when the sandbox is chosen from endless mode, and the focus lands on an
     // action rather than on whatever slid into its place.
     menu.set_mode(Mode::Endless);
-    menu.select(2);
+    menu.select(3);
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Seed);
     menu.set_mode(Mode::Sandbox);
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Action);
@@ -234,9 +235,33 @@ T2D_TEST(the_sandbox_offers_one_local_row_and_no_hosting) {
     // And leaving the sandbox puts the hosting rows back.
     menu.select(menu.row_count() - 1);
     menu.set_mode(Mode::Story);
-    T2D_CHECK_EQ(menu.row_count(), 6u);
+    T2D_CHECK_EQ(menu.row_count(), 7u);
     T2D_CHECK(menu.selected() < menu.row_count());
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Action);
+}
+
+T2D_TEST(the_content_row_opens_the_list_in_every_world) {
+    // What is loaded is not a property of a session: the row that opens the content list is there in
+    // all three worlds, and it never starts anything.
+    MenuModel menu;
+    for (const Mode mode : {Mode::Story, Mode::Endless, Mode::Sandbox}) {
+        menu.set_mode(mode);
+        usize found = menu.row_count();
+        for (usize index = 0; index < menu.row_count(); ++index) {
+            if (menu.row(index).kind == RowKind::Content) found = index;
+        }
+        T2D_CHECK_MSG(found < menu.row_count(), "no content row in mode {}", static_cast<int>(mode));
+        if (found >= menu.row_count()) continue;
+        T2D_CHECK_EQ(std::string(menu.row(found).id), std::string("row.content"));
+        menu.select(found);
+        T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::OpenContent);
+        T2D_CHECK_EQ(menu.session_config().mode, mode);
+        T2D_CHECK_EQ(menu.session_config().role, Role::Single);
+        // Left and right have nothing to change on it, and must not change the world either.
+        (void)menu.handle(MenuKey::Left);
+        T2D_CHECK_EQ(menu.mode(), mode);
+        T2D_CHECK_EQ(menu.selected(), found);
+    }
 }
 
 T2D_TEST(every_label_the_menu_can_show_exists_in_the_shipped_string_table) {
@@ -257,7 +282,7 @@ T2D_TEST(every_label_the_menu_can_show_exists_in_the_shipped_string_table) {
         ids.emplace_back(mode_value_id(mode));
         for (usize index = 0; index < menu.row_count(); ++index) ids.emplace_back(menu.row(index).id);
     }
-    T2D_CHECK_GE(ids.size(), 14u); // three worlds, four rows in each
+    T2D_CHECK_GE(ids.size(), 20u); // three worlds, five to eight rows each
 
     // Looked up in the parsed file rather than through Locale, so this stays a t2d::core only test.
     for (const char* language : {"en", "zh-Hans", "zh-Hant"}) {

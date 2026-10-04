@@ -70,3 +70,11 @@ add_dependencies(test_mod_package example_native example_native_bad_api example_
 target_compile_definitions(test_content_pack PRIVATE
     T2D_TEST_MODS_DIR="${MINE_TEST_MODS_DIR}")
 add_dependencies(test_content_pack example_native example_native_bad_api example_native_fails)
+
+# The list of what the registry was filled from: the same data the game's content screen draws.
+t2d_add_test(test_content_list test_content_list.cpp)
+target_link_libraries(test_content_list PRIVATE mine_core)
+target_compile_definitions(test_content_list PRIVATE
+    T2D_TEST_PACKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/packs"
+    T2D_TEST_MODS_DIR="${MINE_TEST_MODS_DIR}")
+add_dependencies(test_content_list example_native example_native_bad_api example_native_fails)

@@ -242,6 +242,17 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
     };
     std::vector<Found> found;
     std::map<std::string, usize> by_id;
+    // A package the host refuses is still a package it looked at, and the report has to be able to
+    // say "this one is here and it did not load" - that is the line a designer opens the list for.
+    const auto refuse = [&](const std::string& directory, ModManifest manifest, std::string message) {
+        report_.errors.push_back(message);
+        LoadedMod refused;
+        refused.manifest = std::move(manifest);
+        refused.manifest.directory = directory;
+        refused.ok = false;
+        refused.error = std::move(message);
+        slots_.push_back(Slot{std::move(refused), std::nullopt, std::nullopt, nullptr});
+    };
     for (const std::string& directory : directories) {
         std::error_code code;
         const fs::path root(directory);
@@ -264,21 +275,23 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
         for (const fs::path& manifest_path : manifests) {
             t2d::EcfgError parse_error;
             std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(manifest_path.string(), &parse_error);
+            const std::string package_dir = manifest_path.parent_path().string();
             if (!document.has_value()) {
-                report_.errors.push_back(parse_error.describe(manifest_path.string()));
+                refuse(package_dir, ModManifest{}, parse_error.describe(manifest_path.string()));
                 continue;
             }
             std::string error;
-            std::optional<ModManifest> manifest =
-                ModManifest::from_document(*document, manifest_path.parent_path().string(), &error);
+            std::optional<ModManifest> manifest = ModManifest::from_document(*document, package_dir, &error);
             if (!manifest.has_value()) {
-                report_.errors.push_back(error);
+                refuse(package_dir, ModManifest{}, std::move(error));
                 continue;
             }
             if (by_id.find(manifest->id) != by_id.end()) {
-                report_.errors.push_back(
-                    std::format("mods: '{}' is defined twice ('{}' and '{}')", manifest->id,
-                                found[by_id[manifest->id]].manifest.directory, manifest->directory));
+                // The message names the package that owns the id, which is not always the first one
+                // found; the host's own log line already says this is about mods.
+                refuse(package_dir, *manifest,
+                       std::format("'{}' is defined twice ('{}' and '{}')", manifest->id,
+                                   found[by_id[manifest->id]].manifest.directory, manifest->directory));
                 continue;
             }
             by_id.emplace(manifest->id, found.size());

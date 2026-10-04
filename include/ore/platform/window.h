@@ -13,8 +13,15 @@
 
 namespace ore {
 
+/// Which window system GLFW should use. Auto takes whichever it finds first, which on a session that
+/// offers both is Wayland; naming one is how a run is pointed at the other, and how a test drives a
+/// window through a known input path.
+enum class WindowPlatform : u8 { Auto, Wayland, X11, Null };
+
 struct WindowDesc {
     std::string title = "Ore Application";
+    /// Honoured when the window system is initialised, which happens once per process.
+    WindowPlatform platform = WindowPlatform::Auto;
     u32 width = 1280;
     u32 height = 720;
     bool resizable = true;

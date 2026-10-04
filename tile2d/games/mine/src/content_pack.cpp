@@ -145,28 +145,56 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     registry.clear();
 
     // --- the game's own content -------------------------------------------------------------------
+    // One record per file before anything is read, so a file that never gets read - the ones behind a
+    // file that failed - is on the list with the reason, instead of quietly missing from it.
+    for (const std::string& path : base_files_) {
+        ContentSource source;
+        source.kind = SourceKind::File;
+        source.path = path;
+        source.id = fs::path(path).stem().string();
+        source.name = source.id;
+        report_.sources.push_back(std::move(source));
+    }
     std::vector<t2d::EcfgDocument> base_documents;
     bool base_ok = true;
-    for (const std::string& path : base_files_) {
+    usize failed_at = 0;
+    for (usize index = 0; index < base_files_.size(); ++index) {
         t2d::EcfgError parse_error;
-        std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(path, &parse_error);
+        std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(base_files_[index], &parse_error);
         if (!document.has_value()) {
-            report_.errors.push_back(parse_error.describe(path));
+            const std::string message = parse_error.describe(base_files_[index]);
+            report_.errors.push_back(message);
+            report_.sources[index].ok = false;
+            report_.sources[index].error = message;
             base_ok = false;
+            failed_at = index;
             break;
         }
         base_documents.push_back(std::move(*document));
         ++report_.base_files;
     }
-    if (base_ok) {
-        for (const t2d::EcfgDocument& document : base_documents) {
+    if (!base_ok) {
+        // The game's own content is all or nothing - one file that does not parse means none of them
+        // register - so the files behind it were never read at all.
+        for (usize index = failed_at + 1; index < base_files_.size(); ++index) {
+            report_.sources[index].ok = false;
+            report_.sources[index].error =
+                std::format("not read: '{}' failed first", base_files_[failed_at]);
+        }
+    } else {
+        for (usize index = 0; index < base_documents.size(); ++index) {
             std::vector<std::string> unknown_tables;
-            const std::vector<ContentEntry> declared = content_declarations(document, &unknown_tables);
-            const ContentRegistrationReport registered = register_declared_content(registry, declared);
+            const std::vector<ContentEntry> declared = content_declarations(base_documents[index], &unknown_tables);
+            const ContentRegistrationReport registered =
+                register_declared_content(registry, declared, &report_.sources[index].entries);
             report_.base_registered += registered.registered;
             for (const ContentEntry& clash : registered.collisions) {
-                report_.errors.push_back(std::format("content: {} '{}' is registered twice in the game's own files",
-                                                     content_kind_name(clash.kind), clash.name));
+                const std::string message =
+                    std::format("content: {} '{}' is registered twice in the game's own files",
+                                content_kind_name(clash.kind), clash.name);
+                report_.errors.push_back(message);
+                // The file loaded and lost a name doing it: the list says PARTIAL, not OK.
+                if (report_.sources[index].error.empty()) report_.sources[index].error = message;
             }
             for (const std::string& table : unknown_tables) {
                 report_.warnings.push_back(std::format("content: '{}' is not a content kind", table));
@@ -186,6 +214,15 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         std::optional<ContentPack> pack = ContentPack::load(path, &error);
         if (!pack.has_value()) {
             report_.errors.push_back(error);
+            // A pack that does not parse is a pack: the list names it and says why it is not there.
+            ContentSource source;
+            source.kind = SourceKind::Pack;
+            source.path = path;
+            source.id = fs::path(path).stem().string();
+            source.name = source.id;
+            source.ok = false;
+            source.error = std::move(error);
+            report_.sources.push_back(std::move(source));
             continue;
         }
         parsed.push_back(std::move(*pack));
@@ -194,12 +231,24 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     {
         std::vector<ContentPack> unique;
         for (ContentPack& pack : parsed) {
-            const bool duplicate = std::any_of(unique.begin(), unique.end(), [&](const ContentPack& other) {
+            const auto same = std::find_if(unique.begin(), unique.end(), [&](const ContentPack& other) {
                 return other.id == pack.id;
             });
-            if (duplicate) {
-                report_.errors.push_back(std::format("packs: '{}' is defined twice ('{}' and '{}')", pack.id,
-                                                     unique.front().path, pack.path));
+            if (same != unique.end()) {
+                // The message names the pack that owns the id, which is not always the first one parsed.
+                const std::string message = std::format("pack '{}' is defined twice ('{}' and '{}')",
+                                                        pack.id, same->path, pack.path);
+                report_.errors.push_back(message);
+                ContentSource source;
+                source.kind = SourceKind::Pack;
+                source.path = pack.path;
+                source.id = pack.id;
+                source.name = pack.name;
+                source.version = pack.version;
+                source.requirements = pack.requirements;
+                source.ok = false;
+                source.error = message;
+                report_.sources.push_back(std::move(source));
                 continue;
             }
             unique.push_back(std::move(pack));
@@ -266,6 +315,24 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         ++report_.packs;
         packs_.push_back(std::move(pack));
     }
+    // The packs that got as far as being parsed, in the order the pipeline handled them.
+    for (const ContentPack& pack : packs_) {
+        ContentSource source;
+        source.kind = SourceKind::Pack;
+        source.path = pack.path;
+        source.id = pack.id;
+        source.name = pack.name;
+        source.version = pack.version;
+        source.requirements = pack.requirements;
+        source.entries = pack.registered;
+        for (const PackImage& image : pack.images) {
+            if (image.ok) ++source.images;
+            else ++source.images_failed;
+        }
+        source.ok = pack.ok;
+        source.error = pack.error;
+        report_.sources.push_back(std::move(source));
+    }
 
     // --- mod packages -----------------------------------------------------------------------------
     const ModLoadReport& mods = mods_.load(mod_directories_, registry);
@@ -274,6 +341,27 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     report_.mod_content = mods.content_registered;
     for (const std::string& error : mods.errors) report_.errors.push_back(error);
     for (const std::string& warning : mods.warnings) report_.warnings.push_back(warning);
+    for (const LoadedMod& mod : mods.mods) {
+        ContentSource source;
+        source.kind = SourceKind::Mod;
+        source.path = mod.manifest.directory;
+        // A package whose manifest never parsed has no id: the folder it lives in is what it is called
+        // until it has one, which is also what the designer sees in their own file browser.
+        source.id = mod.manifest.id.empty() ? fs::path(mod.manifest.directory).filename().string()
+                                            : mod.manifest.id;
+        source.name = mod.manifest.name.empty() ? source.id : mod.manifest.name;
+        source.version = mod.manifest.version;
+        source.requirements = mod.manifest.requirements;
+        // "Native" is about the package, not about how far it got: a mod whose library refused to
+        // load is still a native mod that failed, which is what the list has to say.
+        source.native = mod.native_loaded || !mod.manifest.native.empty();
+        source.ok = mod.ok;
+        source.error = mod.error;
+        for (const ModContentEntry& entry : mod.registered) {
+            source.entries.push_back(ContentEntry{entry.kind, entry.id, entry.name});
+        }
+        report_.sources.push_back(std::move(source));
+    }
 
     report_.total_content = registry.total_count();
     T2D_INFO("content: {} base, {} pack(s) with {} and {} image(s), {} mod(s) with {} -> {} registered, "

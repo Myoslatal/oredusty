@@ -177,6 +177,7 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"dump-layer", "<0|1>", "write the sandbox layer as text to the log at shutdown"},
         {"playtest", "<0|1>", "start the sandbox in the playtest: the layer as the game draws it"},
         {"pointer", "<x,y>", "playtest: put the pointer on this cell (a scripted run has no mouse)"},
+        {"content-list", "<0|1>", "open the list of loaded content packs and mods at startup"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
@@ -276,6 +277,9 @@ void MineApp::on_start() {
     image_sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     image_sampler_ = ore::rhi::Sampler::create(context.device(), image_sampler_desc);
     if (screen_ == Screen::Sandbox) open_sandbox();
+    // The list is opened last: it reports what the load above actually put in the registry, and a
+    // scripted run has no keyboard to press the key that opens it on.
+    if (options_.content_list) open_content_list(screen_ == Screen::Sandbox ? Screen::Sandbox : Screen::Start);
 }
 
 void MineApp::on_update(f32 delta_seconds) {
@@ -283,6 +287,7 @@ void MineApp::on_update(f32 delta_seconds) {
         case Screen::Start: handle_start_input(); break;
         case Screen::Session: handle_session_input(); break;
         case Screen::Sandbox: handle_sandbox_input(delta_seconds); break;
+        case Screen::Content: handle_content_input(); break;
     }
     // Headless runs have no vsync: without pacing the loop would spin and a screenshot would be taken
     // before the interface settled.
@@ -294,9 +299,10 @@ void MineApp::on_update(f32 delta_seconds) {
 }
 
 void MineApp::handle_start_input() {
-    const ore::Window* window = this->window();
-    if (window == nullptr) return;
-    const ore::InputState& input = window->input();
+    // The input state comes from the application rather than from a window: a headless run has one
+    // too, and the debug input server (ore/debug/input_server.h) feeds exactly this state, which is
+    // what lets a scripted run drive the interface with no window and no keyboard.
+    const ore::InputState& input = this->input();
 
     MenuAction action = MenuAction::None;
     const auto press = [&](ore::Key key, MenuKey mapped) {
@@ -324,6 +330,10 @@ void MineApp::handle_start_input() {
         // faces), so the fonts are reloaded; the glyph cache keeps what it already rasterised.
         locale_.set_language(menu_.language());
         load_fonts();
+    }
+    if (action == MenuAction::OpenContent) {
+        open_content_list(Screen::Start);
+        return;
     }
     if (action == MenuAction::StartSession) begin_session(menu_.session_config());
 }
@@ -443,6 +453,19 @@ void MineApp::draw_start_screen() {
             case RowKind::Seed:
                 draw_line(value_column, y, body_px_, color, std::format("< {:08} >", menu_.seed()));
                 break;
+            case RowKind::Content: {
+                const std::string value = format_localized(locale_.text("row.content.value"),
+                                                           content_.report().packs, content_.report().mods);
+                draw_line(value_column, y, body_px_, color, value);
+                // The row has no left/right, so the only thing to say about it is that it opens.
+                if (focused) {
+                    t2d::TextStyle value_style;
+                    value_style.size_px = body_px_;
+                    draw_line(value_column + text_->measure(value, fonts_, value_style).width + 3.0f * unit_, y,
+                              body_px_, kPalette.text_dim, "< ENTER >");
+                }
+                break;
+            }
             case RowKind::Action:
                 if (focused) draw_line(value_column, y, body_px_, kPalette.text_dim, "< ENTER >");
                 break;
@@ -537,6 +560,248 @@ void MineApp::draw_session_screen() {
 
     y += kBeforeBack;
     draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.back"));
+}
+
+// --- the content list --------------------------------------------------------------------------
+
+void MineApp::refresh_content_list() {
+    const ContentPipelineReport& loaded = content_.report();
+    content_list_.set_sources(loaded.sources, loaded.errors, loaded.warnings);
+}
+
+void MineApp::open_content_list(Screen from) {
+    return_screen_ = from;
+    refresh_content_list();
+    screen_ = Screen::Content;
+    const ContentListTotals totals = content_list_.totals();
+    T2D_INFO("content list: {} source(s), {} content, {} failed, {} message(s)", totals.sources, totals.entries,
+             totals.failed, content_list_.issues().size());
+}
+
+MineApp::ContentLayout MineApp::content_layout() const {
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const u16 title_px = static_cast<u16>(body_px_ * 1.3f);
+    // More messages than this and the rest are counted on one more line: the log has all of them, and
+    // a panel that grows until the list has no room left is worse than a count.
+    constexpr usize kMaxIssueLines = 3;
+
+    ContentLayout layout;
+    const f32 panel_width = std::min(width - 4.0f * padding, 470.0f * unit_);
+    layout.panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
+                                           t2d::Vec2{panel_width * 0.5f, 0.5f});
+    layout.left = layout.panel.min.x + padding;
+    layout.right = layout.panel.max.x - padding;
+
+    // Two columns are as wide as their widest label in the language in force: "REQUIRES" and "依赖"
+    // are very different widths, and a fixed column leaves one of them stranded.
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    for (const char* id : {"content.kind.file", "content.kind.pack", "content.kind.mod"}) {
+        layout.badge_width = std::max(layout.badge_width, text_->measure(locale_.text(id), fonts_, style).width);
+    }
+    for (const char* id : {"content.status.ok", "content.status.partial", "content.status.failed"}) {
+        layout.status_width = std::max(layout.status_width, text_->measure(locale_.text(id), fonts_, style).width);
+    }
+    f32 label_width = 0.0f;
+    for (const char* id : {"content.path", "content.name", "content.requires", "content.error"}) {
+        label_width = std::max(label_width, text_->measure(locale_.text(id), fonts_, style).width);
+    }
+    layout.detail_column = layout.left + label_width + 2.0f * unit_;
+
+    // The header: the title, the summary line, and the rule under them. What sits under the list: the
+    // selected source (two lines) and the load's messages.
+    const f32 header_height = line_for(title_px) + 4.0f + line + 8.0f;
+    const usize issue_count = content_list_.issues().size();
+    layout.issues_shown = std::min(issue_count, kMaxIssueLines);
+    layout.issues_more = issue_count > layout.issues_shown;
+    const f32 issues_height =
+        issue_count == 0 ? 0.0f
+                         : (1.0f + static_cast<f32>(layout.issues_shown) + (layout.issues_more ? 1.0f : 0.0f)) * line +
+                               6.0f;
+    const f32 footer_height = 2.0f * line + issues_height + 6.0f;
+    const f32 hint_height = line + 6.0f;
+
+    // The panel is as tall as its content, like the start and session screens': three packs do not need
+    // a window-tall panel. Past the cap it stops growing and the list scrolls instead, which is what
+    // keeps a hundred mods readable on one screen.
+    constexpr usize kMinListRows = 4;
+    constexpr usize kMaxListRows = 18;
+    const usize wanted_rows = std::clamp(content_list_.row_count(), kMinListRows, kMaxListRows);
+    const f32 wanted_height = padding * 2.0f + header_height + static_cast<f32>(wanted_rows) * line +
+                              footer_height + hint_height;
+    const f32 panel_height = std::min(height - 4.0f * padding, wanted_height);
+    layout.panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
+                                           t2d::Vec2{panel_width * 0.5f, panel_height * 0.5f});
+    layout.list_top = layout.panel.min.y + padding + header_height;
+    layout.list_bottom = layout.panel.max.y - padding - hint_height - footer_height;
+    layout.detail_y = layout.list_bottom + 6.0f;
+    layout.issues_y = layout.detail_y + 2.0f * line + (issue_count == 0 ? 0.0f : 6.0f);
+    // Half a pixel of slack: the panel is sized from a whole number of rows, and dividing that height
+    // back by the line height must not lose the last row to a rounding error.
+    const f32 list_height = std::max(0.0f, layout.list_bottom - layout.list_top);
+    layout.visible_rows = static_cast<usize>((list_height + 0.5f) / line);
+    return layout;
+}
+
+void MineApp::handle_content_input() {
+    const ore::InputState& input = this->input();
+    // How many lines fit is decided by the layout the drawing pass uses, and the model is told before
+    // it is asked to move: otherwise a key could scroll past the bottom of the panel.
+    content_list_.set_visible_rows(content_layout().visible_rows);
+
+    if (input.key_pressed(ore::Key::F5)) {
+        reload_content();
+        return;
+    }
+    const i32 page = static_cast<i32>(std::max<usize>(1, content_list_.visible_rows()));
+    if (input.key_pressed(ore::Key::Up) || input.key_pressed(ore::Key::W)) content_list_.move(-1);
+    if (input.key_pressed(ore::Key::Down) || input.key_pressed(ore::Key::S)) content_list_.move(1);
+    if (input.key_pressed(ore::Key::PageUp)) content_list_.move(-page);
+    if (input.key_pressed(ore::Key::PageDown)) content_list_.move(page);
+    if (input.key_pressed(ore::Key::Home)) content_list_.select_first();
+    if (input.key_pressed(ore::Key::End)) content_list_.select_last();
+    if (input.key_pressed(ore::Key::Enter) || input.key_pressed(ore::Key::Space) ||
+        input.key_pressed(ore::Key::Right)) {
+        content_list_.toggle();
+    }
+    if (input.key_pressed(ore::Key::Left)) content_list_.set_open(content_list_.selected_source(), false);
+    if (input.key_pressed(ore::Key::Escape)) screen_ = return_screen_;
+}
+
+void MineApp::draw_content_screen() {
+    const ContentLayout layout = content_layout();
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const f32 gap = 2.0f * unit_;
+    const u16 title_px = static_cast<u16>(body_px_ * 1.3f);
+    const ContentListTotals totals = content_list_.totals();
+    const f32 full_width = layout.right - layout.left;
+
+    batch_->draw_rect(layout.panel, kPalette.panel_fill);
+    batch_->draw_rect_outline(layout.panel, 2.0f, kPalette.panel_edge);
+
+    f32 y = layout.panel.min.y + padding;
+    y += draw_line(layout.left, y, title_px, kPalette.accent, locale_.text("content.title")) + 4.0f;
+    draw_line(layout.left, y, body_px_, totals.clean() ? kPalette.text_dim : kPalette.error,
+              format_localized(locale_.text("content.summary"), totals.sources, totals.entries, totals.failed));
+    y += line;
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{layout.left, y}, t2d::Vec2{layout.right, y + 2.0f}}, kPalette.panel_edge);
+
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    const auto width_of = [&](std::string_view text) { return text_->measure(text, fonts_, style).width; };
+
+    if (content_list_.row_count() == 0) {
+        draw_fitted(layout.left, layout.list_top, body_px_, kPalette.warning, locale_.text("content.empty"),
+                    full_width);
+    }
+
+    // --- the list ---
+    const usize first = content_list_.first_visible();
+    f32 row_y = layout.list_top;
+    for (usize index = first; index < content_list_.row_count() && index < first + layout.visible_rows; ++index) {
+        const ContentListRow& row = content_list_.row(index);
+        const ContentSource& source = content_list_.source(row.source);
+        const bool focused = index == content_list_.selected();
+        if (focused) {
+            // The row's background is the row's own line box, exactly like the start screen's rows.
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{layout.left - 4.0f, row_y}, t2d::Vec2{layout.right, row_y + line}},
+                              kPalette.highlight);
+        }
+        if (row.is_entry()) {
+            // One name this source registered: the kind and the id a save would store, then the name.
+            const ContentEntry& entry = source.entries[static_cast<usize>(row.entry)];
+            const f32 indent = 3.0f * unit_;
+            draw_fitted(layout.left + indent, row_y, body_px_, focused ? kPalette.accent : kPalette.text,
+                        std::format("{} #{} {}", content_kind_name(entry.kind), entry.id, entry.name),
+                        full_width - indent);
+            row_y += line;
+            continue;
+        }
+
+        draw_line(layout.left, row_y, body_px_, focused ? kPalette.accent : kPalette.text_dim,
+                  locale_.text(source_kind_id(source.kind)));
+
+        // The right hand side of a row is measured from the right edge inwards, so the status column
+        // lines up whatever the language and whatever the counts are.
+        const std::string status{locale_.text(source_status_id(source))};
+        draw_line(layout.right - width_of(status), row_y, body_px_,
+                  !source.ok ? kPalette.error : (source.error.empty() ? kPalette.text_dim : kPalette.warning), status);
+
+        // The counts end where the widest status label begins, so the column lines up whatever each
+        // row's own status is.
+        std::string counts = format_localized(locale_.text("content.count"), source.entries.size());
+        if (source.images > 0) counts += "  " + format_localized(locale_.text("content.art"), source.images);
+        if (source.native) counts += "  " + std::string(locale_.text("content.native"));
+        const f32 counts_x = layout.right - layout.status_width - gap * 2.0f - width_of(counts);
+        draw_line(counts_x, row_y, body_px_, kPalette.text_dim, counts);
+
+        f32 id_right = counts_x - gap;
+        if (!source.version.empty()) {
+            const f32 version_width = width_of(source.version);
+            draw_line(id_right - version_width, row_y, body_px_, kPalette.text_dim, source.version);
+            id_right -= version_width + gap;
+        }
+        const std::string& id = source.id.empty() ? source.path : source.id;
+        const f32 id_x = layout.left + layout.badge_width + gap;
+        draw_fitted(id_x, row_y, body_px_, focused ? kPalette.accent : kPalette.text, id,
+                    std::max(16.0f, id_right - id_x));
+        row_y += line;
+    }
+
+    // --- the selected source ---
+    if (content_list_.row_count() > 0) {
+        const ContentSource& selected = content_list_.source(content_list_.selected_source());
+        const f32 value_width = std::max(16.0f, layout.right - layout.detail_column);
+        f32 detail_y = draw_pair(layout.left, layout.detail_y, layout.detail_column, body_px_,
+                                 locale_.text("content.path"), selected.path, kPalette.text_dim, kPalette.text,
+                                 value_width);
+        // One line for whatever else there is to say, and one thing only: what went wrong first, then
+        // what the source needs, then the name it goes by.
+        if (!selected.error.empty()) {
+            draw_pair(layout.left, detail_y, layout.detail_column, body_px_, locale_.text("content.error"),
+                      selected.error, kPalette.text_dim, kPalette.error, value_width);
+        } else if (!selected.requirements.empty()) {
+            std::string needs;
+            for (const std::string& need : selected.requirements) {
+                if (!needs.empty()) needs += ", ";
+                needs += need;
+            }
+            draw_pair(layout.left, detail_y, layout.detail_column, body_px_, locale_.text("content.requires"),
+                      needs, kPalette.text_dim, kPalette.text, value_width);
+        } else if (!selected.name.empty() && selected.name != selected.id) {
+            draw_pair(layout.left, detail_y, layout.detail_column, body_px_, locale_.text("content.name"),
+                      selected.name, kPalette.text_dim, kPalette.text, value_width);
+        }
+    }
+
+    // --- what the load itself reported ---
+    const t2d::ConstSpan<ContentListIssue> issues = content_list_.issues();
+    if (layout.issues_shown > 0) {
+        f32 issue_y = layout.issues_y;
+        draw_line(layout.left, issue_y, body_px_, kPalette.text_dim,
+                  format_localized(locale_.text("content.messages"), issues.size()));
+        issue_y += line;
+        for (usize index = 0; index < layout.issues_shown; ++index) {
+            const ContentListIssue& issue = issues[index];
+            const std::string text = std::format("{} {}",
+                                                 locale_.text(issue.error ? "content.issue.error" : "content.issue.warn"),
+                                                 issue.text);
+            draw_fitted(layout.left, issue_y, body_px_, issue.error ? kPalette.error : kPalette.warning, text,
+                        full_width);
+            issue_y += line;
+        }
+        if (layout.issues_more) {
+            draw_line(layout.left, issue_y, body_px_, kPalette.text_dim,
+                      format_localized(locale_.text("content.messages.more"), issues.size() - layout.issues_shown));
+        }
+    }
+
+    draw_fitted(layout.left, layout.panel.max.y - padding - line, body_px_, kPalette.text_dim,
+                locale_.text("content.hint.keys"), full_width);
 }
 
 // --- the sandbox -------------------------------------------------------------------------------
@@ -746,6 +1011,9 @@ const ContentPipelineReport& MineApp::load_content() {
 
 void MineApp::reload_content() {
     const ContentPipelineReport& loaded = load_content();
+    // The list is a view of this load, so it is rebuilt with it: a reload that happened while the list
+    // is open must not leave the list describing the load before it.
+    refresh_content_list();
     // One rebind after the last source of names, so a single pass over the map sees the whole registry.
     const SandboxReloadReport remapped = sandbox_.rebind(registry_);
     std::string message = format_localized(locale_.text("sandbox.reloaded"), loaded.total_content,
@@ -802,15 +1070,11 @@ void MineApp::dump_layer() {
 }
 
 void MineApp::handle_session_input() {
-    const ore::Window* window = this->window();
-    if (window == nullptr) return;
-    if (window->input().key_pressed(ore::Key::Escape)) screen_ = Screen::Start;
+    if (this->input().key_pressed(ore::Key::Escape)) screen_ = Screen::Start;
 }
 
 void MineApp::handle_playtest_input(f32 delta_seconds) {
-    const ore::Window* window = this->window();
-    if (window == nullptr) return;
-    const ore::InputState& input = window->input();
+    const ore::InputState& input = this->input();
     const t2d::Aabb2 area = sandbox_grid_area();
     const t2d::Vec2 centre{area.max.x * 0.5f, area.max.y * 0.5f};
     const t2d::Vec2 mouse{input.mouse_x(), input.mouse_y()};
@@ -843,15 +1107,18 @@ void MineApp::handle_playtest_input(f32 delta_seconds) {
         sandbox_.zoom_at(mouse, input.scroll_y() > 0.0f ? 1.15f : 1.0f / 1.15f);
     }
 
-    // The pointer selects what is under it. It is asked again every frame, because the camera can move
-    // under a mouse that is standing still.
-    sandbox_.point_at(mouse);
+    // The pointer selects what is under it, and is asked again every frame because the camera can move
+    // under a mouse that is standing still - but only once there is a mouse. A run with none (headless,
+    // --pointer) keeps the pointer it was given instead of snapping it to wherever "no mouse" is, which
+    // is the top left corner of the screen and, on a centred map, off the map.
+    if (input.cursor_inside_window() || input.mouse_delta_x() != 0.0f || input.mouse_delta_y() != 0.0f) {
+        mouse_seen_ = true;
+    }
+    if (mouse_seen_) sandbox_.point_at(mouse);
 }
 
 void MineApp::handle_sandbox_input(f32 delta_seconds) {
-    const ore::Window* window = this->window();
-    if (window == nullptr) return;
-    const ore::InputState& input = window->input();
+    const ore::InputState& input = this->input();
     const t2d::Aabb2 area = sandbox_grid_area();
     const t2d::Vec2 viewport{area.max.x, area.max.y};
     const t2d::Vec2 centre{area.max.x * 0.5f, area.max.y * 0.5f};
@@ -863,6 +1130,12 @@ void MineApp::handle_sandbox_input(f32 delta_seconds) {
     // the brush: reloading the content files while playtesting is the whole point of playtesting them.
     if (input.key_pressed(ore::Key::P)) set_playtest(!playtest_);
     if (input.key_pressed(ore::Key::F5)) reload_content();
+    // The list is available while editing and while playtesting: it is the answer to "what did that
+    // reload actually load", which is a question both modes ask.
+    if (input.key_pressed(ore::Key::F6)) {
+        open_content_list(Screen::Sandbox);
+        return;
+    }
     if (input.key_pressed(ore::Key::F2)) save_layout();
     if (input.key_pressed(ore::Key::F3)) load_layout();
     if (input.key_pressed(ore::Key::F4)) dump_layer();
@@ -1343,6 +1616,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         case Screen::Start: draw_start_screen(); break;
         case Screen::Session: draw_session_screen(); break;
         case Screen::Sandbox: playtest_ ? draw_playtest_screen() : draw_sandbox_screen(); break;
+        case Screen::Content: draw_content_screen(); break;
     }
     batch_->end();
     dropped_quads_ = batch_->dropped_quads();

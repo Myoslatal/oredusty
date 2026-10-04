@@ -7,6 +7,7 @@ namespace {
 // Locale ids (see assets/text/ui.ecfg), not display text.
 constexpr const char* kWorldLabel = "row.world";
 constexpr const char* kLanguageLabel = "row.language";
+constexpr const char* kContentLabel = "row.content";
 constexpr const char* kSeedLabel = "row.seed";
 constexpr const char* kStartLabel = "row.start";
 constexpr const char* kHostLabel = "row.host";
@@ -52,6 +53,9 @@ void MenuModel::rebuild_rows() {
     usize count = 0;
     rows_[count++] = MenuRow{RowKind::World, MenuAction::None, Role::Single, kWorldLabel};
     rows_[count++] = MenuRow{RowKind::Language, MenuAction::None, Role::Single, kLanguageLabel};
+    // The loaded content is a property of every mode, not of one session: the row sits with the other
+    // things that are true whatever is started.
+    rows_[count++] = MenuRow{RowKind::Content, MenuAction::OpenContent, Role::Single, kContentLabel};
     if (seed_visible()) rows_[count++] = MenuRow{RowKind::Seed, MenuAction::None, Role::Single, kSeedLabel};
     if (mode_ == Mode::Sandbox) {
         // The sandbox is one local layer with no server behind it, so hosting and joining are not
@@ -138,7 +142,9 @@ MenuAction MenuModel::handle(MenuKey key) {
             return MenuAction::None;
         case MenuKey::Confirm: {
             const MenuRow& current = rows_[selected_];
-            if (current.kind == RowKind::Action) return current.action;
+            // Rows that do something when confirmed: the ones that start a session, and the one that
+            // opens the content list. The value rows have no action to run.
+            if (current.kind == RowKind::Action || current.kind == RowKind::Content) return current.action;
             select(selected_ + 1); // step into the list instead of doing nothing
             return MenuAction::None;
         }

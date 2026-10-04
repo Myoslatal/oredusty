@@ -13,6 +13,8 @@ namespace {
 constexpr CliOption kBuiltinOptions[] = {
     {"help", "", "Show this message and exit"},
     {"headless", "", "Render offscreen without creating a window"},
+    {"platform", "<wayland|x11|null>", "Which window system to use (default: whatever GLFW finds)"},
+    {"input-server", "<port>", "Listen on 127.0.0.1 for debug input commands (key, mouse, scroll, shot)"},
     {"frames", "<count>", "Render exactly N frames, then exit"},
     {"size", "<WxH>", "Window / offscreen resolution (default 1280x720)"},
     {"screenshot", "<path>", "Write the rendered frame to a PNG file"},
@@ -79,6 +81,12 @@ void Application::print_help() const {
 
 void Application::apply_command_line() {
     if (const auto headless = cli_.bool_value("headless"); headless.value_or(false)) config_.headless = true;
+    if (const auto platform = cli_.value("platform"); platform.has_value()) {
+        if (*platform == "wayland") config_.window.platform = WindowPlatform::Wayland;
+        else if (*platform == "x11") config_.window.platform = WindowPlatform::X11;
+        else if (*platform == "null") config_.window.platform = WindowPlatform::Null;
+        else ORE_WARN("ignoring unknown --platform '{}' (wayland, x11, null)", *platform);
+    }
     if (const auto frames = cli_.uint_value("frames"); frames.has_value()) config_.frames = *frames;
     if (const auto vsync = cli_.bool_value("vsync"); vsync.has_value()) config_.vsync = *vsync;
     if (const auto validation = cli_.bool_value("validation"); validation.has_value()) {
@@ -88,6 +96,10 @@ void Application::apply_command_line() {
         config_.enable_hot_reload = *hot_reload;
     }
     if (const auto device = cli_.uint_value("device"); device.has_value()) config_.device_index = *device;
+    if (const auto port = cli_.uint_value("input-server"); port.has_value()) {
+        if (*port > 0 && *port <= 65535) config_.input_server_port = static_cast<u16>(*port);
+        else ORE_WARN("ignoring --input-server {}: a port is 1..65535", *port);
+    }
     if (cli_.has("dump-gpu-memory")) config_.dump_gpu_memory = true;
     if (const auto path = cli_.value("screenshot"); path.has_value()) config_.screenshot_path = *path;
     if (const auto level = cli_.value("log-level"); level.has_value()) set_log_level(parse_log_level(*level));
@@ -213,6 +225,19 @@ int Application::run(int argc, char** argv) {
         });
     }
 
+    // The debug input server is started before the application is: a scripted run may well send its
+    // first command while on_start() is still loading content, and those commands wait in the queue.
+    if (config_.input_server_port != 0) {
+        std::string error;
+        input_server_ = debug::InputServer::create(config_.input_server_port, &error);
+        if (input_server_ == nullptr) ORE_WARN("debug input server: {}", error);
+        else {
+            ORE_INFO("debug input server: listening on 127.0.0.1:{} (one command per line: key, mouse, "
+                     "scroll, text, shot, quit)",
+                     input_server_->port());
+        }
+    }
+
     on_start();
 
     const bool capture_requested = !config_.screenshot_path.empty();
@@ -222,6 +247,12 @@ int Application::run(int argc, char** argv) {
 
     while (!quit_requested_) {
         // ---------------------------------------------------------- input ---
+        if (window_ == nullptr) {
+            // A headless run has an input state too - the debug input server feeds it - and it needs
+            // the same per-frame edges a window's does, or a press would read as a press forever.
+            // Window::poll_events() does this for the windowed path.
+            input().begin_frame();
+        }
         if (window_ != nullptr) {
             window_->poll_events();
             if (window_->consume_resized()) {
@@ -236,6 +267,10 @@ int Application::run(int argc, char** argv) {
             input_map_.update(window_->input());
             if (config_.quit_on_escape && window_->input().key_pressed(Key::Escape)) break;
         }
+        // After the window was polled - so begin_frame() has already cleared last frame's edges, and a
+        // press applied here is the press on_update() is about to see - and outside the window check,
+        // because a headless run has an input state too.
+        pump_debug_input();
 
         // ------------------------------------------------------- hot reload -
         if (config_.enable_hot_reload && hot_reloader_.watched_count() > 0) {
@@ -313,6 +348,21 @@ std::string Application::shader_path(std::string_view name) const {
 InputState& Application::input() const {
     static InputState headless_input;
     return window_ != nullptr ? window_->input() : headless_input;
+}
+
+void Application::pump_debug_input() {
+    if (input_server_ == nullptr) return;
+    for (const debug::InputEvent& action : input_server_->pump(input())) {
+        switch (action.kind) {
+            case debug::InputEvent::Kind::Quit: quit(); break;
+            case debug::InputEvent::Kind::Screenshot:
+                // Requested before the frame is rendered, so the file holds the frame this command
+                // asked for rather than the one before it.
+                renderer_->request_screenshot(action.text);
+                break;
+            default: break;   // the rest was applied to the input state by pump()
+        }
+    }
 }
 
 void Application::watch_shader(std::string path) { hot_reloader_.watch(path); }

@@ -4,6 +4,8 @@ ore_add_test(test_core_image test_core_image.cpp)
 ore_add_test(test_core_cli test_core_cli.cpp)
 ore_add_test(test_core_time test_core_time.cpp)
 ore_add_test(test_input_map test_input_map.cpp)
+# The debug input server: commands over a loopback socket, applied to an InputState.
+ore_add_test(test_debug_input test_debug_input.cpp)
 ore_add_test(test_shader_compile test_shader_compile.cpp)
 ore_add_test(test_scene test_scene.cpp)
 ore_add_test(test_camera test_camera.cpp)

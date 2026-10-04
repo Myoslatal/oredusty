@@ -13,6 +13,7 @@
 // per language (a CJK face for Chinese, the Latin face for everything else).
 #pragma once
 
+#include <mine/content_list.h>
 #include <mine/content_pack.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
@@ -84,6 +85,9 @@ struct MineOptions {
     /// playtest screenshot without the pointer would not show the half of it that is the pointer.
     bool has_pointer = false;
     t2d::Vec2 pointer_cell{};
+    /// Open the list of loaded content packs and mods at startup: a scripted run has no keyboard to
+    /// press the key that opens it on.
+    bool content_list = false;
 };
 
 class MineApp final : public ore::Application {
@@ -101,10 +105,18 @@ protected:
     [[nodiscard]] ore::ConstSpan<ore::CliOption> cli_options() const override;
 
 private:
-    enum class Screen : u8 { Start, Session, Sandbox };
+    enum class Screen : u8 { Start, Session, Sandbox, Content };
 
     void handle_start_input();
     void handle_session_input();
+    /// The content list: move, open a source, reload. Escape goes back to the screen it was opened
+    /// from, because the list is a view of the game, not a place in it.
+    void handle_content_input();
+    /// Opens the list of everything the registry was filled from; Escape returns to \p from.
+    void open_content_list(Screen from);
+    /// Rebuilds the list from the last load. Called when the screen opens and after every reload, so
+    /// what it shows is always the registry that is actually in force.
+    void refresh_content_list();
     /// The playtest half of the sandbox screen: the camera and the pointer, and nothing that edits.
     void handle_playtest_input(f32 delta_seconds);
     void handle_sandbox_input(f32 delta_seconds);
@@ -152,8 +164,29 @@ private:
     void draw_start_screen();
     void draw_session_screen();
     void draw_sandbox_screen();
+    /// Every source the registry was filled from, one line each, with the selected source's detail and
+    /// the load's own messages under it.
+    void draw_content_screen();
     /// The layer as the game draws it, plus the pointer and one line saying what it is over.
     void draw_playtest_screen();
+
+    /// Where the content screen puts things. The lines of the list, the room left for the selected
+    /// source and the room the load's messages take all come from one place, so the pass that draws
+    /// and the pass that decides how many lines fit cannot disagree about either.
+    struct ContentLayout {
+        t2d::Aabb2 panel{};
+        f32 left = 0.0f, right = 0.0f;
+        f32 badge_width = 0.0f;    ///< the widest of FILE / PACK / MOD, so the ids line up
+        f32 status_width = 0.0f;   ///< the widest of OK / PARTIAL / FAILED, so the counts line up
+        f32 detail_column = 0.0f;  ///< where a detail line's value starts
+        f32 list_top = 0.0f, list_bottom = 0.0f;
+        f32 detail_y = 0.0f;
+        f32 issues_y = 0.0f;
+        usize visible_rows = 0;
+        usize issues_shown = 0;    ///< messages drawn; the rest are counted on one more line
+        bool issues_more = false;
+    };
+    [[nodiscard]] ContentLayout content_layout() const;
 
     [[nodiscard]] t2d::Aabb2 sandbox_grid_area() const;
     [[nodiscard]] t2d::Aabb2 sandbox_panel_area() const;
@@ -200,6 +233,14 @@ private:
     /// screen, not a fourth screen: the layer, the camera and the content stay the same, only the
     /// chrome and the input change.
     bool playtest_ = false;
+    /// True once a pointer has actually been seen. The playtest's pointer follows the mouse, but a
+    /// scripted run has no mouse at all (--pointer puts the pointer somewhere on purpose, and the
+    /// debug input server may move it later): until one exists, the scripted pointer is the pointer.
+    bool mouse_seen_ = false;
+    /// The content list, and the screen Escape goes back to. It is opened from the start screen and
+    /// from the sandbox, and both expect to get where they came from.
+    ContentListModel content_list_{};
+    Screen return_screen_ = Screen::Start;
 
     t2d::Locale locale_{};
     Scope<t2d::Font> latin_font_;

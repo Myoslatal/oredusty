@@ -204,7 +204,20 @@ T2D_TEST(a_missing_or_cyclic_requirement_is_refused) {
         const ModLoadReport& report = host.load({scratch.root()}, registry);
         T2D_CHECK_FALSE(report.clean());
         T2D_CHECK(mentions(report.errors, "is defined twice"));
-        T2D_CHECK_EQ(report.mods.size(), 1u);
+        // Both packages are in the report: one is running, the other is a package the host looked at
+        // and refused, and the content list has to be able to show it. What did not load comes first,
+        // so a run with a problem in it opens on the problem.
+        T2D_REQUIRE(report.mods.size() == 2u);
+        const LoadedMod* refused = nullptr;
+        const LoadedMod* running = nullptr;
+        for (const LoadedMod& mod : report.mods) {
+            (mod.ok ? running : refused) = &mod;
+        }
+        T2D_REQUIRE(refused != nullptr);
+        T2D_REQUIRE(running != nullptr);
+        T2D_CHECK_EQ(refused->manifest.id, std::string("same"));
+        T2D_CHECK(refused->error.find("is defined twice") != std::string::npos);
+        T2D_CHECK_EQ(host.count(), 1u);
     }
 }
 

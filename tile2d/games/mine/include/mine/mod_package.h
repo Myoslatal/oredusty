@@ -62,7 +62,10 @@ struct ModContentEntry {
     std::string name;
 };
 
-/// One package the host took on.
+/// One package the host looked at. A package it refused before it got as far as loading anything - a
+/// manifest that does not parse, an id two packages claim - is in here too, with whatever the manifest
+/// managed to say: "what did the host look at" and "what is running" are different questions, and the
+/// content list (content_list.h) asks the first one.
 struct LoadedMod {
     ModManifest manifest;
     std::vector<std::string> content_paths;   ///< absolute paths, in load order
@@ -74,6 +77,8 @@ struct LoadedMod {
 
 /// What one load() did.
 struct ModLoadReport {
+    /// Every package that was found, in the order the host handled it: the ones it refused, the ones
+    /// whose requirements were missing or cyclic, then the ones it loaded (dependency order).
     std::vector<LoadedMod> mods;
     std::vector<std::string> errors;
     std::vector<std::string> warnings;

@@ -99,6 +99,7 @@ int main(int argc, char** argv) {
         options.pointer_cell.y = static_cast<mine::f32>(std::strtof(pointer->substr(separator + 1).c_str(), nullptr));
         options.has_pointer = true;
     }
+    if (const auto list = cli.bool_value("content-list"); list.has_value()) options.content_list = *list;
 
     mine::MineApp application(std::move(options));
     return application.run(argc, argv);

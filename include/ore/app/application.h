@@ -12,6 +12,7 @@
 #include <ore/core/log.h>
 #include <ore/core/time.h>
 #include <ore/core/types.h>
+#include <ore/debug/input_server.h>
 #include <ore/platform/input.h>
 #include <ore/platform/window.h>
 #include <ore/renderer/renderer.h>
@@ -54,6 +55,10 @@ struct AppConfig {
     bool dump_gpu_memory = false;
     /// Seconds between automatic log lines with frame statistics (0 disables them).
     f32 stats_interval = 0.0f;
+    /// Port for the debug input server (see debug/input_server.h), 0 to leave it off. It listens on
+    /// 127.0.0.1 and feeds key, mouse and scroll events into the same InputState the window fills in,
+    /// which is how a scripted run drives an application whose window it cannot type into.
+    u16 input_server_port = 0;
 };
 
 class Application {
@@ -69,6 +74,9 @@ public:
     [[nodiscard]] rhi::GraphicsContext& context() const { return *context_; }
     [[nodiscard]] Window* window() const { return window_.get(); }
     [[nodiscard]] InputState& input() const;
+    /// The debug input server, or nullptr when none was asked for. Exposed so a test can drive the
+    /// same path the frame loop uses.
+    [[nodiscard]] debug::InputServer* input_server() const { return input_server_.get(); }
     [[nodiscard]] InputMap& input_map() { return input_map_; }
     [[nodiscard]] const FrameTimer& frame_timer() const { return timer_; }
     [[nodiscard]] u64 frame_count() const { return frame_count_; }
@@ -125,6 +133,11 @@ private:
     rhi::ShaderHotReloader hot_reloader_{};
     u64 frame_count_ = 0;
     bool quit_requested_ = false;
+    Scope<debug::InputServer> input_server_;
+    /// Applies everything the debug input server has received to input() and runs the actions that
+    /// belong to the application (a screenshot, a quit). Called once per frame, after the window has
+    /// been polled, so a press applied here is the press on_update() is about to see.
+    void pump_debug_input();
     f64 stats_accumulator_ = 0.0;
 };
 

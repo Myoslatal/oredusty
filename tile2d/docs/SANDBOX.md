@@ -25,6 +25,7 @@
 | 打开就想看某个位置？ | `--view x,y[,zoom]`：直接停在某格、某个缩放，而不是整图入框 |
 | 这一层大概长什么样？ | `--fill scatter` 用注册到的内容铺一层（同 seed 完全可复现） |
 | 这一层**玩起来**是什么样？ | 按 `P` 进**试玩**（§9）：同一层，按游戏的方式画——没有面板、网格线、标签与压暗，输入只有相机与指针 |
+| **谁**加载了、谁没加载？ | 按 `F6` 打开**内容列表**（§10）：一行一个来源（本体文件 / 内容包 / 模组包），没加载成功的也在里面，展开能看它注册的每一条内容 |
 
 ## 2. 运行
 
@@ -51,7 +52,7 @@
 
 选中沙盒时只有一行动作 —— 主持 / 加入不会出现，因为沙盒是一个本地层，后面没有服务器：
 
-![开始界面里的沙盒](images/sandbox_menu_zh_hans.png)
+![开始界面里的沙盒](../games/mine/docs/images/sandbox_menu_zh_hans.png)
 
 | 选项 | 含义 |
 |---|---|
@@ -72,6 +73,8 @@
 | `--dump-layer <0\|1>` | 退出时把这一层按文字打进日志（等价于按 F4） |
 | `--playtest <0\|1>` | 直接以**试玩**状态启动（等价于进去后按 `P`） |
 | `--pointer <x,y>` | 试玩：把指针放在这一格。脚本化运行没有鼠标，而试玩的截图少了指针就不算试玩 |
+| `--content-list <0\|1>` | 直接以**内容列表**启动（等价于按 `F6`） |
+| `--input-server <port>` | 在 127.0.0.1 上监听**调试输入**（§10）：键盘/鼠标/滚轮/截图/退出，一行一条命令 |
 
 ## 3. 按键
 
@@ -92,6 +95,7 @@
 | F2 / F3 | 写出 / 读入布局文件 |
 | F4 | 把这一层按文字打进日志 |
 | P | **试玩 / 返回编辑**：同一层、同一个相机，换成游戏画法与游戏输入（§9） |
+| F6 | **内容列表**（§10）：谁加载了、谁没加载、每个来源注册了什么。列表里 `F5` 同样重载，`Esc` 回到沙盒 |
 | Esc | 试玩中：返回编辑；编辑中：回到开始界面 |
 
 > 指针坐标在**平台层**就换算成了帧缓冲像素（`ore::PixelScale`，见 Ore 的 `docs/ARCHITECTURE.md`
@@ -157,28 +161,28 @@ C 里 51 个格子全部保留名字、id 为 0。
 
 截图（真机，Intel Arc Pro 130T/140T；前五张为离屏渲染，最后一张是真实窗口）：
 
-![空沙盒](images/sandbox_empty.png)
+![空沙盒](../games/mine/docs/images/sandbox_empty.png)
 
-![带内容，bands](images/sandbox_en.png)
+![带内容，bands](../games/mine/docs/images/sandbox_en.png)
 
-![散布 + 简体界面](images/sandbox_zh_hans.png)
+![散布 + 简体界面](../games/mine/docs/images/sandbox_zh_hans.png)
 
-![繁體界面](images/sandbox_zh_hant.png)
+![繁體界面](../games/mine/docs/images/sandbox_zh_hant.png)
 
-![内容被删掉后：51 个格子标为缺失](images/sandbox_missing.png)
+![内容被删掉后：51 个格子标为缺失](../games/mine/docs/images/sandbox_missing.png)
 
 窗口模式（真实窗口，DPI 缩放 1.67）：请求 2133×1200，窗口管理器按可用桌面把它调成 1920×1131，
 帧缓冲因而是 3200×1885（截图就是它）——界面单位与格子尺寸跟着窗口走：
 
-![窗口模式](images/sandbox_window.png)
+![窗口模式](../games/mine/docs/images/sandbox_window.png)
 
 三个瓦片层：当前层（第 2 层）正常亮度并带标签，另外两层压暗，整叠自下而上叠起来：
 
-![三个瓦片层](images/sandbox_layers_en.png)
+![三个瓦片层](../games/mine/docs/images/sandbox_layers_en.png)
 
 同一份三层布局，换成删掉了 `placeholder_ore` 的数据文件：138 个格子在三层上被标为缺失（红框），没有一个拿到新的数字：
 
-![三层布局里的缺失内容](images/sandbox_layers_missing_zh_hans.png)
+![三层布局里的缺失内容](../games/mine/docs/images/sandbox_layers_missing_zh_hans.png)
 
 ## 6. 它不做什么（边界）
 
@@ -225,15 +229,15 @@ C 里 51 个格子全部保留名字、id 为 0。
 
 512×512、四层、同一份散布数据，整图入框（0.99 像素/格，`VIEW` 显示 832x512 可见格、按块采样）：
 
-![整张 512x512 地图](images/sandbox_bigmap_en.png)
+![整张 512x512 地图](../games/mine/docs/images/sandbox_bigmap_en.png)
 
 同一张图放大到 20 像素/格（`--view 200,150,20`：网格线与标签回来，贴图按格子绘制）：
 
-![放大到 20 像素/格](images/sandbox_bigmap_zoom_en.png)
+![放大到 20 像素/格](../games/mine/docs/images/sandbox_bigmap_zoom_en.png)
 
 简体界面下同一张图：
 
-![简体界面的整图视图](images/sandbox_bigmap_zh_hans.png)
+![简体界面的整图视图](../games/mine/docs/images/sandbox_bigmap_zh_hans.png)
 
 ## 8. 与工程约束的关系
 
@@ -269,19 +273,64 @@ C 里 51 个格子全部保留名字、id 为 0。
 # 试玩期间 F5 照样重载内容：改一行数据文件、按 F5，看到的就是改完之后玩起来的样子
 ```
 
-![试玩，bands 填充](images/sandbox_playtest_en.png)
+![试玩，bands 填充](../games/mine/docs/images/sandbox_playtest_en.png)
 
 内容包带贴图时，试玩画的就是**设计者的图片**（`docs/MODS.md`）：
 
-![试玩，内容包的贴图，简体界面](images/sandbox_playtest_zh_hans.png)
+![试玩，内容包的贴图，简体界面](../games/mine/docs/images/sandbox_playtest_zh_hans.png)
 
 真实窗口（DPI 缩放 1.67，帧缓冲 3200×1885）：界面单位与格子尺寸跟着窗口走，试玩也一样。
 
-![试玩，真实窗口](images/sandbox_playtest_window.png)
+![试玩，真实窗口](../games/mine/docs/images/sandbox_playtest_window.png)
 
 **一处例外**：内容缺失的格子仍然画红框。它是数据错误，而试玩正是最容易发现它的时候——除此之外，
 试玩里出现的每一个像素都来自设计者的数据。
 
 试玩里**出错的信息会顶掉 `VIEW` 那一格**（红色，长了就用省略号截断）：重载失败在试玩里也必须看得见。
 成功的信息不占这一格——它描述的东西就在屏幕上。
+
+## 10. 内容列表与调试输入服务器
+
+**内容列表**（开始界面的 `CONTENT` 行、沙盒里的 `F6`、`--content-list 1`）把这次加载摊开成一张表：
+一行一个来源，按加载顺序（本体文件 → 内容包 → 模组包），**没加载成功的也在表里**，状态列写
+`OK` / `PARTIAL` / `FAILED`，展开一行就能看到它注册的每一条内容与 id。它是什么、每一列是什么意思，
+见 `docs/MODS.md` §5——那里是内容包与模组包的文档，列表是它们的"结果页"。
+
+**调试输入服务器**是它的驱动方式，也是沙盒与试玩的驱动方式：`--input-server <port>` 在
+**127.0.0.1** 上开一个 TCP 端口，一行一条命令，喂给的是**窗口层填的同一个 `InputState`**——
+游戏分不出这是真人按键还是脚本按键，所以走的是完整的真实路径（界面状态机、沙盒、试玩全都一样）：
+
+| 命令 | 作用 |
+|---|---|
+| `key <down\|up\|press> <NAME>` | 按键；`press` 是同一帧内的按下+抬起（一次"点一下"）。名字见下 |
+| `mouse move <x> <y>` | 指针移到帧缓冲像素 (x,y)——和界面绘制用的是同一套坐标 |
+| `mouse <down\|up\|click> <left\|right\|middle>` | 鼠标键 |
+| `scroll <x> <y>` | 滚轮增量 |
+| `text <utf8...>` | 输入的字符 |
+| `shot <path.png>` | 把**下一帧**渲染结果写成 PNG |
+| `quit` | 请应用退出 |
+
+* 键名大小写与分隔符都随意：`F6` / `f6`、`PAGE_UP` / `PAGE-UP` / `pageup`、`A`..`Z`、`0`..`9`、
+  `SPACE`、`ENTER`/`RETURN`、`ESCAPE`、`TAB`、`HOME`/`END`、`LEFTBRACKET`、`KPADD`……
+* **回复 `ok` 表示帧循环已经把它应用了**，而不是"socket 收到了"：所以读到 `ok` 之后再截图，
+  截到的就是这条命令之后的那一帧；写错的命令回 `error ...`；5 秒内没有帧来取（窗口被最小化、
+  应用卡住、正在写一张很大的截图）回 `timeout`，并且**这条命令作废**（不会迟到生效）。
+* 为什么需要它：窗口不一定敲得进去。Wayland 会话自己决定谁拥有键盘，嵌套合成器会先截走事件，
+  无头运行根本没有窗口——而这三件事对应用都没有意义，它读的就是一个 `InputState`。
+  这个服务器直接填那个状态，于是"脚本化验证"不再依赖合成器、焦点与指针位置。
+
+它同时是**唯一能驱动无头运行的方式**：`--headless` 没有窗口，键盘自然没有来源，
+但 `--input-server` 让脚本按 `F6`、按 `P`、点格子、截图，全部走真实代码路径：
+
+```sh
+# 无头跑一遍：开列表 → 展开第一行 → 截两帧 → 退出
+./build/debug/games/mine/mine_game --world sandbox --start 1 --content <你的内容.ecfg> \
+    --input-server 7777 --headless --frames 100000 &
+printf 'key press F6\nshot /tmp/a.png\nkey press RETURN\nshot /tmp/b.png\nquit\n' | nc 127.0.0.1 7777
+```
+
+`docs/MODS.md` §5 的列表截图就是这么来的（真实窗口的 `sandbox_window.png` 也一样，
+只是把 `--headless` 去掉）。框架侧实现：`ore/debug/input_server.h`；单测
+`test_debug_input`（6 用例 / 103 断言：命令解析、错误信息、真实 socket 往返、按住不放与点击的区别、
+两个服务器同时监听）。
 

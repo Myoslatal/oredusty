@@ -284,9 +284,20 @@ A pack that has to *run* something is a mod package instead:
   logic, outside the binary.
 * **Order is a dependency graph.** `requires` is honoured (a missing or cyclic requirement is refused, not
   guessed at), and the order is deterministic, so ids do not move between runs.
+* **What loaded is a screen, not a log line.** The start screen's `CONTENT` row, `F6` in the sandbox and
+  `--content-list 1` all open the **content list**: one line per source in load order — including the
+  ones that did **not** load, which is the line a designer opens it for — with its version, what it
+  contributed, a status of `OK` / `PARTIAL` / `FAILED`, and, opened up, every content entry it
+  registered with the id a save would store.
 
-Guide, ABI and limits: [docs/MODS.md](docs/MODS.md). Loading a library is not a sandbox: a native mod
-runs with the game's privileges.
+  ![The content list](games/mine/docs/images/content_list_en.png)
+
+  ![One source opened: what it registered](games/mine/docs/images/content_list_fold_en.png)
+
+  ![A pack that does not parse, and the load's own messages](games/mine/docs/images/content_list_broken_en.png)
+
+Guide, ABI and limits: [docs/MODS.md](docs/MODS.md) (§5 is the list). Loading a library is not a sandbox:
+a native mod runs with the game's privileges.
 
 ## The game on top of the framework
 
@@ -350,8 +361,17 @@ separately.
   outlined with one line of HUD naming it. It is not a game mode — nothing simulates, nothing is demanded and a
   click does nothing yet (the action table is content, §7.14) — it is the engine half, and the first user of M2's
   world view.
+* **Press `F6` for the content list** (the start screen's `CONTENT` row opens the same screen, `--content-list 1`
+  starts in it): every source the registry was filled from, one line each, failures included, with the content
+  each one registered underneath it.
+* **`--input-server <port>` drives the game over a socket.** A window cannot always be typed into — a Wayland
+  session decides who owns the keyboard, a nested compositor takes the events first, a headless run has no window
+  at all — but the application only ever reads an `InputState`, so the debug server fills that in instead, on
+  loopback, through the same calls the window layer makes. One text command per line (`key`, `mouse`, `scroll`,
+  `text`, `shot`, `quit`), and `ok` means the frame loop has *applied* it, so a screenshot taken after a reply
+  is a screenshot of the result. This is how every screenshot below was taken, including the headless ones.
 
-Usage, keys and limits: [docs/SANDBOX.md](docs/SANDBOX.md).
+Usage, keys and limits: [docs/SANDBOX.md](docs/SANDBOX.md) (§10 is the list and the debug input server).
 
 ## Verification status
 
@@ -360,11 +380,15 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 18/18 tests green |
-| `release` | 18/18 tests green |
-| `asan` (Address + UB sanitizers) | 18/18 tests green |
-| `tsan` (ThreadSanitizer) | 18/18 tests green |
+| `debug` | 19/19 tests green |
+| `release` | 19/19 tests green |
+| `asan` (Address + UB sanitizers) | 19/19 tests green |
+| `tsan` (ThreadSanitizer) | 19/19 tests green |
 | `no-renderer` | 9/9 tests green, no Vulkan, GLFW or game binary |
+
+Ore itself is a separate tree with its own suite (13/13 in `debug`, `release` and `asan`), which now includes
+`test_debug_input`: the debug input server's command parser and a real socket round trip that ends in an
+`InputState`.
 
 Hardware: **Intel Arc Pro 130T/140T (Arrow Lake-P), Mesa 26.2.3, Wayland**. The windowed path is
 verified by real screenshots, and the offscreen path is what the render test asserts on.

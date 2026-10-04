@@ -21,12 +21,12 @@ using t2d::usize;
 [[nodiscard]] const char* mode_value_id(Mode mode);
 
 /// What the start screen asks the application to do.
-enum class MenuAction : u8 { None, StartSession, Quit };
+enum class MenuAction : u8 { None, StartSession, OpenContent, Quit };
 
 /// One key press, translated from the platform so the model never sees a window.
 enum class MenuKey : u8 { Up, Down, Left, Right, Confirm, Back, Randomise };
 
-enum class RowKind : u8 { World, Language, Seed, Action };
+enum class RowKind : u8 { World, Language, Seed, Content, Action };
 
 struct MenuRow {
     RowKind kind = RowKind::Action;
@@ -39,8 +39,8 @@ struct MenuRow {
 
 class MenuModel {
 public:
-    /// World, language, seed (endless only) and up to four actions.
-    static constexpr usize kMaxRows = 7;
+    /// World, language, content, seed (endless only) and up to four actions.
+    static constexpr usize kMaxRows = 8;
     /// Seeds are kept in a range that stays readable on screen.
     static constexpr u32 kMinSeed = 1;
     static constexpr u32 kMaxSeed = 99999999u;

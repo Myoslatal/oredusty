@@ -26,6 +26,8 @@ add_library(ore STATIC
     platform/window.cpp
     platform/input.cpp
 
+    debug/input_server.cpp
+
     math/camera.cpp
 
     renderer/mesh.cpp

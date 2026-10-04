@@ -40,6 +40,8 @@ Ore 是一个紧凑、可读、依赖极少的现代 C++ 游戏开发框架：�
 - 输入状态（按下 / 本帧按下 / 本帧抬起、鼠标增量、滚轮、文本输入）+ 可命名绑定的 `InputMap`
 - 指针坐标在平台层换算成**帧缓冲像素**（`PixelScale`）：缩放显示器上命中测试与绘制用同一套坐标
 - 无显示器环境自动降级：`--headless` 走离屏渲染，不创建窗口也不需要 surface
+- **调试输入服务器**（`--input-server`）：隔着 loopback socket 按键、动鼠标、滚轮、输入文字、截图、退出，
+  喂给的是窗口层填的同一个 `InputState`——脚本化验证因此不依赖合成器、焦点与指针位置，无头运行也能被驱动
 
 **渲染后端（自己实现的 RHI，无第三方 Vulkan 封装）**
 - `Instance` / `Device`：Vulkan 1.3 特性链、队列族选择（graphics / compute / transfer / present）、
@@ -137,6 +139,36 @@ ctest --test-dir build/debug --output-on-failure
 | `--hot-reload <0\|1>` | 监听着色器文件改动（配合 `watch_shader()`） |
 | `--dump-gpu-memory` | 退出时打印 GPU 分配器统计 |
 | `--shader-dir <path>` | 指定 `.spv` 搜索目录 |
+| `--platform <wayland\|x11\|null>` | 指定窗口系统（默认由 GLFW 自己挑，同时可用时优先 Wayland） |
+| `--input-server <port>` | 在 127.0.0.1 上开**调试输入服务器**：一行一条命令驱动键盘/鼠标/滚轮/截图/退出（见下） |
+
+### 调试输入服务器（`--input-server`）
+
+窗口不一定敲得进去：Wayland 会话自己决定谁拥有键盘，嵌套合成器会先截走事件，无头运行根本没有窗口。
+但应用读的只是一个 `InputState`——所以这个服务器直接填那个状态，走的是窗口层用的同一批调用
+（`set_key` / `set_mouse_button` / `add_pointer_event` / `add_scroll` / `add_text`），
+应用分不出真人按键与脚本按键：
+
+```bash
+./build/debug/examples/ore_example_03_scene --input-server 7777 --headless --frames 100000 &
+printf 'key press F1\nmouse move 300 200\nmouse click left\nshot /tmp/frame.png\nquit\n' | nc 127.0.0.1 7777
+```
+
+| 命令 | 作用 |
+|---|---|
+| `key <down\|up\|press> <NAME>` | 按键（`F1`..`F12`、`A`..`Z`、`0`..`9`、`SPACE`、`ENTER`、`ESCAPE`、`PAGE_UP`…，大小写与分隔符随意）；`press` 是同一帧内的按下+抬起 |
+| `mouse move <x> <y>` | 指针移到帧缓冲像素 (x,y) |
+| `mouse <down\|up\|click> <left\|right\|middle>` | 鼠标键 |
+| `scroll <x> <y>` | 滚轮增量 |
+| `text <utf8...>` | 输入字符 |
+| `shot <path.png>` | 把**下一帧**渲染结果写成 PNG（可以在一次运行里截多张） |
+| `quit` | 请应用退出 |
+
+**回复 `ok` 表示帧循环已经把它应用了**（不是"socket 收到了"）：读到 `ok` 之后再截图，截到的就是这条
+命令之后的那一帧。写错的命令回 `error ...`；5 秒内没有帧来取（窗口最小化、应用卡住、正在写一张很大的
+截图）回 `timeout`，并且这条命令作废（不会迟到生效）。它只监听 **127.0.0.1**、只在给了
+`--input-server` 时存在——它能做玩家坐在键盘前能做的一切，这是调试设施，不是安全边界。
+实现：`include/ore/debug/input_server.h`（服务器一个线程，只做 socket；事件交给帧循环在主线程应用）。
 
 一键验证脚本（配置 + 构建 + 全部测试 + 三张截图，自动探测软件 Vulkan 驱动）：
 
@@ -316,6 +348,7 @@ ctest --test-dir build/debug --output-on-failure        # 全部
 | `test_shader_compile` | 运行期编译仓库内全部 GLSL、错误诊断、`#include` 解析、热重载轮询 |
 | `test_scene` | ECS：句柄代际回收、稀疏集一致性、`each<>` 组合、层级矩阵、5000 实体压力 |
 | `test_camera` | 投影/视图矩阵的 Vulkan 约定、AABB、飞行与轨道相机行为 |
+| `test_debug_input` | 调试输入服务器：命令解析（键名、点击=按下+抬起、错误信息）、真实 socket 往返落到 `InputState`、按住与点一下的区别、两个服务器同时监听 |
 | `test_gpu_smoke` | 设备可用性（无设备时 SKIP） |
 | `test_gpu_render` | **离屏渲染并断言像素**：清屏回读、push constant 变色的全屏三角形、缓冲上传往返、纹理上传往返、mip 链、离屏尺寸变更、分配器统计 |
 | `test_gpu_swapchain` | **真实交换链的呈现路径**：借助 `VK_EXT_headless_surface` 创建无窗口交换链，验证 acquire → 渲染 → submit → present、呈现图像截图、resize 后重建交换链；驱动不支持该扩展时整组 SKIP |

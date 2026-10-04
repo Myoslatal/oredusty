@@ -22,7 +22,7 @@
     ./build/debug/games/mine/mine_game --world story --start 1 --packs packs
     ./build/debug/games/mine/mine_game --world sandbox --start 1 --pack packs/01_base.ecfg
 
-![会话界面里的内容包](images/session_packs_en.png)
+![会话界面里的内容包](../games/mine/docs/images/session_packs_en.png)
 
 ```
 pack::                        # 可选。没有它，包的身份就是文件名（去掉扩展名）
@@ -48,7 +48,7 @@ structure::
   路径相对**本包目录**。加载时引擎校验文件存在、是 PNG（Ore 自带解码器），不存在/不是 PNG 都会报告；
   能解码的图片被装进一张图集，沙盒直接画出**你写的贴图**而不是占位颜色：
 
-  ![内容包里的贴图](images/sandbox_pack_art_en.png)
+  ![内容包里的贴图](../games/mine/docs/images/sandbox_pack_art_en.png)
 
   ```sh
   # 本体占位内容 + 仓库里的三个测试包（其中两个带 art/*.png），bands 填充：每项内容一条横带
@@ -74,7 +74,7 @@ structure::
 
 `--mods` 可重复。模组的内容与本体内容进入**同一个注册表**，id 按注册顺序分配，本体内容先注册。
 
-![本体内容 + 两个模组](images/sandbox_mods_en.png)
+![本体内容 + 两个模组](../games/mine/docs/images/sandbox_mods_en.png)
 
 ```sh
 # 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 5 项 + 模组 7 项 = 12 项，bands 填充
@@ -192,7 +192,7 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 ## 4. 真机验证
 
 仓库里带两个示例包（`games/mine/tests/mods/`，CMake 把它们组装进构建目录，和真实安装的布局一致），
-`test_mod_package` 有 9 个用例 / 102 个断言覆盖它们，真机运行输出：
+`test_mod_package` 有 9 个用例 / 104 个断言覆盖它们，真机运行输出：
 
     mods: 2 of 2 loaded (1 native), 6 content registered, 0 error(s)
     sandbox: RELOAD: +0 -0   0 CELLS REMAPPED   0 LOST   MODS: 2 LOADED, 1 NATIVE, 6 CONTENT
@@ -202,7 +202,37 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 内容表名拼错（警告而非错误）、原生库缺失、原生库不是库、ABI 版本不符、库自称 id 与清单不符、
 `on_load` 返回非 0。以及：重载后 id 完全一致，不清理注册表而重复加载时全部报冲突。
 
-## 5. 现在还不能做的（边界）
+## 5. 内容列表：在游戏里看谁加载了
+
+加载结果不只在日志里。**开始界面**的 `CONTENT` 行（值就是 `1 PACK(S), 0 MOD(S)`）回车打开**内容列表**，
+沙盒里按 `F6` 打开同一个列表，`--content-list 1` 直接以它启动。一行一个来源，按加载顺序排：
+本体文件 → 内容包 → 模组包；**没加载成功的也在列表里**——"哪个包没进来"正是打开它的原因。
+
+![内容列表](../games/mine/docs/images/content_list_en.png)
+
+* 每行：`FILE` / `PACK` / `MOD` 徽标、id、版本、贡献的内容数与贴图数（`NATIVE` 标记带代码的模组），
+  最右是状态 `OK` / `PARTIAL` / `FAILED`。**PARTIAL = 加载了但丢了东西**（例如某个名字已被先注册者占用）。
+* 选中一行，下面给出它的路径；有错误先显示错误，否则显示它 `requires` 的东西或它自己的显示名。
+* `回车`/`→` 展开选中的来源，列出**它注册的每一条内容**（`item #1 iron_ore`，就是存档里会写的那个 id）；
+  一条内容都没注册的来源不展开（展开了也没东西可看）。`←` 收起。
+* 最下面的 `MESSAGES` 是这次加载自己的报告：不属于任何一行的问题（目录不存在、表名拼错）在这里，
+  错误与警告分色；某一行自己的错误不会在这里重复一遍。
+* 列表里按 `F5` 就是重载：改完文件按一下，列表当场变成新的加载结果——这是设计者最常用的那个循环。
+
+![展开一个来源：它注册的每一条内容](../games/mine/docs/images/content_list_fold_en.png)
+
+![一个坏包：FAILED 行 + MESSAGES](../games/mine/docs/images/content_list_broken_en.png)
+
+上面这些图不是手点出来的，而是**脚本隔着网络按键**跑出来的（调试输入服务器，见 `docs/SANDBOX.md` §10）：
+
+```sh
+./build/debug/games/mine/mine_game --world sandbox --start --content <本体内容.ecfg> \
+    --packs games/mine/tests/packs --mods build/debug/games/mine/tests/mods \
+    --input-server 7777 --headless --frames 100000 &
+printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0.1 7777
+```
+
+## 6. 现在还不能做的（边界）
 
 * **不能新增 `ContentKind`**：kind 列表是工程定义（`registry.h`），模组只能在既有 kind 里注册内容。
   设计者需要新类别时，那是本体的一处小改动。
