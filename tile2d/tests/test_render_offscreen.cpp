@@ -5,12 +5,17 @@
 #include <t2d/render/atlas.h>
 #include <t2d/render/image_atlas.h>
 #include <t2d/render/sprite_batch.h>
+#include <t2d/render/text_renderer.h>
 #include <t2d/render/tilemap_renderer.h>
 #include <t2d/sim/tileset.h>
 
 #include <ore/ore.h>
 
 #include <support/test_support.h>
+
+#include <algorithm>
+#include <limits>
+#include <optional>
 
 using namespace t2d;
 
@@ -88,6 +93,43 @@ template <class Draw>
         }
     }
     return count;
+}
+
+/// The bounding box of every pixel brighter than \p threshold, in pixels. False when nothing was
+/// lit, which is the answer an empty frame gives.
+[[nodiscard]] bool ink_bounds(const ore::Image& image, u8 threshold, i32& min_x, i32& min_y, i32& max_x,
+                              i32& max_y) {
+    min_x = min_y = std::numeric_limits<i32>::max();
+    max_x = max_y = std::numeric_limits<i32>::min();
+    bool any = false;
+    for (u32 y = 0; y < image.height; ++y) {
+        for (u32 x = 0; x < image.width; ++x) {
+            const ore::Color pixel = ore::Color::from_packed(image.pixel(x, y));
+            if (pixel.r <= threshold && pixel.g <= threshold && pixel.b <= threshold) continue;
+            any = true;
+            min_x = std::min(min_x, static_cast<i32>(x));
+            min_y = std::min(min_y, static_cast<i32>(y));
+            max_x = std::max(max_x, static_cast<i32>(x));
+            max_y = std::max(max_y, static_cast<i32>(y));
+        }
+    }
+    return any;
+}
+
+/// A real face to draw with. The framework ships no fonts and the interface tests need real metrics,
+/// so the machine's are used and the test skips where there is none.
+[[nodiscard]] std::optional<Font> load_test_font() {
+    constexpr const char* kCandidates[] = {
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    };
+    for (const char* path : kCandidates) {
+        std::string error;
+        std::optional<Font> font = Font::load(path, 0, &error);
+        if (font.has_value()) return font;
+    }
+    return std::nullopt;
 }
 
 /// A two by two atlas of flat colours, and the tileset that indexes it. The framework ships no art
@@ -514,6 +556,68 @@ T2D_TEST(the_tile_renderer_walks_the_view_and_not_the_map) {
     draw(small, renderer);
     T2D_CHECK_LT(renderer.stats().tiles_considered, visible_cells * 4u);
     T2D_CHECK_GT(renderer.stats().tiles_considered, 0u);
+}
+
+T2D_TEST(text_is_drawn_inside_the_box_its_pen_describes) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    const std::optional<Font> latin = load_test_font();
+    if (!latin.has_value()) T2D_SKIP("no font on this machine");
+    Scope<SpriteBatch> batch = make_batch(fixture, 64);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    GlyphAtlas::Options atlas_options;
+    atlas_options.page_size = 512;
+    atlas_options.max_pages = 1;
+    Scope<TextRenderer> text = TextRenderer::create(*fixture.context, atlas_options);
+    T2D_REQUIRE(text != nullptr);
+
+    FontSet fonts;
+    fonts.latin = &*latin;
+    TextStyle style;
+    style.size_px = 24;
+    style.color = 0xFFFFFFFFu;
+    // "Hg" is the pair that makes the promise checkable: a capital that reaches the ascent and a
+    // descender that reaches the descent.
+    const TextMetrics metrics = text->measure("Hg", fonts, style);
+    T2D_REQUIRE(metrics.height > 0.0f);
+    T2D_REQUIRE(metrics.ascent > 0.0f);
+    T2D_CHECK_GE(metrics.height, metrics.ascent + metrics.descent);
+
+    constexpr f32 kPen = 8.0f;
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+    fixture.renderer->begin_pass(clear, 1.0f);
+    // One world unit per pixel, with world (0,0) at the top left pixel: what is drawn at (x, y) is
+    // read back at pixel (x, y).
+    batch->begin(frame, Vec2{64.0f, 64.0f}, Vec2{128.0f, 128.0f}, *text->texture(), sampler->handle());
+    const f32 advance = text->draw(*batch, "Hg", fonts, style, Vec2{kPen, kPen});
+    batch->end();
+    fixture.renderer->end_pass();
+    fixture.renderer->end_frame();
+    fixture.renderer->wait_idle();
+    T2D_CHECK_NEAR(advance, metrics.height, 0.001f);
+
+    const ore::Image shot = fixture.context->read_render_target(fixture.renderer->target());
+    T2D_REQUIRE(!shot.empty());
+    i32 min_x = 0, min_y = 0, max_x = 0, max_y = 0;
+    const bool lit = ink_bounds(shot, 64, min_x, min_y, max_x, max_y);
+    T2D_REQUIRE(lit);
+
+    // The pen is the top left corner of the line box: nothing may be drawn above it or below the box
+    // it describes. Text drawn one ascent higher (the bug this pins down) hangs over the row above.
+    T2D_CHECK_MSG(static_cast<f32>(min_y) >= kPen - 0.5f, "the ink starts {} px above the pen",
+                  kPen - static_cast<f32>(min_y));
+    T2D_CHECK_MSG(static_cast<f32>(max_y) <= kPen + metrics.height - 0.5f, "the ink ends {} px below the pen's box",
+                  static_cast<f32>(max_y) - (kPen + metrics.height));
+    T2D_CHECK_MSG(static_cast<f32>(min_x) >= kPen - 1.0f, "the ink starts {} px left of the pen",
+                  kPen - static_cast<f32>(min_x));
+    // The capital reaches up towards the ascent, so the ink has to be more than a descender tall.
+    T2D_CHECK_MSG(static_cast<f32>(max_y - min_y) > metrics.descent, "the ink is only {} px tall",
+                  max_y - min_y);
 }
 
 T2D_TEST_MAIN

@@ -362,15 +362,39 @@ f32 MineApp::draw_pair(f32 x, f32 y, f32 value_column, u16 size_px, std::string_
     draw_line(x, y, size_px, label_color, label);
     if (value_max_width > 0.0f) draw_fitted(value_column, y, size_px, value_color, value, value_max_width);
     else draw_line(value_column, y, size_px, value_color, value);
-    return y + static_cast<f32>(size_px) * 1.45f;
+    return y + line_for(size_px);
+}
+
+f32 MineApp::line_for(u16 size_px) const {
+    t2d::TextStyle style;
+    style.size_px = size_px;
+    return std::max(static_cast<f32>(size_px) * 1.45f, t2d::line_box(fonts_, style).height);
 }
 
 void MineApp::draw_start_screen() {
     const f32 width = static_cast<f32>(renderer().width());
     const f32 height = static_cast<f32>(renderer().height());
     const f32 padding = 8.0f * unit_;
+    const u16 title_px = static_cast<u16>(body_px_ * 2);
+    const f32 row_line = line_for(body_px_);
+    const f32 title_line = line_for(title_px);
+
+    // The panel is as tall as what goes in it. A fixed height was tuned against text that was drawn
+    // one ascent above its pen, and the same numbers now put the title outside the panel.
+    constexpr f32 kAfterTitle = 2.0f;
+    constexpr f32 kAfterSubtitle = 6.0f;
+    constexpr f32 kRule = 2.0f;
+    constexpr f32 kAfterRule = 10.0f;
+    constexpr f32 kBeforeSeed = 4.0f;
+    constexpr f32 kBeforeHints = 6.0f;
+    constexpr f32 kBetweenHints = 2.0f;
+    const f32 rows_height = static_cast<f32>(menu_.row_count()) * row_line;
+    const f32 seed_height = menu_.seed_visible() ? kBeforeSeed + row_line : 0.0f;
+    const f32 content = title_line + kAfterTitle + row_line + kAfterSubtitle + kRule + kAfterRule + rows_height +
+                        seed_height + kBeforeHints + row_line * 2.0f + kBetweenHints;
+
     const f32 panel_width = std::min(width - 4.0f * padding, 330.0f * unit_);
-    const f32 panel_height = std::min(height - 4.0f * padding, 150.0f * unit_);
+    const f32 panel_height = std::min(height - 4.0f * padding, content + 2.0f * padding);
     const t2d::Aabb2 panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
                                                      t2d::Vec2{panel_width * 0.5f, panel_height * 0.5f});
     const f32 left = panel.min.x + padding;
@@ -380,11 +404,10 @@ void MineApp::draw_start_screen() {
     batch_->draw_rect_outline(panel, 2.0f, kPalette.panel_edge);
 
     f32 y = panel.min.y + padding;
-    const u16 title_px = static_cast<u16>(body_px_ * 2);
-    y += draw_line(left, y, title_px, kPalette.accent, locale_.text("title")) + 2.0f;
-    y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("subtitle")) + 6.0f;
-    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + 2.0f}}, kPalette.panel_edge);
-    y += 10.0f;
+    y += draw_line(left, y, title_px, kPalette.accent, locale_.text("title")) + kAfterTitle;
+    y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("subtitle")) + kAfterSubtitle;
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + kRule}}, kPalette.panel_edge);
+    y += kAfterRule;
 
     // The value column follows the widest label instead of a fixed offset: "WORLD" and "世界" are very
     // different widths, and a fixed column leaves one of them stranded.
@@ -395,13 +418,13 @@ void MineApp::draw_start_screen() {
         label_width = std::max(label_width, text_->measure(locale_.text(menu_.row(index).id), fonts_, measure_style).width);
     }
     const f32 value_column = left + label_width + 3.0f * unit_;
-    const f32 row_height = static_cast<f32>(body_px_) * 1.45f;
     for (usize index = 0; index < menu_.row_count(); ++index) {
         const MenuRow& row = menu_.row(index);
         const bool focused = index == menu_.selected();
         if (focused) {
-            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left - 4.0f, y - 2.0f},
-                                         t2d::Vec2{right, y + row_height - 4.0f}},
+            // The row's background is the row's own line box: the pen is its top left corner, so the
+            // text drawn at the same y sits inside it instead of hanging above it.
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left - 4.0f, y}, t2d::Vec2{right, y + row_line}},
                               kPalette.highlight);
         }
         const u32 color = focused ? kPalette.accent : kPalette.text;
@@ -422,26 +445,44 @@ void MineApp::draw_start_screen() {
                 if (focused) draw_line(value_column, y, body_px_, kPalette.text_dim, "< ENTER >");
                 break;
         }
-        y += row_height;
+        y += row_line;
     }
 
     if (menu_.seed_visible()) {
-        y += 4.0f;
+        y += kBeforeSeed;
         draw_line(left, y, body_px_, kPalette.text_dim,
                   format_localized(locale_.text("seed.hint"), menu_.seed()));
+        y += row_line;
     }
 
-    f32 footer = panel.max.y - padding - static_cast<f32>(body_px_) * 2.9f;
-    footer += draw_line(left, footer, body_px_, kPalette.text_dim, locale_.text("hint.rows")) + 2.0f;
-    draw_line(left, footer, body_px_, kPalette.text_dim, locale_.text("hint.actions"));
+    // The hints follow the rows instead of being pinned to the panel's bottom edge: the panel is
+    // sized to its content, so there is nothing left to pin them to.
+    y += kBeforeHints;
+    y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.rows")) + kBetweenHints;
+    draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.actions"));
 }
 
 void MineApp::draw_session_screen() {
     const f32 width = static_cast<f32>(renderer().width());
     const f32 height = static_cast<f32>(renderer().height());
     const f32 padding = 8.0f * unit_;
+    const u16 title_px = static_cast<u16>(body_px_ * 1.5f);
+    const f32 row_line = line_for(body_px_);
+
+    // The panel is as tall as its content, like the start screen's: five rows (six when the session
+    // connects to a server), the rule under the title, the three lines that say what is still
+    // missing, and the way back.
+    constexpr f32 kRule = 2.0f;
+    constexpr f32 kAfterTitle = 0.0f;
+    constexpr f32 kAfterRule = 10.0f;
+    constexpr f32 kBeforeRule = 6.0f;
+    constexpr f32 kBetweenPending = 2.0f;
+    constexpr f32 kBeforeBack = 6.0f;
+    const f32 rows_height = (session_.role == Role::Join ? 6.0f : 5.0f) * row_line;
+    const f32 content = line_for(title_px) + kAfterTitle + kRule + kAfterRule + rows_height + kBeforeRule + kRule +
+                        kAfterRule + row_line * 3.0f + kBetweenPending + kBeforeBack + row_line;
     const f32 panel_width = std::min(width - 4.0f * padding, 330.0f * unit_);
-    const f32 panel_height = std::min(height - 4.0f * padding, 130.0f * unit_);
+    const f32 panel_height = std::min(height - 4.0f * padding, content + 2.0f * padding);
     const t2d::Aabb2 panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
                                                      t2d::Vec2{panel_width * 0.5f, panel_height * 0.5f});
     const f32 left = panel.min.x + padding;
@@ -451,9 +492,9 @@ void MineApp::draw_session_screen() {
     batch_->draw_rect_outline(panel, 2.0f, kPalette.panel_edge);
 
     f32 y = panel.min.y + padding;
-    y += draw_line(left, y, static_cast<u16>(body_px_ * 1.5f), kPalette.accent, locale_.text("session.title"));
-    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + 2.0f}}, kPalette.panel_edge);
-    y += 10.0f;
+    y += draw_line(left, y, title_px, kPalette.accent, locale_.text("session.title")) + kAfterTitle;
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + kRule}}, kPalette.panel_edge);
+    y += kAfterRule;
 
     f32 label_width = 0.0f;
     t2d::TextStyle measure_style;
@@ -485,15 +526,15 @@ void MineApp::draw_session_screen() {
                       kPalette.text_dim, kPalette.text);
     }
 
-    y += 6.0f;
-    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + 2.0f}}, kPalette.panel_edge);
-    y += 10.0f;
-    y += draw_line(left, y, body_px_, kPalette.warning, locale_.text("session.pending")) + 2.0f;
+    y += kBeforeRule;
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + kRule}}, kPalette.panel_edge);
+    y += kAfterRule;
+    y += draw_line(left, y, body_px_, kPalette.warning, locale_.text("session.pending")) + kBetweenPending;
     y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.pending.line1"));
-    draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.pending.line2"));
+    y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.pending.line2"));
 
-    draw_line(left, panel.max.y - padding - static_cast<f32>(body_px_) * 1.45f, body_px_, kPalette.text_dim,
-              locale_.text("session.back"));
+    y += kBeforeBack;
+    draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.back"));
 }
 
 // --- the sandbox -------------------------------------------------------------------------------
@@ -509,7 +550,7 @@ t2d::Aabb2 MineApp::sandbox_status_area() const {
     const f32 width = static_cast<f32>(renderer().width());
     const f32 height = static_cast<f32>(renderer().height());
     const f32 padding = 8.0f * unit_;
-    const f32 line = static_cast<f32>(body_px_) * 1.45f;
+    const f32 line = line_for(body_px_);
     // Five label rows, the message and two hint lines.
     const f32 status_height = std::min(height * 0.5f, padding * 2.0f + line * 9.0f);
     return t2d::Aabb2{t2d::Vec2{0.0f, height - status_height}, t2d::Vec2{width, height}};
@@ -803,14 +844,20 @@ MineApp::SandboxDrawRange MineApp::sandbox_draw_range() const {
 MineApp::PaletteLayout MineApp::palette_layout() const {
     const t2d::Aabb2 panel = sandbox_panel_area();
     const f32 padding = 8.0f * unit_;
-    const f32 line = static_cast<f32>(body_px_) * 1.45f;
-    const f32 title_px = static_cast<f32>(static_cast<u16>(body_px_ * 1.15f));
+    const u16 title_px = static_cast<u16>(body_px_ * 1.15f);
+    const f32 line = line_for(body_px_);
     PaletteLayout layout;
     layout.left = panel.min.x + padding;
     layout.right = panel.max.x - padding;
     layout.row_height = line;
-    // The panel title, its rule and the gap under them, exactly as the panel pass draws them.
-    layout.first_y = panel.min.y + padding + title_px * 1.45f + 4.0f + 8.0f;
+    layout.swatch = std::min(10.0f, line - 6.0f);
+    layout.swatch_offset = (line - layout.swatch) * 0.5f;
+    // The panel title, its rule and the gap under them, exactly as the panel pass draws them: the
+    // title's own line box, not a multiple of the size that happens to be close.
+    t2d::TextStyle title_style;
+    title_style.size_px = title_px;
+    layout.first_y =
+        panel.min.y + padding + text_->measure(locale_.text("sandbox.palette"), fonts_, title_style).height + 4.0f + 8.0f;
     const usize rows =
         static_cast<usize>(std::max(0.0f, (panel.max.y - padding - layout.first_y) / line));
     layout.visible = rows;
@@ -823,7 +870,7 @@ void MineApp::draw_sandbox_screen() {
     const t2d::Aabb2 panel = sandbox_panel_area();
     const t2d::Aabb2 status = sandbox_status_area();
     const f32 padding = 8.0f * unit_;
-    const f32 line = static_cast<f32>(body_px_) * 1.45f;
+    const f32 line = line_for(body_px_);
     const f32 cell = sandbox_.cell_px();
 
     // --- the layer ---
@@ -858,13 +905,15 @@ void MineApp::draw_sandbox_screen() {
                 // The name when it fits, otherwise the id: on a small cell the number a save would
                 // store is the more useful label anyway.
                 std::string label{value.name};
-                if (text_->measure(label, fonts_, style).width > cell - 4.0f) {
+                t2d::TextMetrics box = text_->measure(label, fonts_, style);
+                if (box.width > cell - 4.0f) {
                     label = std::format("#{}", value.id);
-                    if (text_->measure(label, fonts_, style).width > cell - 4.0f) continue;
+                    box = text_->measure(label, fonts_, style);
+                    if (box.width > cell - 4.0f) continue;
                 }
-                const f32 text_height = static_cast<f32>(style.size_px) * 1.2f;
+                // Centred by the box the renderer actually fills, not by a guessed height.
                 (void)text_->draw(*batch_, label, fonts_, style,
-                                  t2d::Vec2{at.x + 2.0f, at.y + (cell - text_height) * 0.5f});
+                                  t2d::Vec2{at.x + 2.0f, at.y + (cell - box.height) * 0.5f});
                 ++labels;
             }
         }
@@ -922,12 +971,13 @@ void MineApp::draw_sandbox_screen() {
             const PaletteEntry& entry = sandbox_.palette(index);
             const bool focused = index == sandbox_.selected_palette();
             if (focused) {
-                batch_->draw_rect(t2d::Aabb2{t2d::Vec2{panel_left - 4.0f, y - 1.0f},
-                                             t2d::Vec2{panel_right, y + line - 4.0f}},
+                // The row's background is the row's own line box, exactly like the start screen's.
+                batch_->draw_rect(t2d::Aabb2{t2d::Vec2{panel_left - 4.0f, y}, t2d::Vec2{panel_right, y + line}},
                                   kPalette.highlight);
             }
-            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{panel_left, y + 2.0f},
-                                         t2d::Vec2{panel_left + 10.0f, y + line - 6.0f}},
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{panel_left, y + layout.swatch_offset},
+                                         t2d::Vec2{panel_left + layout.swatch,
+                                                   y + layout.swatch_offset + layout.swatch}},
                               debug_color_for(entry.name));
             const std::string kind = std::format("{} #{}", content_kind_name(entry.kind), entry.id);
             const f32 kind_width = text_->measure(kind, fonts_, measure_style).width;
@@ -1091,15 +1141,15 @@ void MineApp::draw_sandbox_images() {
     // apart by looking at them.
     if (sandbox_.palette_count() == 0) return;
     const PaletteLayout layout = palette_layout();
-    const f32 swatch = 10.0f;
     for (usize index = layout.first_visible; index < sandbox_.palette_count() &&
                                               index < layout.first_visible + layout.visible; ++index) {
         const PaletteEntry& entry = sandbox_.palette(index);
         const std::string key = image_key(entry.kind, entry.name);
         if (!image_atlas_->has(key)) continue;
         const f32 y = layout.first_y + static_cast<f32>(index - layout.first_visible) * layout.row_height;
-        batch_->draw_quad(t2d::Aabb2{t2d::Vec2{layout.left, y + 2.0f},
-                                     t2d::Vec2{layout.left + swatch, y + 2.0f + swatch}},
+        batch_->draw_quad(t2d::Aabb2{t2d::Vec2{layout.left, y + layout.swatch_offset},
+                                     t2d::Vec2{layout.left + layout.swatch,
+                                               y + layout.swatch_offset + layout.swatch}},
                           image_atlas_->uv(key), 0xFFFFFFFFu);
     }
 }

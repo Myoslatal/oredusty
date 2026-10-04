@@ -36,6 +36,7 @@ add_library(t2d_text STATIC
     text/font.cpp
     text/locale.cpp
     text/raster.cpp
+    text/text_layout.cpp
     text/utf8.cpp
 )
 add_library(t2d::text ALIAS t2d_text)

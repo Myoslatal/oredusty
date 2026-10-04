@@ -128,6 +128,10 @@ private:
     /// The palette rows the panel actually shows: shared by the panel pass and the picture pass.
     struct PaletteLayout {
         f32 left = 0.0f, right = 0.0f, first_y = 0.0f, row_height = 0.0f;
+        /// The colour chip on the left of a row: a square, and the same rectangle in both passes, so
+        /// the picture drawn over it lands on the colour instead of beside it.
+        f32 swatch = 0.0f;
+        f32 swatch_offset = 0.0f;   ///< the chip's top edge, measured down from the row's y
         usize first_visible = 0, visible = 0;
     };
     [[nodiscard]] PaletteLayout palette_layout() const;
@@ -143,6 +147,10 @@ private:
     /// Replaces the status line; \p error picks the colour.
     void set_status(std::string_view text, bool error = false);
 
+    /// One row of the interface at \p size_px: the font's own line box, never tighter than the
+    /// 1.45 x size rhythm the panels are laid out with. A row, the background behind it and the text
+    /// in it all come from this one number, which is what keeps a highlight on top of its text.
+    [[nodiscard]] f32 line_for(u16 size_px) const;
     /// Draws one localized line and returns the y for the next one.
     f32 draw_line(f32 x, f32 y, u16 size_px, u32 color, std::string_view text, f32 max_width = 0.0f);
     /// Draws one line clipped to \p max_width with an ellipsis: a wrapped path in a status bar would

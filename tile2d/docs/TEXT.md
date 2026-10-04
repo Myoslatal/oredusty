@@ -12,12 +12,36 @@ shows it through string tables so a language can be added without touching code.
 | Outlines | `font.cpp` (glyf), `cff.cpp` (CFF) | TrueType quadratic contours including composites, and CFF Type 2 charstrings including CID keyed fonts, subroutines, hint masks and the flex operators |
 | Rasterising | `raster.cpp` | analytic anti-aliasing: for every edge and pixel the exact covered area is integrated, so a horizontal stroke lands on its true fraction of a pixel instead of banding at a sampling grid |
 | Caching | `render/glyph_atlas.cpp` | shelf packing into an RGBA8 page, keyed by (font, glyph, pixel size); one page holds thousands of glyphs |
-| Layout | `render/text_renderer.cpp` | UTF-8, per character font selection, advances, wrapping, line breaking |
+| Layout (CPU) | `text/text_layout.cpp` | UTF-8, per character font selection, advances, wrapping, line breaking, and the line box |
+| Drawing | `render/text_renderer.cpp` | placed glyphs → atlas slots → batched quads; nothing is measured here |
 | Languages | `text/locale.h`, `text/utf8.h` | language tags, string tables, fallback, script classification |
 
 **Why both outline formats**: the fonts a game actually needs are split that way. Latin text usually
 ships as TrueType (`glyf`), and the CJK families — Noto Sans CJK and friends — ship as **CID keyed
 CFF**. An engine that only reads `glyf` cannot draw Chinese at all on a normal Linux system.
+
+## Where a line sits
+
+The vertical contract is one sentence: **the pen is the top left corner of the first line box.**
+`line_box(fonts, style)` is that box, and it comes from the fonts, never from the string:
+
+| Field | Meaning |
+|---|---|
+| `ascent` | the tallest face's `hhea` ascent in pixels: the first baseline sits that far below the pen |
+| `descent` | the same face's descent, below the baseline |
+| `height` | `max(size_px * line_spacing, ascent + descent)` — the caller's line spacing is a **floor**, not a ceiling, because a box shorter than its own font would put one line's ink on top of the next line's |
+
+Everything a line needs follows from it: `measure()` returns the box `draw()` fills, so a background
+rectangle drawn as `[pen, pen + size]` always covers its text, and a label and the value beside it share
+one baseline whatever scripts they are in. Before this was true the renderer put the first baseline *at*
+the pen, so every line was drawn one ascent above the box its caller had reserved: a selected row's
+highlight landed under its text and over the row below, and a panel's title hung over the panel's edge.
+
+The layout is CPU work and lives in `t2d::text` (`text/text_layout.cpp`), so a dedicated server can
+measure and place a string with no GPU; `TextRenderer` only turns placed glyphs into atlas lookups and
+quads. `test_text` checks the box against glyphs rasterised at the same size (their ink has to land
+inside `[0, height]`), and `test_render_offscreen` checks the pixels: text drawn at a pen is read back
+below that pen and inside the box it measured.
 
 ## Fonts
 

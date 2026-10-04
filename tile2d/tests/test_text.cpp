@@ -1,9 +1,14 @@
 // UTF-8, the language tables and text layout: the CPU half of the text engine, no GPU needed.
 #include <t2d/text/locale.h>
+#include <t2d/text/raster.h>
+#include <t2d/text/text_layout.h>
 #include <t2d/text/utf8.h>
 
 #include <support/test_support.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +34,26 @@ zh-Hant::
 nonsense::
     title:"?"
 )";
+
+/// The two faces the interface is laid out against: a Latin one and the CJK collection.
+constexpr const char* kLiberation = "/usr/share/fonts/liberation/LiberationSans-Regular.ttf";
+constexpr const char* kNotoSansCjk = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
+
+[[nodiscard]] bool font_exists(const char* path) {
+    std::FILE* file = std::fopen(path, "rb");
+    if (file == nullptr) return false;
+    std::fclose(file);
+    return true;
+}
+
+/// Loads a font or skips the test when the machine does not have it.
+[[nodiscard]] std::optional<Font> load_or_skip(const char* path, u32 face = 0) {
+    if (!font_exists(path)) T2D_SKIP(std::string("missing font ") + path);
+    std::string error;
+    std::optional<Font> font = Font::load(path, face, &error);
+    if (!font.has_value()) T2D_CHECK_MSG(false, "{} face {} failed to load: {}", path, face, error);
+    return font;
+}
 
 } // namespace
 
@@ -208,6 +233,102 @@ T2D_TEST(the_shipped_interface_strings_cover_every_language) {
                  locale.strings().find(Language::TraditionalChinese, "title"));
     T2D_CHECK_EQ(locale.strings().find(Language::SimplifiedChinese, "row.start"), std::string_view("开始单人游戏"));
     T2D_CHECK_EQ(locale.strings().find(Language::TraditionalChinese, "row.start"), std::string_view("開始單人遊戲"));
+}
+
+T2D_TEST(the_line_box_holds_its_text_and_starts_at_the_pen) {
+    const std::optional<Font> latin = load_or_skip(kLiberation);
+    if (!latin.has_value()) return;
+    const std::optional<Font> cjk = load_or_skip(kNotoSansCjk, 0);
+
+    FontSet fonts;
+    fonts.latin = &*latin;
+    if (cjk.has_value()) fonts.cjk = &*cjk;
+
+    TextStyle style;
+    style.size_px = 20;
+    const LineBox box = line_box(fonts, style);
+
+    // The ascent is the tallest face's hhea ascent in pixels. Nothing about the string enters here,
+    // which is what lets a label and the value beside it share one baseline.
+    f32 expected_ascent = latin->metrics().ascender * (20.0f / latin->metrics().units_per_em);
+    if (cjk.has_value()) {
+        expected_ascent = std::max(expected_ascent, cjk->metrics().ascender * (20.0f / cjk->metrics().units_per_em));
+    }
+    T2D_CHECK_NEAR(box.ascent, expected_ascent, 0.001f);
+    T2D_CHECK_GT(box.descent, 0.0f);
+    T2D_CHECK_GE(box.height, box.ascent + box.descent);
+
+    // The promise the box makes: a glyph rasterised at the pen's own size inks nothing outside it.
+    // Before the pen became the top of the line box, every glyph was drawn one ascent above the pen,
+    // which is exactly why a highlighted row's text hung over the row above it.
+    for (const u32 codepoint : {static_cast<u32>('A'), static_cast<u32>('g'), 0x77FFu /* 矿 */}) {
+        const Font* font = fonts.pick(codepoint);
+        T2D_REQUIRE(font != nullptr);
+        const u32 glyph = font->glyph_index(codepoint);
+        T2D_REQUIRE(glyph != 0u);
+        GlyphPath path;
+        T2D_REQUIRE(font->glyph_path(glyph, path));
+        // No padding: the transparent pixel the atlas keeps around a glyph is a sampling guard, not
+        // part of the text, and counting it would make this a test of the rasteriser's margins.
+        const GlyphBitmap bitmap = rasterize_glyph(path, 20.0f / font->metrics().units_per_em, 0);
+
+        T2D_REQUIRE(bitmap.has_ink);
+        const f32 ink_top = box.ascent + static_cast<f32>(bitmap.top);
+        const f32 ink_bottom = ink_top + static_cast<f32>(bitmap.bitmap.height);
+        T2D_CHECK_MSG(ink_top >= 0.0f, "U+{:04X} inks {} px above the top of the line box", codepoint, -ink_top);
+        T2D_CHECK_MSG(ink_bottom <= box.height, "U+{:04X} inks {} px below the bottom of the line box", codepoint,
+                      ink_bottom - box.height);
+    }
+
+    std::vector<PlacedGlyph> placed;
+    TextMetrics one;
+    layout_text("A", fonts, style, 0.0f, placed, one);
+    T2D_REQUIRE(placed.size() == 1u);
+    T2D_CHECK_EQ(placed[0].font, fonts.latin);
+    T2D_CHECK_NEAR(placed[0].x, 0.0f, 0.001f);
+    // The glyph's baseline is one ascent below the pen, never at the pen.
+    T2D_CHECK_NEAR(placed[0].y, box.ascent, 0.001f);
+    T2D_CHECK_NEAR(one.height, box.height, 0.001f);
+
+    // A second line is one line box lower and starts at the left again.
+    TextMetrics two;
+    layout_text("A\nB", fonts, style, 0.0f, placed, two);
+    T2D_REQUIRE(placed.size() == 2u);
+    T2D_CHECK_NEAR(placed[1].y - placed[0].y, box.height, 0.001f);
+    T2D_CHECK_NEAR(placed[1].x, 0.0f, 0.001f);
+    T2D_CHECK_EQ(two.lines, 2u);
+    T2D_CHECK_NEAR(two.height, box.height * 2.0f, 0.001f);
+
+    // The box is the same whatever the string is: that is what a row's background relies on.
+    TextMetrics mixed;
+    layout_text("矿场 世界 Ag", fonts, style, 0.0f, placed, mixed);
+    T2D_CHECK_EQ(mixed.height, one.height);
+    T2D_CHECK_EQ(mixed.ascent, one.ascent);
+    T2D_CHECK_GT(mixed.width, one.width);
+
+    // Wrapping adds a line the same way.
+    TextMetrics wrapped;
+    layout_text("AAAA AAAA", fonts, style, 30.0f, placed, wrapped);
+    T2D_CHECK_GE(wrapped.lines, 2u);
+    T2D_CHECK_NEAR(wrapped.height, box.height * static_cast<f32>(wrapped.lines), 0.001f);
+
+    // The caller's line spacing is a floor: a looser one is honoured, a tighter one cannot cut the
+    // font's own box and let one line land on the next.
+    TextStyle loose = style;
+    loose.line_spacing = 3.0f;
+    T2D_CHECK_NEAR(line_box(fonts, loose).height, 60.0f, 0.001f);
+    TextStyle tight = style;
+    tight.line_spacing = 0.5f;
+    T2D_CHECK_NEAR(line_box(fonts, tight).height, box.ascent + box.descent, 0.001f);
+
+    // A set with no fonts at all still describes a box: one em above the baseline.
+    const LineBox bare = line_box(FontSet{}, style);
+    T2D_CHECK_NEAR(bare.ascent, 20.0f, 0.001f);
+    T2D_CHECK_NEAR(bare.descent, 0.0f, 0.001f);
+    TextMetrics nothing;
+    layout_text("A", FontSet{}, style, 0.0f, placed, nothing);
+    T2D_CHECK_EQ(placed.size(), 0u);
+    T2D_CHECK_EQ(nothing.height, 0.0f);
 }
 
 T2D_TEST_MAIN

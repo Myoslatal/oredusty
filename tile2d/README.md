@@ -47,12 +47,12 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_ecfg               12 cases / 128 checks  the configuration format, including the shipped example.ecfg
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                8 cases / 235 checks  UTF-8, language tables, the shipped interface strings
+    tests/test_text                9 cases / 263 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module             5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases / 1265 checks framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
-    tests/test_render_offscreen    9 cases /  65 checks  real rendering with pixel readback, and a 512² map culled to the view (skips without a device)
+    tests/test_render_offscreen   10 cases /  71 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
     games/mine/tests/test_mine_menu      10 cases / 137 checks  the start screen as a state machine
     games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
@@ -184,6 +184,12 @@ and shows it through string tables, so adding a language means adding a table, n
   the name tables, so choosing a face costs no outline parsing.
 * **Strings are looked up by id** from `assets/text/ui.ecfg`, with an English fallback and the id
   itself as the last resort. A half translated file fails `test_text` instead of shipping.
+* **The pen is the top left corner of the line box**, and the box comes from the fonts (`t2d::line_box()`:
+  the tallest face's `hhea` ascent and descent, never shorter than `line_spacing × size`). `measure()`
+  returns the box `draw()` fills, so a row's background is that rectangle and a label and the value
+  beside it share a baseline — in any mix of scripts. Layout is CPU work in `t2d::text`, so a server
+  without a GPU can measure a string; `test_text` checks rasterised ink against the box and
+  `test_render_offscreen` checks the pixels that come back.
 * Simplified and Traditional are separate tables: converting between them properly needs a character
   mapping table (data the designer can supply), not a runtime guess.
 

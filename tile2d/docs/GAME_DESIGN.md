@@ -220,7 +220,7 @@
 * 纯逻辑：`mine_core`（会话配置 + 菜单模型 + 内容注册表 / 每存档 id 表），无 Ore 依赖。
 * 测试：`test_mine_menu`（7 用例 / 47 断言）、`test_registry`（10 用例 / 127 断言），
   毫秒级，已进入 Tile2D 的 ctest 套件。
-* 截图（真机窗口模式，Intel Arc Pro 130T/140T）：
+* 截图（真机 GPU，Intel Arc Pro 130T/140T；离屏渲染，尺寸取窗口标称的 2133×1200）：
 
   ![开始界面](../games/mine/docs/images/start_screen.png)
 
@@ -353,6 +353,10 @@
   低缩放自动关掉网格线与标签；沙盒状态栏新增 `VIEW`（像素/格、可见格数、丢帧警告）与 `STORAGE` 行。
 * `[已实现]` **框架修复**：`Application::run()` 退出顺序改为 `wait_idle()` → `on_shutdown()`（此前无头运行
   必然 `VK_ERROR_DEVICE_LOST`）；`AppConfig::upload_segment_size`（每帧动态数据段大小，默认 1 MiB，mine 用 4 MiB）。
+* `[已实现]` **框架修复（文字行盒）**：`t2d::line_box()` + `layout_text()`（`t2d/text/text_layout.cpp`，
+  `t2d::text`，**无 GPU 也能排版**）——pen 是第一行行盒的左上角，基线在它下方一个 ascent，
+  `measure()` 的盒子就是 `draw()` 填充的盒子；行距是下限（盒子不短于字体自己的行高）。界面行高统一
+  走 `line_for(size)`，开始/会话面板按内容定高，高亮条就是行盒本身（见 `docs/TEXT.md`）。
 * `[已实现]` **框架修复（指针坐标）**：`ore::PixelScale` + `InputState::add_pointer_event()`——平台层把指针
   从窗口系统的 screen coordinates 换算成帧缓冲像素（逐轴；窗口尺寸为 0 时退化为 1.0），窗口尺寸或帧缓冲
   尺寸变化时重算，因子进启动日志；`Window::pixel_scale()` 供应用自己换算。单测 `test_input_map`（含 2 倍
@@ -404,6 +408,17 @@
 | 版本 | 变更 |
 |---|---|
 | M1 | 初版。仅记录设计者已确认的九条需求与工程约束；删除此前草稿中自行预设的资源、结构、配方、建筑、剧情与数值内容 |
+| M1.12 | **修掉界面高亮与文字不重合（框架）**：排版实现把 pen 当**基线**用（`TextRenderer::draw()` 的文档却写着“pen 是左上角”），
+于是每一行都被画在调用者为它预留的盒子**上方一个 ascent**：开始界面选中行的高亮条落在文字下面并压住下一行，
+标题跑到面板外，沙盒格子的标签挂在格子顶端之上。修法是让实现与文档一致——**pen 是第一行行盒的左上角**：
+新增 `t2d::line_box(fonts, style)`（`ascent` = 最高字面的 hhea ascent，`descent` = 其 descent，
+`height` = `max(字号 × line_spacing, ascent + descent)`），`layout_text()` 把基线放在 pen 下方一个 ascent，
+`measure()` 返回的盒子就是 `draw()` 填充的盒子。排版整段从 `render/text_renderer.cpp` 拆进 `t2d::text` 的
+`text/text_layout.cpp`（无 GPU 也能排版，服务器可用），渲染器只剩“字形 → 图集 → 四边形”。`test_text` 新增
+28 断言（同尺寸栅格化后的 ink 必须落在 `[0, height]` 内、换行、行距下限、空字体集），离屏像素测试新增
+`text_is_drawn_inside_the_box_its_pen_describes`（旧行为下报 “the ink starts 8 px above the pen”）。界面侧行高
+统一由 `line_for(size)` 给出（字体行盒与 1.45×字号取大），开始/会话面板改为**按内容定高**（原固定高度是照着错的
+基线调的），高亮条就是行盒本身；沙盒色块改成两遍共用的正方形。三语言截图全部重出（`docs/TEXT.md` 新增 “Where a line sits”） |
 | M1.1 | 新增 §6：内容注册与存档 id 策略（注册按名字、存档存数字 id、每存档自带 name→id 表、缺失内容报告而非重映射）；里程碑与术语顺延 |
 | M1.2 | 新增 `.ecfg` 配置读取器（格式由仓库根 `example.ecfg` 定义）与内容加载器（配置文件 → 注册表）；§6 与 §9 相应更新 |
 | M1.3 | 新增字体引擎（TrueType + CFF 轮廓、解析式抗锯齿、字形图集、UTF-8 排版）与多语言界面（`en / zh-Hans / zh-Hant`，运行时切换，语言决定 CJK 字面）；界面文案全部走字符串表，代码中无硬编码文案 |
