@@ -18,6 +18,7 @@ add_library(mine_core STATIC
     src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp
+    src/world.cpp
 )
 add_library(mine::core ALIAS mine_core)
 t2d_apply_settings(mine_core)

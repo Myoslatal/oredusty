@@ -7,6 +7,20 @@
 
 namespace mine {
 
+void ContentDefinitions::add(types::TileDefinition definition) {
+    // The same entry twice: the first one keeps the name, the way the registry keeps the first owner
+    // of a content name. Two files that declare one name are reported by the registration, not here.
+    if (find(definition.kind, definition.name) != nullptr) return;
+    definitions_.push_back(std::move(definition));
+}
+
+const types::TileDefinition* ContentDefinitions::find(ContentKind kind, std::string_view name) const {
+    for (const types::TileDefinition& definition : definitions_) {
+        if (definition.kind == kind && definition.name == name) return &definition;
+    }
+    return nullptr;
+}
+
 std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
                                                std::vector<std::string>* unknown_tables,
                                                std::string_view ignore_table) {

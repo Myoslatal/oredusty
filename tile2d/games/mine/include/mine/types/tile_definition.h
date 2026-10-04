@@ -11,7 +11,7 @@
 // engineering: it is about what the thing *is*, not about which content exists.
 #pragma once
 
-#include <mine/types/tile.h>
+#include <mine/types/scene_tile.h>
 
 #include <t2d/core/ecfg.h>
 
@@ -54,7 +54,11 @@ struct TileDefinition {
 
 /// Builds the plot a definition describes, at \p anchor on \p layer, with the id the registry handed
 /// out for it. Returns nullptr for a definition that is not a plot at all.
-[[nodiscard]] std::unique_ptr<Tile> make_tile(const TileDefinition& definition, ContentId id, i32 layer,
-                                              GridPos anchor, i32 width = 1, i32 height = 1);
+///
+/// The result is a SceneTile because every plot is one - possibly scenery that also runs
+/// (types/entity_tile.h) - so a caller that holds a layer's plots can refresh them without asking
+/// each one what it is.
+[[nodiscard]] std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId id, i32 layer,
+                                                   GridPos anchor, i32 width = 1, i32 height = 1);
 
 } // namespace mine::types

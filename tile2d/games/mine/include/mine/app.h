@@ -20,6 +20,7 @@
 #include <mine/registry.h>
 #include <mine/sandbox.h>
 #include <mine/session.h>
+#include <mine/world.h>
 
 #include <t2d/render/sprite_batch.h>
 #include <t2d/render/text_renderer.h>
@@ -89,6 +90,15 @@ struct MineOptions {
     /// Open the list of loaded content packs and mods at startup: a scripted run has no keyboard to
     /// press the key that opens it on.
     bool content_list = false;
+
+    /// The world view: which mine layer to enter, and whether to start there. A session enters the
+    /// mine with Enter; a scripted run says so on the command line.
+    i32 mine_layer = 0;
+    bool world_view = false;
+    /// What the world's generator puts in the layer while the layer rules do not exist yet: "none" (an
+    /// empty layer, which is what a session enters until then), or "bands" / "scatter" - the debug
+    /// generators of world.h, a view of the registry rather than content of its own.
+    std::string layer_fill;
 };
 
 class MineApp final : public ore::Application {
@@ -106,7 +116,7 @@ protected:
     [[nodiscard]] ore::ConstSpan<ore::CliOption> cli_options() const override;
 
 private:
-    enum class Screen : u8 { Start, Session, Sandbox, Content };
+    enum class Screen : u8 { Start, Session, Sandbox, Content, World };
 
     void handle_start_input();
     void handle_session_input();
@@ -126,6 +136,25 @@ private:
     void set_playtest(bool on);
     void begin_session(const SessionConfig& session);
     void open_sandbox();
+    /// Enters the mine: builds the world from the session and the options and steps into a layer. The
+    /// session screen's Enter, and --world-view for a scripted run.
+    void open_world();
+    /// Builds p index and makes it the layer being played. Only one layer is held, and the generator
+    /// is deterministic, so walking layers and coming back gives the same mine (world.h).
+    void enter_mine_layer(i32 index);
+    /// The game's own input: the camera and the pointer, nothing else (docs/GAME_DESIGN.md section 3).
+    void handle_world_input(f32 delta_seconds);
+    /// Sizes the camera so the whole layer fits the window, then keeps the view inside the map.
+    void fit_world_view();
+    void clamp_world_view();
+    /// Points the world's pointer at \p screen; off the map it points at nothing.
+    void point_world_at(t2d::Vec2 screen);
+    /// What the pointer is over: the topmost plot at the cell, with its footprint and its mirroring.
+    [[nodiscard]] std::string world_cell_text(GridPos cell) const;
+    /// The layer, what it holds, and what the two passes did last frame.
+    [[nodiscard]] std::string world_summary_text() const;
+    [[nodiscard]] std::string world_passes_text() const;
+    [[nodiscard]] t2d::Aabb2 world_area() const;
     void apply_fill();
     /// Loads the game's content, its packs and its mods into registry_ through the pipeline.
     const ContentPipelineReport& load_content();
@@ -175,6 +204,11 @@ private:
     /// texture, and a batch binds one texture, so this is one batch per distinct picture on screen -
     /// the price of not packing the art into an atlas.
     [[nodiscard]] ImagePassCost draw_sandbox_images(ore::RenderFrame& frame, const ore::Mat4& view_projection);
+    /// Draws the plots of \p layer that \p camera covers, each over its whole footprint and mirrored
+    /// when it is, grouped into one batch per distinct picture on screen (docs/MODS.md section 0).
+    /// The world view and the sandbox's playtest both draw a layer through this.
+    [[nodiscard]] ImagePassCost draw_layer_images(ore::RenderFrame& frame, const ore::Mat4& view_projection,
+                                                  const MineLayer& layer, const t2d::Camera2D& camera);
     void draw_start_screen();
     void draw_session_screen();
     void draw_sandbox_screen();
@@ -183,6 +217,8 @@ private:
     void draw_content_screen();
     /// The layer as the game draws it, plus the pointer and one line saying what it is over.
     void draw_playtest_screen();
+    /// The mine: the layer the session is in, its plots, the pointer, and what the passes did.
+    void draw_world_screen();
 
     /// Where the content screen puts things. The lines of the list, the room left for the selected
     /// source and the room the load's messages take all come from one place, so the pass that draws
@@ -238,6 +274,19 @@ private:
     ContentRegistry registry_{};
     /// The single layer the sandbox screen paints on, and the message the last action left behind.
     SandboxModel sandbox_{};
+    /// The mine the session is playing: its seed, its layer shape, the generator that describes its
+    /// layers, and the one layer that is in memory. Built when the mine is entered.
+    MineWorld world_{};
+    /// The world view's camera. A god view like the sandbox's - there is no player character anywhere
+    /// in this file (docs/GAME_DESIGN.md section 1.11) - but this one looks at the game's own layer.
+    t2d::Camera2D world_camera_{};
+    /// What the game's pointer is over, if anything. Not the sandbox's cursor: the two are different
+    /// views with different pointers, and neither moves the other.
+    std::optional<GridPos> world_pointer_{};
+    /// What the two passes did in the frame that was last drawn: scenery brought up to date, and plots
+    /// that took their turn. The HUD says so, because "the mine runs" has to be visible somewhere.
+    usize world_refreshed_ = 0;
+    usize world_ticked_ = 0;
     /// Everything the game's registry is filled from. Owns the loaded libraries, so it outlives every
     /// call into them.
     ContentPipeline content_{};

@@ -293,6 +293,9 @@ void MineApp::on_start() {
     image_sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     image_sampler_ = ore::rhi::Sampler::create(context.device(), image_sampler_desc);
     if (screen_ == Screen::Sandbox) open_sandbox();
+    // The mine, when a scripted run asks to be taken straight into it: the session screen's Enter is
+    // the same call.
+    if (options_.world_view) open_world();
     // The list is opened last: it reports what the load above actually put in the registry, and a
     // scripted run has no keyboard to press the key that opens it on.
     if (options_.content_list) open_content_list(screen_ == Screen::Sandbox ? Screen::Sandbox : Screen::Start);
@@ -304,6 +307,7 @@ void MineApp::on_update(f32 delta_seconds) {
         case Screen::Session: handle_session_input(); break;
         case Screen::Sandbox: handle_sandbox_input(delta_seconds); break;
         case Screen::Content: handle_content_input(); break;
+        case Screen::World: handle_world_input(delta_seconds); break;
     }
     // Headless runs have no vsync: without pacing the loop would spin and a screenshot would be taken
     // before the interface settled.
@@ -521,7 +525,7 @@ void MineApp::draw_session_screen() {
     constexpr f32 kBeforeBack = 6.0f;
     const f32 rows_height = (session_.role == Role::Join ? 6.0f : 5.0f) * row_line;
     const f32 content = line_for(title_px) + kAfterTitle + kRule + kAfterRule + rows_height + kBeforeRule + kRule +
-                        kAfterRule + row_line * 3.0f + kBetweenPending + kBeforeBack + row_line;
+                        kAfterRule + row_line * 3.0f + kBetweenPending + kBeforeBack + row_line * 2.0f;
     const f32 panel_width = std::min(width - 4.0f * padding, 330.0f * unit_);
     const f32 panel_height = std::min(height - 4.0f * padding, content + 2.0f * padding);
     const t2d::Aabb2 panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
@@ -575,6 +579,9 @@ void MineApp::draw_session_screen() {
     y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.pending.line2"));
 
     y += kBeforeBack;
+    // Entering the mine is what a session is for: what is entered is the layer the world's generator
+    // describes, which is empty until the designer's layer rules arrive (docs/GAME_DESIGN.md 7.3).
+    y += draw_line(left, y, body_px_, kPalette.accent, locale_.text("session.enter"));
     draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.back"));
 }
 
@@ -978,6 +985,193 @@ void MineApp::apply_fill() {
     sandbox_.set_active_layer(options_.start_layer);
 }
 
+// --- the mine ----------------------------------------------------------------------------------
+
+t2d::Aabb2 MineApp::world_area() const {
+    // The whole window: the game's view of a layer is the layer, and the HUD is drawn over the bottom
+    // of it rather than beside it (docs/GAME_DESIGN.md section 3). Screen space and window pixels are
+    // therefore the same thing, which is what lets the pointer be read straight off the input state.
+    return t2d::Aabb2{t2d::Vec2{0.0f, 0.0f},
+                      t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}};
+}
+
+void MineApp::open_world() {
+    const LayerShape shape{options_.grid_width, options_.grid_height, options_.tile_layers};
+    world_ = MineWorld(session_.seed, shape);
+    // Which content a layer holds is the designer's (docs/GAME_DESIGN.md sections 7.3, 7.4, 7.8, 7.9),
+    // so the generator in force places nothing: an empty layer is what a session enters until those
+    // rules arrive. The debug fills are there to look at content before then, and they name no content
+    // of their own - they lay out whatever the registry holds.
+    if (options_.layer_fill == "bands") {
+        world_.set_generator(debug_band_generator(registry_, shape));
+    } else if (options_.layer_fill == "scatter") {
+        world_.set_generator(debug_scatter_generator(registry_, shape));
+    } else {
+        if (!options_.layer_fill.empty() && options_.layer_fill != "none") {
+            set_status(format_localized(locale_.text("world.fill.unknown"), options_.layer_fill), true);
+        }
+        world_.set_generator(empty_layer_generator(shape));
+    }
+    screen_ = Screen::World;
+    world_pointer_.reset();
+    enter_mine_layer(options_.mine_layer);
+    if (options_.has_view) {
+        world_camera_.look_at(
+            t2d::Vec2{options_.view_cell.x + 0.5f, options_.view_cell.y + 0.5f});
+        if (options_.view_zoom > 0.0f) world_camera_.set_zoom(options_.view_zoom);
+        clamp_world_view();
+    }
+    // A scripted run has no mouse: the pointer it was given is the pointer, until a real one appears
+    // (the debug input server can move one later).
+    if (options_.has_pointer) {
+        point_world_at(world_camera_.screen_of(
+            t2d::Vec2{options_.pointer_cell.x + 0.5f, options_.pointer_cell.y + 0.5f}));
+    }
+}
+
+void MineApp::enter_mine_layer(i32 index) {
+    const i32 wanted = std::max(0, index);
+    const MineLayer& layer = world_.enter(wanted, registry_, content_.report().definitions);
+    const LayerBuildReport& report = world_.build_report();
+    T2D_INFO("world: layer {} is {}x{} with {} tile layer(s): {} plot(s), {} ticking, {} mirrored, {} cell(s)",
+             layer.index(), layer.width(), layer.height(), layer.layer_count(), layer.plot_count(),
+             layer.ticking_count(), layer.mirrored_count(), layer.filled_cells());
+    // Everything the generator asked for that could not be placed: a layer that quietly loses a
+    // structure is a bug report nobody can act on (world.h).
+    for (const std::string& error : report.errors) T2D_WARN("world: {}", error);
+    fit_world_view();
+}
+
+void MineApp::fit_world_view() {
+    const t2d::Aabb2 area = world_area();
+    const f32 width = std::max(1.0f, area.max.x - area.min.x);
+    const f32 height = std::max(1.0f, area.max.y - area.min.y);
+    world_camera_.set_viewport(t2d::Vec2{width, height});
+    const MineLayer& layer = world_.layer();
+    const f32 cells_x = static_cast<f32>(std::max(1u, layer.width()));
+    const f32 cells_y = static_cast<f32>(std::max(1u, layer.height()));
+    // The layer is framed with room for the HUD, and a zoom that lands on whole pixels while the cells
+    // are big enough to be seen one by one: a fractional zoom is what makes a 512 cell layer fit at
+    // all, and rounding it down would clamp to the minimum.
+    const f32 usable = std::max(1.0f, height - line_for(body_px_) * 2.0f - 32.0f * unit_);
+    const f32 cell = std::min(width / cells_x, usable / cells_y);
+    world_camera_.set_zoom(cell >= 1.0f ? std::floor(cell) : cell);
+    world_camera_.look_at(t2d::Vec2{cells_x * 0.5f, cells_y * 0.5f});
+    clamp_world_view();
+}
+
+void MineApp::clamp_world_view() {
+    const MineLayer& layer = world_.layer();
+    world_camera_.clamp_to(t2d::Aabb2{t2d::Vec2{0.0f, 0.0f},
+                                      t2d::Vec2{static_cast<f32>(layer.width()),
+                                                static_cast<f32>(layer.height())}});
+}
+
+void MineApp::point_world_at(t2d::Vec2 screen) {
+    const t2d::Vec2 world = world_camera_.world_of(screen);
+    const GridPos cell{t2d::floor_to_i32(world.x), t2d::floor_to_i32(world.y)};
+    // Off the map is not a cell: the pointer remembers nothing rather than clamping to the nearest
+    // edge, which is what a pointer that selects what is under it means (docs/GAME_DESIGN.md 1.11).
+    world_pointer_ = world_.layer().inside(cell) ? std::optional<GridPos>{cell} : std::nullopt;
+}
+
+std::string MineApp::world_cell_text(GridPos cell) const {
+    const types::SceneTile* plot = world_.layer().top_plot_at(cell);
+    if (plot == nullptr) return std::string{locale_.text("sandbox.cell.empty")};
+    std::string text = format_localized(locale_.text("world.cell.plot"), content_kind_name(plot->kind()),
+                                        plot->id(), plot->name(registry_), plot->width(), plot->height(),
+                                        plot->anchor().x, plot->anchor().y);
+    // Whether the dice turned this one around is part of what it is: it is decided once, when the map
+    // is built, and it is the only thing about a plot that a viewer cannot work out from the data.
+    if (plot->mirrored()) text = format_localized(locale_.text("world.cell.mirrored"), text);
+    return text;
+}
+
+std::string MineApp::world_summary_text() const {
+    const MineLayer& layer = world_.layer();
+    return format_localized(locale_.text("world.layer"), layer.index(), layer.width(), layer.height(),
+                            layer.layer_count(), layer.plot_count(), layer.ticking_count(),
+                            layer.mirrored_count());
+}
+
+std::string MineApp::world_passes_text() const {
+    return format_localized(locale_.text("world.view"), world_camera_.zoom(),
+                            static_cast<i32>(world_camera_.visible_cells().width),
+                            static_cast<i32>(world_camera_.visible_cells().height), world_refreshed_,
+                            world_ticked_);
+}
+
+void MineApp::handle_world_input(f32 delta_seconds) {
+    const ore::InputState& input = this->input();
+    const t2d::Aabb2 area = world_area();
+    const t2d::Vec2 centre{area.max.x * 0.5f, area.max.y * 0.5f};
+    const t2d::Vec2 mouse{input.mouse_x(), input.mouse_y()};
+
+    // The game's input is the camera and the pointer (docs/GAME_DESIGN.md sections 1.11 and 3): there
+    // is no character to move, and what a pointer can *do* to a cell is the action table the designer
+    // has not given yet (section 7.14) - so this view flies over the mine and says what is under the
+    // pointer, and nothing else.
+    constexpr f32 kLookCellsPerSecond = 12.0f;
+    const f32 step = kLookCellsPerSecond * world_camera_.zoom() * delta_seconds;
+    t2d::Vec2 look{};
+    if (input.key_down(ore::Key::Left) || input.key_down(ore::Key::A)) look.x -= 1.0f;
+    if (input.key_down(ore::Key::Right) || input.key_down(ore::Key::D)) look.x += 1.0f;
+    if (input.key_down(ore::Key::Up) || input.key_down(ore::Key::W)) look.y -= 1.0f;
+    if (input.key_down(ore::Key::Down) || input.key_down(ore::Key::S)) look.y += 1.0f;
+    if (look.x != 0.0f || look.y != 0.0f) {
+        // pan() takes a drag: the map follows the pointer, so looking right drags the map left.
+        world_camera_.pan(t2d::Vec2{-look.x * step, -look.y * step});
+    }
+    if (input.key_pressed(ore::Key::Equal) || input.key_pressed(ore::Key::KpAdd)) world_camera_.zoom_at(centre, 1.25f);
+    if (input.key_pressed(ore::Key::Minus) || input.key_pressed(ore::Key::KpSubtract)) {
+        world_camera_.zoom_at(centre, 0.8f);
+    }
+    if (input.mouse_down(ore::MouseButton::Middle)) {
+        world_camera_.pan(t2d::Vec2{input.mouse_delta_x(), input.mouse_delta_y()});
+    }
+    if (input.scroll_y() != 0.0f) {
+        world_camera_.zoom_at(mouse, input.scroll_y() > 0.0f ? 1.15f : 1.0f / 1.15f);
+    }
+    clamp_world_view();
+
+    // The layers of the mine: entering one builds it, and only the one being played is held (world.h).
+    if (input.key_pressed(ore::Key::LeftBracket) || input.key_pressed(ore::Key::PageDown)) {
+        if (world_.layer_index() > 0) enter_mine_layer(world_.layer_index() - 1);
+    }
+    if (input.key_pressed(ore::Key::RightBracket) || input.key_pressed(ore::Key::PageUp)) {
+        enter_mine_layer(world_.layer_index() + 1);
+    }
+    if (input.key_pressed(ore::Key::C)) fit_world_view();
+    if (input.key_pressed(ore::Key::F5)) {
+        // A reload changes the registry, so the layer is built again out of what is now registered:
+        // content that disappeared is reported by the build rather than drawn as something it is not.
+        reload_content();
+        enter_mine_layer(world_.layer_index());
+    }
+    if (input.key_pressed(ore::Key::F6)) {
+        open_content_list(Screen::World);
+        return;
+    }
+    if (input.key_pressed(ore::Key::Escape)) {
+        screen_ = Screen::Session;
+        return;
+    }
+
+    // The two passes, once a frame: scenery is brought up to date only where something asked it to be,
+    // and the plots that run take their turn on the cadence each one owns (types/entity_tile.h). What
+    // they did is on the HUD - "the mine runs" has to be visible somewhere.
+    world_refreshed_ = world_.refresh();
+    world_ticked_ = world_.tick(delta_seconds);
+
+    // The pointer selects what is under it, and is asked again every frame because the camera can move
+    // under a mouse that is standing still - but only once there is a mouse, so a scripted run keeps
+    // the pointer it was given instead of snapping it to the top left corner of the screen.
+    if (input.cursor_inside_window() || input.mouse_delta_x() != 0.0f || input.mouse_delta_y() != 0.0f) {
+        mouse_seen_ = true;
+    }
+    if (mouse_seen_) point_world_at(mouse);
+}
+
 ore::rhi::Texture* MineApp::texture_of(ContentKind kind, std::string_view name) const {
     const auto found = content_textures_.find(image_key(kind, name));
     return found == content_textures_.end() ? nullptr : found->second.get();
@@ -985,6 +1179,12 @@ ore::rhi::Texture* MineApp::texture_of(ContentKind kind, std::string_view name) 
 
 void MineApp::load_content_images() {
     image_errors_.clear();
+    // Every picture gets its own texture (docs/MODS.md section 0), and a reload replaces them. A
+    // reload happens between two frames, and the frame before it may still be on the GPU reading the
+    // texture that is about to be destroyed - destroying a texture in use loses the device. So the
+    // GPU is brought to a stop first: a reload is a rare, deliberate act (F5), and a frame of latency
+    // is a small price for not corrupting the device on the designer's main loop.
+    if (!content_textures_.empty()) renderer().wait_idle();
     content_textures_.clear();
     // One picture per content entry, and its own texture: there is no atlas to pack into, so a picture
     // is drawn in whatever size it was drawn in (docs/MODS.md section 0) and no cell can be too small
@@ -1094,7 +1294,15 @@ void MineApp::dump_layer() {
 }
 
 void MineApp::handle_session_input() {
-    if (this->input().key_pressed(ore::Key::Escape)) screen_ = Screen::Start;
+    const ore::InputState& input = this->input();
+    if (input.key_pressed(ore::Key::Escape)) {
+        screen_ = Screen::Start;
+        return;
+    }
+    // Entering the mine is what a session is for. Layer content is still the designer's to give
+    // (docs/GAME_DESIGN.md section 7), so what is entered is a layer built from whatever the registry
+    // holds - empty until the layer rules arrive.
+    if (input.key_pressed(ore::Key::Enter) || input.key_pressed(ore::Key::Space)) open_world();
 }
 
 void MineApp::handle_playtest_input(f32 delta_seconds) {
@@ -1568,6 +1776,112 @@ void MineApp::draw_playtest_screen() {
     draw_line(hint_x, text_y, body_px_, kPalette.accent, hint);
 }
 
+void MineApp::draw_world_screen() {
+    if (!world_.has_layer()) return;
+    const t2d::Aabb2 area = world_area();
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const f32 inset = 4.0f * unit_;
+    const MineLayer& layer = world_.layer();
+    const f32 cell = world_camera_.zoom();
+
+    // Where a plot lands on screen: its whole footprint, so a 3x3 is one picture and not nine.
+    const auto rect_of = [&](const types::SceneTile& plot) {
+        const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(plot.anchor().x),
+                                                              static_cast<f32>(plot.anchor().y)});
+        return t2d::Aabb2{at, t2d::Vec2{at.x + static_cast<f32>(plot.width()) * cell,
+                                        at.y + static_cast<f32>(plot.height()) * cell}};
+    };
+
+    // The layer the way the game draws it: every tile layer bottom to top, art edge to edge, and no
+    // grid lines, labels or dimming - those are what the sandbox edits against (docs/SANDBOX.md 9).
+    batch_->draw_rect(area, kPalette.background);
+    // The layer itself, marked out from the void around it: a mine is a bounded place, and an empty
+    // layer has to read as "a map with nothing on it" rather than as a broken screen.
+    const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{0.0f, 0.0f});
+    const t2d::Aabb2 bounds{corner, t2d::Vec2{corner.x + static_cast<f32>(layer.width()) * cell,
+                                              corner.y + static_cast<f32>(layer.height()) * cell}};
+    batch_->draw_rect(bounds, kPalette.grid_background);
+    batch_->draw_rect_outline(bounds, 2.0f, kPalette.grid_edge);
+    const t2d::TileRect visible = world_camera_.visible_cells();
+    if (!visible.empty()) {
+        for (i32 tile_layer = 0; tile_layer < layer.layer_count(); ++tile_layer) {
+            layer.for_each_plot_in(visible, [&](const types::SceneTile& plot) {
+                if (plot.layer() != tile_layer) return;
+                // Content with no picture gets the colour its name derives, the same way the sandbox
+                // shows it: the world view is still a developer's view until the game's own interface
+                // is designed (docs/GAME_DESIGN.md section 7).
+                if (texture_of(plot.kind(), plot.name(registry_)) != nullptr) return;
+                batch_->draw_rect(rect_of(plot), dim_color(debug_color_for(plot.name(registry_)), 0.45f));
+            });
+        }
+    }
+
+    // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
+    if (world_pointer_.has_value()) {
+        const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(world_pointer_->x),
+                                                               static_cast<f32>(world_pointer_->y)});
+        batch_->draw_rect_outline(t2d::Aabb2{at, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f, kPalette.accent);
+    }
+
+    // An empty layer says so, and says why: content is the designer's, and a screen that shows nothing
+    // has to explain itself (the rule the sandbox's empty palette follows too).
+    if (layer.plot_count() == 0) {
+        t2d::TextStyle style;
+        style.size_px = body_px_;
+        const std::string text{locale_.text("world.empty")};
+        const std::string hint{locale_.text("world.empty.hint")};
+        const f32 text_width = text_->measure(text, fonts_, style).width;
+        const f32 hint_width = text_->measure(hint, fonts_, style).width;
+        const f32 centre_y = area.max.y * 0.5f;
+        draw_line(area.max.x * 0.5f - text_width * 0.5f, centre_y - line, body_px_, kPalette.warning, text);
+        draw_line(area.max.x * 0.5f - hint_width * 0.5f, centre_y, body_px_, kPalette.text_dim, hint);
+    }
+
+    // Two lines at the bottom: what the layer is and what the two passes did, then what the pointer is
+    // over and how to move. The game's own HUD is not designed yet (section 7), so this says only what
+    // the world already knows and nothing about a game state that does not exist.
+    const f32 bar_height = line * 2.0f + inset * 2.0f;
+    const t2d::Aabb2 bar{t2d::Vec2{area.min.x, area.max.y - bar_height}, t2d::Vec2{area.max.x, area.max.y}};
+    batch_->draw_rect(bar, kPalette.panel_fill);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{bar.min.x, bar.min.y}, t2d::Vec2{bar.max.x, bar.min.y + 2.0f}},
+                      kPalette.panel_edge);
+
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    const f32 left = bar.min.x + padding;
+    const f32 right = bar.max.x - padding;
+    const f32 top_y = bar.min.y + inset;
+    const f32 bottom_y = top_y + line;
+
+    const std::string hint{locale_.text("world.hint")};
+    const f32 hint_width = text_->measure(hint, fonts_, style).width;
+    const f32 hint_x = right - hint_width;
+    const std::string summary = world_summary_text();
+    const f32 summary_width =
+        std::min(text_->measure(summary, fonts_, style).width, std::max(16.0f, hint_x - left - padding));
+    draw_fitted(left, top_y, body_px_, kPalette.text, summary, summary_width);
+    draw_line(hint_x, top_y, body_px_, kPalette.accent, hint);
+
+    // The second line: what the pointer is over, and - on the right - what the frame cost. A reload
+    // that failed has to be visible here too, so an error message takes the right hand slot.
+    const bool failed = status_is_error_ && !status_.empty();
+    const std::string passes = failed ? status_ : world_passes_text();
+    const f32 passes_width =
+        std::min(text_->measure(passes, fonts_, style).width, std::max(16.0f, (right - left) * 0.5f));
+    if (world_pointer_.has_value()) {
+        draw_fitted(left, bottom_y, body_px_, kPalette.text,
+                    format_localized(locale_.text("world.cell"), world_pointer_->x, world_pointer_->y,
+                                     world_cell_text(*world_pointer_)),
+                    std::max(16.0f, right - passes_width - left - padding));
+    } else {
+        draw_fitted(left, bottom_y, body_px_, kPalette.text_dim, locale_.text("world.off"),
+                    std::max(16.0f, right - passes_width - left - padding));
+    }
+    draw_fitted(right - passes_width, bottom_y, body_px_, failed ? kPalette.error : kPalette.text_dim, passes,
+                passes_width);
+}
+
 MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
                                                     const ore::Mat4& view_projection) {
     ImagePassCost cost;
@@ -1657,6 +1971,75 @@ MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
     return cost;
 }
 
+MineApp::ImagePassCost MineApp::draw_layer_images(ore::RenderFrame& frame, const ore::Mat4& view_projection,
+                                                  const MineLayer& layer, const t2d::Camera2D& camera) {
+    ImagePassCost cost;
+    if (content_textures_.empty() || layer.plot_count() == 0) return cost;
+    const t2d::TileRect visible = camera.visible_cells();
+    if (visible.empty()) return cost;
+    const f32 cell = camera.zoom();
+
+    // One quad of art, and which picture it belongs to. They are collected first and drawn grouped: a
+    // batch binds one texture and every content entry has its own, so the frame issues one batch per
+    // distinct picture rather than one per plot (docs/MODS.md section 0).
+    struct Quad {
+        std::string key;
+        t2d::Aabb2 rect{};
+        t2d::Aabb2 uv{};
+    };
+    std::vector<std::pair<std::string, std::vector<Quad>>> groups;
+    std::unordered_map<std::string, usize> group_of;
+    const auto add_quad = [&](Quad quad) {
+        const auto found = group_of.find(quad.key);
+        if (found == group_of.end()) {
+            group_of.emplace(quad.key, groups.size());
+            groups.emplace_back(quad.key, std::vector<Quad>{});
+            groups.back().second.push_back(std::move(quad));
+            return;
+        }
+        groups[found->second].second.push_back(std::move(quad));
+    };
+
+    // Each picture fills its whole texture: there is no atlas, so the uv rectangle is the texture - and
+    // a mirrored plot is that same rectangle with its u axis reversed. Which way a plot faces was
+    // decided when the map was built, and it is about drawing only (docs/GAME_DESIGN.md section 1.14).
+    const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
+    const t2d::Aabb2 mirrored_uv{t2d::Vec2{1.0f, 0.0f}, t2d::Vec2{0.0f, 1.0f}};
+
+    // Bottom tile layer to top, so a machine's art lands on the floor it stands on. The walk is the
+    // layer's own spatial index over the cells the viewport covers: the frame costs what is on screen,
+    // not what the layer holds.
+    for (i32 tile_layer = 0; tile_layer < layer.layer_count(); ++tile_layer) {
+        layer.for_each_plot_in(visible, [&](const types::SceneTile& plot) {
+            if (plot.layer() != tile_layer) return;
+            const ContentEntry* entry = registry_.find(plot.kind(), plot.id());
+            if (entry == nullptr) return;   // the content is gone: there is nothing to draw it with
+            const std::string key = image_key(plot.kind(), entry->name);
+            if (content_textures_.find(key) == content_textures_.end()) return;
+            const t2d::Vec2 at = camera.screen_of(
+                t2d::Vec2{static_cast<f32>(plot.anchor().x), static_cast<f32>(plot.anchor().y)});
+            // A plot is drawn over its whole footprint: a 3x3 structure is one picture stretched over
+            // nine cells, which is what having a footprint rather than nine cells is for.
+            add_quad(Quad{key,
+                          t2d::Aabb2{at, t2d::Vec2{at.x + static_cast<f32>(plot.width()) * cell,
+                                                   at.y + static_cast<f32>(plot.height()) * cell}},
+                          plot.mirrored() ? mirrored_uv : full_uv});
+        });
+    }
+
+    for (const std::pair<std::string, std::vector<Quad>>& group : groups) {
+        const auto texture = content_textures_.find(group.first);
+        if (texture == content_textures_.end()) continue;
+        batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+        for (const Quad& quad : group.second) batch_->draw_quad(quad.rect, quad.uv, 0xFFFFFFFFu);
+        batch_->end();
+        cost.draw_calls += batch_->draw_calls();
+        cost.quads += batch_->quads();
+        cost.dropped += batch_->dropped_quads();
+    }
+    return cost;
+}
+
 void MineApp::on_resize(u32 width, u32 height) {
     (void)width;
     (void)height;
@@ -1665,6 +2048,7 @@ void MineApp::on_resize(u32 width, u32 height) {
     // ran at startup was made against the wrong viewport. Switching modes is the case that keeps the
     // view (set_playtest), not resizing.
     if (screen_ == Screen::Sandbox && batch_ != nullptr) fit_sandbox_view();
+    if (screen_ == Screen::World && batch_ != nullptr && world_.has_layer()) fit_world_view();
 }
 
 void MineApp::on_render(ore::RenderFrame& frame) {
@@ -1683,6 +2067,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         case Screen::Session: draw_session_screen(); break;
         case Screen::Sandbox: playtest_ ? draw_playtest_screen() : draw_sandbox_screen(); break;
         case Screen::Content: draw_content_screen(); break;
+        case Screen::World: draw_world_screen(); break;
     }
     batch_->end();
     dropped_quads_ = batch_->dropped_quads();
@@ -1695,6 +2080,12 @@ void MineApp::on_render(ore::RenderFrame& frame) {
     // is drawn with it, which is what makes the sandbox a view of the real thing.
     if (screen_ == Screen::Sandbox) {
         const ImagePassCost cost = draw_sandbox_images(frame, view_projection);
+        draw_calls += cost.draw_calls;
+        quads += cost.quads;
+        dropped_quads_ += cost.dropped;
+    } else if (screen_ == Screen::World) {
+        const ImagePassCost cost =
+            draw_layer_images(frame, view_projection, world_.layer(), world_camera_);
         draw_calls += cost.draw_calls;
         quads += cost.quads;
         dropped_quads_ += cost.dropped;

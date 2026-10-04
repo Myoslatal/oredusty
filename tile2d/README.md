@@ -19,7 +19,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** the world is made of, the sandbox, and the mod host (manifests, load order, the native ABI) | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_sandbox`, `test_content_pack`, `test_mod_package` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, and the mod host (manifests, load order, the native ABI) | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package` |
 
 ## Layout
 
@@ -47,19 +47,22 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_ecfg               12 cases / 128 checks  the configuration format, including the shipped example.ecfg
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                9 cases / 263 checks  UTF-8, language tables, the line box, the shipped interface strings
-    tests/test_module             5 cases /  33 checks  loading a library at run time, symbols, unloading
+    tests/test_text                9 cases / 337 checks  UTF-8, language tables, the line box, the shipped interface strings
+    tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases / 1265 checks framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
     tests/test_render_offscreen   10 cases /  71 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
-    games/mine/tests/test_mine_menu      10 cases / 137 checks  the start screen as a state machine
-    games/mine/tests/test_registry       10 cases / 127 checks  content ids and the per-save name -> id table
+    games/mine/tests/test_mine_menu      11 cases / 168 checks  the start screen as a state machine
+    games/mine/tests/test_registry       10 cases / 128 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
+    games/mine/tests/test_mine_types     13 cases / 167 checks  plots: identity, footprints, the two kinds, the dice, the definer
+    games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
     games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack    9 cases / 116 checks  packs: headers, order, collisions, the three sources
-    games/mine/tests/test_mod_package     9 cases / 102 checks  mod manifests, dependency order, collisions, a native module
+    games/mine/tests/test_content_pack   11 cases / 155 checks  packs: headers, order, collisions, the three sources, engine fields
+    games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
+    games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
 
 ## The tile map
 
@@ -368,6 +371,46 @@ What exists today is the shell and the content debugger, deliberately free of an
   corrupted. `test_registry` covers it, including that failure spelled out.
 * No resource, structure, recipe or machine is hard coded anywhere: those are the designer's data.
 
+### The world
+
+A **layer** of the mine is what the game plays on: its own map, its own content, its own dice. It is
+built when it is entered — and only the layer being played is held, so a mine of a hundred layers
+costs one layer. What it is built *from* is a **layer description** (`LayerSpec`): the shape of the
+map and the content that goes in it. That is what a generator produces, the designer's data in story
+mode and a derivation from `(seed, index)` in endless mode, and both produce the same thing — so
+nothing downstream knows which mode it is. Until the layer rules exist the generator in force places
+nothing, and an empty layer is a layer: it can be entered, walked, queried and drawn.
+
+What a layer holds is **plots** (`mine::types`): fixed things that occupy cells. Both halves are
+needed and they answer different questions — the **grid** says which content sits on every cell in
+four bytes, which is what a save, a routing query and a cull walk cheaply; the **plots** are the
+objects content turns into, and they are what carries a footprint (a 3×3 is one plot, not nine), a
+cadence and a way of drawing itself. A plot is found through a **chunk index** (32×32 cells, the same
+chunking the framework's `TileMap` uses), so a query, a placement check and a frame cost what is on
+screen rather than what the layer holds.
+
+The two passes are the reason there are two kinds of plot: `refresh()` walks every plot and pays
+only for the dirty ones, `tick(dt)` walks the plots that run and nothing else. Which plots those are
+is decided once, when they are created — never by asking a plot at runtime.
+
+    ./build/debug/games/mine/mine_game --world-view 1                    # into the mine, layer 0
+    ./build/debug/games/mine/mine_game --world-view 1 --grid 64x40 --layer-fill scatter --seed 1
+
+![The world view: an empty layer, and it says so](games/mine/docs/images/world_empty_en.png)
+
+![The world view: a layer laid out from the registry](games/mine/docs/images/world_scatter_en.png)
+
+`--layer-fill bands|scatter` is the world's debug fill: it names no content, it lays out whatever the
+registry holds — a view of the registry, not a rule about the mine, exactly like the sandbox's own
+fills. With it, a layer of the game's own dirt floor shows what the plot machinery does: each plot is
+drawn over its whole footprint, and half of the ones whose content allows it come out **mirrored**
+(`random_reverse`, rolled once when the map is built). `[ ]` walks the mine's layers, `F5` reloads
+the content files and rebuilds the layer out of what is now registered.
+
+![Mirrored floor plots: the same picture, turned around](games/mine/docs/images/world_mirror_en.png)
+
+Guide: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §4 and §8, [docs/TYPES.md](docs/TYPES.md).
+
 ### The sandbox
 
 Content is not authored yet, so the game ships a **content debugger** instead of a pretend map: one
@@ -390,10 +433,11 @@ separately.
   the name table the map would quietly turn one structure into another. Content that disappeared is
   reported and its cells are marked missing — never handed to whatever now holds that number.
 * **The layout round trips through the real save path** (ids plus the name → id table), which is how
-  the strategy in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §6 got its end to end evidence: 699 cells
-  across three tile layers painted under one version of a content file load back as 699 cells under a
-  version where 438 of their ids moved, and as 559 cells plus 140 explicitly missing ones when content
-  is deleted.
+  the strategy in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §6 got its end to end evidence: 241 cells
+  painted under one version of a content file load back as 241 cells under a version that inserted an
+  entry in front of them, and as 200 cells plus 41 explicitly missing ones when content is deleted
+  (687 → 687 → 575 + 112 across three tile layers). Reloading the file under a painted layer moves
+  **123** cell ids in the one layer case and **331** in the three layer one, and loses none of them.
 * **No content in the code**: the placeholder names used by the tool's own tests are marked as such in
   `games/mine/tests/data/placeholder_content.ecfg`.
 * **Press `P` to playtest the layer** (`--playtest 1` starts in it): the same map, the same camera, drawn the way
@@ -401,8 +445,8 @@ separately.
   panel, no status bar. The input is the game's input (docs/GAME_DESIGN.md §1.11): the camera and the pointer, and
   nothing else. Holding a direction pans, the wheel zooms about the pointer, and the cell under the pointer is
   outlined with one line of HUD naming it. It is not a game mode — nothing simulates, nothing is demanded and a
-  click does nothing yet (the action table is content, §7.14) — it is the engine half, and the first user of M2's
-  world view.
+  click does nothing yet (the action table is content, §7.14) — it is the engine half, and the sandbox's own
+  version of the world view (the game's own one is above).
 * **Press `F6` for the content list** (the start screen's `CONTENT` row opens the same screen, `--content-list 1`
   starts in it): every source the registry was filled from, one line each, failures included, with the content
   each one registered underneath it.

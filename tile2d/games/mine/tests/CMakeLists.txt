@@ -76,6 +76,11 @@ add_dependencies(test_content_pack example_native example_native_bad_api example
 t2d_add_test(test_mine_types test_mine_types.cpp)
 target_link_libraries(test_mine_types PRIVATE mine_core)
 
+# The world: a layer built out of content, the plots it is made of, the refresh and tick passes, the
+# spatial index a query and a draw walk, and the collision question a mask answers.
+t2d_add_test(test_world test_world.cpp)
+target_link_libraries(test_world PRIVATE mine_core)
+
 # The list of what the registry was filled from: the same data the game's content screen draws.
 t2d_add_test(test_content_list test_content_list.cpp)
 target_link_libraries(test_content_list PRIVATE mine_core)

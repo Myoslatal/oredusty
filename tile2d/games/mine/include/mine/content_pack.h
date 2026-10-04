@@ -69,6 +69,10 @@ struct ContentPipelineReport {
     /// Every picture the load resolved, in load order, from all three stages: what the engine draws
     /// the content with. A picture that is not there is in here too, with ok == false and the reason.
     std::vector<ResolvedImage> images;
+    /// Every plot definition the load read, from all three stages: what building a layer needs. The
+    /// definitions are read while a source loads anyway - a "random_reverse" the engine cannot read is
+    /// a data error, and it is reported where the file is - so this is that read, kept (content_loader.h).
+    ContentDefinitions definitions;
     usize mods = 0;              ///< mods that loaded
     usize native_mods = 0;
     usize mod_content = 0;

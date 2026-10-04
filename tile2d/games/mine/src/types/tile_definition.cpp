@@ -83,9 +83,9 @@ std::vector<TileDefinition> tile_definitions(const t2d::EcfgDocument& document,
     return definitions;
 }
 
-std::unique_ptr<Tile> make_tile(const TileDefinition& definition, ContentId id, i32 layer, GridPos anchor,
-                                i32 width, i32 height) {
-    std::unique_ptr<Tile> tile;
+std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId id, i32 layer, GridPos anchor,
+                                      i32 width, i32 height) {
+    std::unique_ptr<SceneTile> tile;
     switch (definition.kind) {
         case ContentKind::Floor:
             tile = std::make_unique<Floor>(definition.kind, id, layer, anchor, width, height);

@@ -424,9 +424,12 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
                 slot.loaded.images.push_back(std::move(image));
             }
             // The fields the engine reads are read here too, so a mod's typo is reported by the mod
-            // that made it rather than by whatever builds a layer out of it later.
+            // that made it rather than by whatever builds a layer out of it later - and kept, because
+            // that layer builder is what a mod's content is for.
             std::vector<std::string> definition_errors;
-            (void)types::tile_definitions(document, &definition_errors);
+            for (types::TileDefinition& definition : types::tile_definitions(document, &definition_errors)) {
+                slot.loaded.definitions.push_back(std::move(definition));
+            }
             for (const std::string& definition_error : definition_errors) {
                 const std::string message = std::format("mod '{}': {}", manifest.id, definition_error);
                 report_.errors.push_back(message);

@@ -204,10 +204,13 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
                 report_.images.push_back(std::move(image));
             }
             // The other field the engine reads: a "random_reverse" it cannot read is a data error, not
-            // a plot that quietly never turns around. The definitions themselves are what the layer
-            // builder will use; here they are read so a typo is caught at load time.
+            // a plot that quietly never turns around. The definitions are what building a layer reads
+            // (world.h), so they are kept rather than only checked.
             std::vector<std::string> definition_errors;
-            (void)types::tile_definitions(base_documents[index], &definition_errors);
+            for (types::TileDefinition& definition :
+                 types::tile_definitions(base_documents[index], &definition_errors)) {
+                report_.definitions.add(std::move(definition));
+            }
             for (const std::string& definition_error : definition_errors) {
                 const std::string message = std::format("content: {}", definition_error);
                 report_.errors.push_back(message);
@@ -324,9 +327,13 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
             report_.images.push_back(std::move(image));
         }
         // The other field the engine reads, read here so a typo in a pack is caught when the pack
-        // loads rather than when a layer is built out of it.
+        // loads rather than when a layer is built out of it - and kept, because building a layer needs
+        // it.
         std::vector<std::string> definition_errors;
-        (void)types::tile_definitions(pack.content, &definition_errors, kPackTable);
+        for (types::TileDefinition& definition :
+             types::tile_definitions(pack.content, &definition_errors, kPackTable)) {
+            report_.definitions.add(std::move(definition));
+        }
         for (const std::string& definition_error : definition_errors) {
             const std::string message = std::format("pack '{}': {}", pack.id, definition_error);
             report_.errors.push_back(message);
@@ -391,14 +398,18 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
             }
             report_.images.push_back(image);
         }
+        // The definitions the mod's content files declared: the same two engine fields as everywhere
+        // else, so a layer can be built out of what a mod added exactly like out of the game's own
+        // content.
+        for (const types::TileDefinition& definition : mod.definitions) report_.definitions.add(definition);
         report_.sources.push_back(std::move(source));
     }
 
     report_.total_content = registry.total_count();
     T2D_INFO("content: {} base, {} pack(s) with {} and {} image(s), {} mod(s) with {} -> {} registered, "
-             "{} error(s)",
+             "{} plot definition(s), {} error(s)",
              report_.base_registered, report_.packs, report_.pack_content, report_.pack_images, report_.mods,
-             report_.mod_content, report_.total_content, report_.errors.size());
+             report_.mod_content, report_.total_content, report_.definitions.size(), report_.errors.size());
     for (const std::string& error : report_.errors) T2D_WARN("content: {}", error);
     for (const std::string& warning : report_.warnings) T2D_WARN("content: {}", warning);
     return report_;

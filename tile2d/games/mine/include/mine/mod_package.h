@@ -74,6 +74,9 @@ struct LoadedMod {
     /// The pictures its content files ship, resolved against the directory of the file that declares
     /// them - the same rule the game's own content and the packs follow.
     std::vector<ResolvedImage> images;
+    /// The plot definitions its content files declare: the fields the engine reads (types/
+    /// tile_definition.h), kept so that a layer can be built out of what a mod added.
+    std::vector<types::TileDefinition> definitions;
     bool native_loaded = false;
     bool ok = true;                           ///< false: the report says why, the game runs without it
     std::string error;

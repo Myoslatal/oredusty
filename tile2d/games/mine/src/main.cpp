@@ -101,6 +101,14 @@ int main(int argc, char** argv) {
     }
     if (const auto list = cli.bool_value("content-list"); list.has_value()) options.content_list = *list;
 
+    // The world view: straight into the mine, which layer, and what to put in it while the layer rules
+    // are still the designer's to give.
+    if (const auto view = cli.bool_value("world-view"); view.has_value()) options.world_view = *view;
+    if (const auto layer = cli.uint_value("mine-layer"); layer.has_value()) {
+        options.mine_layer = static_cast<mine::i32>(*layer);
+    }
+    if (const auto fill = cli.value("layer-fill"); fill.has_value()) options.layer_fill = *fill;
+
     mine::MineApp application(std::move(options));
     return application.run(argc, argv);
 }

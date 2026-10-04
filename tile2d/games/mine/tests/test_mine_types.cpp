@@ -451,7 +451,7 @@ floor::
 
     // The definer turns a definition into the plot it describes: the kind decides the class, and the
     // data decides the rest.
-    const std::unique_ptr<Tile> floor_plot = make_tile(definitions[0], 7, 1, GridPos{4, 5}, 2, 3);
+    const std::unique_ptr<SceneTile> floor_plot = make_tile(definitions[0], 7, 1, GridPos{4, 5}, 2, 3);
     T2D_REQUIRE(floor_plot != nullptr);
     T2D_CHECK(floor_plot->is_floor());
     T2D_CHECK(dynamic_cast<Floor*>(floor_plot.get()) != nullptr);
@@ -461,7 +461,7 @@ floor::
     T2D_CHECK(floor_plot->random_reverse());
     T2D_CHECK_FALSE(floor_plot->mirrored());
 
-    const std::unique_ptr<Tile> machine_plot = make_tile(definitions[1], 8, 0, GridPos{0, 0});
+    const std::unique_ptr<SceneTile> machine_plot = make_tile(definitions[1], 8, 0, GridPos{0, 0});
     T2D_REQUIRE(machine_plot != nullptr);
     T2D_CHECK(dynamic_cast<EntityTile*>(machine_plot.get()) != nullptr);
     T2D_CHECK_FALSE(machine_plot->is_floor());
@@ -469,7 +469,7 @@ floor::
     TileDefinition structure;
     structure.kind = ContentKind::Structure;
     structure.name = "wall";
-    const std::unique_ptr<Tile> wall_plot = make_tile(structure, 9, 0, GridPos{0, 0});
+    const std::unique_ptr<SceneTile> wall_plot = make_tile(structure, 9, 0, GridPos{0, 0});
     T2D_REQUIRE(wall_plot != nullptr);
     T2D_CHECK(dynamic_cast<SceneTile*>(wall_plot.get()) != nullptr);
     T2D_CHECK(dynamic_cast<EntityTile*>(wall_plot.get()) == nullptr);

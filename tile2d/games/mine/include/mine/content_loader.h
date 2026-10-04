@@ -17,6 +17,7 @@
 #pragma once
 
 #include <mine/registry.h>
+#include <mine/types/tile_definition.h>
 
 #include <t2d/core/ecfg.h>
 
@@ -34,6 +35,29 @@ struct ContentLoadReport {
     /// Tables whose name is not a content kind: reported instead of ignored, so a typo in the data
     /// file is visible.
     std::vector<std::string> unknown_tables;
+};
+
+/// Every plot definition a load read, by kind and name: what building a layer out of the content
+/// needs - the picture the content is drawn with, and whether the map may turn copies of it around
+/// (types/tile_definition.h). The pipeline reads the definitions anyway, so that a field the engine
+/// cannot read is reported while the file loads rather than when a layer is built; this is that same
+/// read, kept instead of thrown away.
+///
+/// The normal size is one entry per registered plot content - a handful - and a layer build looks a
+/// name up once per placement, so the lookup is a scan over a vector rather than an index.
+class ContentDefinitions {
+public:
+    void add(types::TileDefinition definition);
+    /// The definition \p kind and \p name have, or nullptr when the load read none: content a mod
+    /// registered through the C ABI has no file behind it, and is then a plot with no picture and no
+    /// turning around rather than a plot that cannot be placed.
+    [[nodiscard]] const types::TileDefinition* find(ContentKind kind, std::string_view name) const;
+    /// How many definitions the load read: what a log line reports, and what makes "the data said
+    /// nothing about any plot" visible instead of silent.
+    [[nodiscard]] usize size() const { return definitions_.size(); }
+
+private:
+    std::vector<types::TileDefinition> definitions_;
 };
 
 /// Every piece of content \p document declares, in file order (ids are kNoContent: nothing is
