@@ -174,8 +174,31 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
     if (objects.empty()) return fail("no object files were given");
 
     CodeTable table;
+    // COMDAT: a group is one definition of one thing, emitted by every translation unit that uses it -
+    // an inline function, a template instance, a vtable. A linker keeps one copy and points every
+    // reference at it; a merge that kept them all would carry the same function once per object, which
+    // for C++ is most of the code there is. Groups are matched by their signature, and the sections
+    // inside one are matched by their position in it.
+    std::map<std::string, std::vector<u32>> kept_groups;
     for (const ObjectFile& object : objects) {
         const std::string label = object.source.empty() ? std::string("(object)") : object.source;
+        // Which group a section belongs to, and where it sits inside it.
+        std::vector<u32> group_of(object.sections.size(), kInvalidId);
+        std::vector<u32> position_in_group(object.sections.size(), 0);
+        for (usize group_index = 0; group_index < object.groups.size(); ++group_index) {
+            const ObjectGroup& group = object.groups[group_index];
+            for (usize position = 0; position < group.members.size(); ++position) {
+                const u32 member = group.members[position];
+                if (member >= group_of.size()) continue;
+                group_of[member] = static_cast<u32>(group_index);
+                position_in_group[member] = static_cast<u32>(position);
+            }
+        }
+        const auto signature_of = [&object](u32 group_index) -> std::string {
+            if (group_index >= object.groups.size()) return {};
+            const u32 symbol = object.groups[group_index].signature;
+            return symbol < object.symbols.size() ? object.symbols[symbol].name : std::string{};
+        };
         // Which of the object's sections the table carries. A section that occupies no memory when
         // the program runs - a comment, debug info, the symbol table itself - has nothing to place,
         // and a relocation that patched one of those goes with it.
@@ -188,7 +211,21 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
                                         "place: keep per-module state in the module's own data instead",
                                         label, section.name));
             }
-            section_map[index] = static_cast<u32>(table.sections.size());
+            // A frame description is only useful to an unwinder that was told about it, and nothing
+            // registers a table's - it would sit in memory describing code nobody can unwind through.
+            if (section.name == ".eh_frame" || section.name == ".gcc_except_table") continue;
+            // A group that is already in the table: this object's copy is the same definition, so it is
+            // not carried again - everything in this object that referred to it refers to that one.
+            const u32 group = group_of[index];
+            const std::string signature = group == kInvalidId ? std::string{} : signature_of(group);
+            if (!signature.empty()) {
+                const auto kept = kept_groups.find(signature);
+                const u32 position = position_in_group[index];
+                if (kept != kept_groups.end() && position < kept->second.size()) {
+                    section_map[index] = kept->second[position];
+                    continue;
+                }
+            }
             CodeTableSection packed;
             packed.name = section.name;
             packed.type = section.type;
@@ -198,6 +235,8 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             // A section that takes up room but has no bytes in the file (.bss) is zeros: that is
             // exactly what the linker would give it.
             if (packed.data.size() < section.size) packed.data.resize(section.size, 0);
+            section_map[index] = static_cast<u32>(table.sections.size());
+            if (!signature.empty()) kept_groups[signature].push_back(section_map[index]);
             table.sections.push_back(std::move(packed));
         }
 
