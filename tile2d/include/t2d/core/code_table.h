@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <vector>
 
+
 namespace t2d {
 
 /// What a table file starts with. The version is bumped when the layout changes; a table written by
@@ -84,6 +85,36 @@ struct CodeTableRelocation {
     u32 symbol = 0;
     i64 addend = 0;
 };
+
+/// An engine version, written "major.minor".
+struct ApiVersion {
+    i64 major = 0;
+    i64 minor = 0;
+
+    /// Parses "1.0", "2", "3.14". A version that cannot be read is refused rather than guessed at.
+    [[nodiscard]] static std::optional<ApiVersion> parse(std::string_view text);
+    [[nodiscard]] std::string text() const;
+    friend bool operator==(const ApiVersion&, const ApiVersion&) = default;
+};
+
+/// What a load decided about one module.
+enum class ApiVerdict : u8 { Accept, Warn, Refuse };
+
+/// How far a module that reaches outside the published surface may be from the engine it runs on.
+/// One minor version: far enough for a patch or a small release, not far enough to pretend that an
+/// internal symbol survived a redesign.
+inline constexpr i64 kUnlistedMinorRange = 1;
+
+/// The rule, and the whole of it:
+///
+///   * a **different major** version is refused, whichever surface the module used - nothing about a
+///     program's internals is promised across one;
+///   * a module that stays **inside** the published surface loads across the whole major version and
+///     says nothing: that surface is what the engine promises;
+///   * a module that reaches **outside** it is held to a narrow range - the same version loads quietly,
+///     a minor version either way loads with a warning (it may well work, and the person running it
+///     should know why it might not), and anything further is refused.
+[[nodiscard]] ApiVerdict api_verdict(const ApiVersion& built_against, const ApiVersion& host, bool inside_surface);
 
 /// What a module says it needs before it may be merged: another module's id, and optionally the exact
 /// version of it.

@@ -81,6 +81,37 @@ void write_trampoline(u8* stub, u64 target) {
 
 // --- the table itself -----------------------------------------------------------------------------
 
+std::optional<ApiVersion> ApiVersion::parse(std::string_view text) {
+    const usize dot = text.find('.');
+    const std::string_view major_text = text.substr(0, dot);
+    const std::string_view minor_text = dot == std::string_view::npos ? std::string_view{} : text.substr(dot + 1);
+    const auto number = [](std::string_view part) -> std::optional<i64> {
+        if (part.empty()) return std::nullopt;
+        i64 value = 0;
+        for (const char letter : part) {
+            if (letter < '0' || letter > '9') return std::nullopt;
+            value = value * 10 + (letter - '0');
+        }
+        return value;
+    };
+    const std::optional<i64> major = number(major_text);
+    if (!major.has_value()) return std::nullopt;
+    std::optional<i64> minor = dot == std::string_view::npos ? std::optional<i64>(0) : number(minor_text);
+    if (!minor.has_value()) return std::nullopt;
+    return ApiVersion{*major, *minor};
+}
+
+std::string ApiVersion::text() const { return std::format("{}.{}", major, minor); }
+
+ApiVerdict api_verdict(const ApiVersion& built_against, const ApiVersion& host, bool inside_surface) {
+    if (built_against.major != host.major) return ApiVerdict::Refuse;
+    if (inside_surface) return ApiVerdict::Accept;
+    if (built_against == host) return ApiVerdict::Accept;
+    const i64 distance = built_against.minor > host.minor ? built_against.minor - host.minor
+                                                          : host.minor - built_against.minor;
+    return distance <= kUnlistedMinorRange ? ApiVerdict::Warn : ApiVerdict::Refuse;
+}
+
 std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& objects, std::string* error) {
     const auto fail = [&](std::string message) -> std::optional<CodeTable> {
         if (error != nullptr) *error = std::move(message);

@@ -1,13 +1,17 @@
 # engine.api - the symbols a code table may ask the engine for (docs/ENGINE_API.md).
 #
+#   engine <major>.<minor>
 #   <tier> <mangled symbol> <module>
 #
 # A: offered, frozen - a change to one of these is a deliberate act and bumps the engine version.
 # B: offered, and expected to change with the renderer, the network and the loading machinery.
-# Anything not listed is refused at load time with a message naming the symbol.
+# Anything else the engine's own namespaces contain is refused at load time, with the symbol named.
+# The platform (libc, libstdc++, Vulkan, GLFW) is not part of this list and never checked.
 #
 # Generated from the symbols the game's own table asks the host for (codetab dump), which is the
 # measured floor of the surface: what the game itself needs, a mod needs a subset of.
+
+engine 1.0
 
 A _ZN3t2d11log_enabledENS_8LogLevelE t2d/core   # t2d::log_enabled
 A _ZN3t2d12EcfgDocument4loadERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPNS_9EcfgErrorE t2d/core   # t2d::EcfgDocument::load
@@ -34,6 +38,19 @@ A _ZN3t2d8line_boxERKNS_7FontSetERKNS_9TextStyleE t2d/text   # t2d::line_box
 A _ZN3t2d8sleep_msEj t2d/core   # t2d::sleep_ms
 A _ZN3t2d9log_panicESt17basic_string_viewIcSt11char_traitsIcEERKSt15source_location t2d/core   # t2d::log_panic
 A _ZN3t2d9log_writeENS_8LogLevelESt17basic_string_viewIcSt11char_traitsIcEERKSt15source_location t2d/core   # t2d::log_write
+A _ZNK3t2d11StringTable5countENS_8LanguageE t2d/text   # t2d::StringTable::count
+A _ZNK3t2d6Locale27missing_for_active_languageB5cxx11Ev t2d/text   # t2d::Locale::missing_for_active_language[abi:cxx11]
+A _ZNK3t2d6Locale4textESt17basic_string_viewIcSt11char_traitsIcEE t2d/text   # t2d::Locale::text
+A _ZNK3t2d8Camera2D13visible_cellsEf t2d/core   # t2d::Camera2D::visible_cells
+A _ZNK3t2d8Camera2D8world_ofENS_4Vec2E t2d/core   # t2d::Camera2D::world_of
+A _ZNK3t2d8Camera2D9screen_ofENS_4Vec2E t2d/core   # t2d::Camera2D::screen_of
+A _ZNK3t2d9EcfgError8describeB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE t2d/core   # t2d::EcfgError::describe[abi:cxx11]
+A _ZNK3t2d9EcfgValue4findESt17basic_string_viewIcSt11char_traitsIcEE t2d/core   # t2d::EcfgValue::find
+A _ZNK3t2d9EcfgValue6as_intEl t2d/core   # t2d::EcfgValue::as_int
+A _ZNK3t2d9EcfgValue7as_boolEb t2d/core   # t2d::EcfgValue::as_bool
+A _ZNK3t2d9EcfgValue8as_floatEd t2d/core   # t2d::EcfgValue::as_float
+A _ZNK3t2d9EcfgValue8childrenEv t2d/core   # t2d::EcfgValue::children
+A _ZNK3t2d9EcfgValue9as_stringESt17basic_string_viewIcSt11char_traitsIcEE t2d/core   # t2d::EcfgValue::as_string
 B _ZN3ore10FrameTimerC1Ev ore/app   # ore::FrameTimer::FrameTimer
 B _ZN3ore11Application3runEiPPc ore/app   # ore::Application::run
 B _ZN3ore11CommandLine5parseEiPPc ore/app   # ore::CommandLine::parse
@@ -66,3 +83,15 @@ B _ZN3t2d6Module6symbolEPKc t2d/net   # t2d::Module::symbol
 B _ZN3t2d6ModuleC1EOS0_ t2d/net   # t2d::Module::Module
 B _ZN3t2d6ModuleD1Ev t2d/net   # t2d::Module::~Module
 B _ZN3t2d6ModuleaSEOS0_ t2d/net   # t2d::Module::operator=
+B _ZNK3ore10InputState10mouse_downENS_11MouseButtonE ore/platform   # ore::InputState::mouse_down
+B _ZNK3ore10InputState10shift_downEv ore/platform   # ore::InputState::shift_down
+B _ZNK3ore10InputState11key_pressedENS_3KeyE ore/platform   # ore::InputState::key_pressed
+B _ZNK3ore10InputState8key_downENS_3KeyE ore/platform   # ore::InputState::key_down
+B _ZNK3ore11Application11shader_pathB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE ore/app   # ore::Application::shader_path[abi:cxx11]
+B _ZNK3ore11Application5inputEv ore/app   # ore::Application::input
+B _ZNK3ore11CommandLine10bool_valueESt17basic_string_viewIcSt11char_traitsIcEE ore/app   # ore::CommandLine::bool_value
+B _ZNK3ore11CommandLine10uint_valueESt17basic_string_viewIcSt11char_traitsIcEE ore/app   # ore::CommandLine::uint_value
+B _ZNK3ore11CommandLine5valueB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE ore/app   # ore::CommandLine::value[abi:cxx11]
+B _ZNK3ore11CommandLine6valuesB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE ore/app   # ore::CommandLine::values[abi:cxx11]
+B _ZNK3t2d10GlyphAtlas4pageEj t2d/render   # t2d::GlyphAtlas::page
+B _ZNK3t2d12TextRenderer7measureESt17basic_string_viewIcSt11char_traitsIcEERKNS_7FontSetERKNS_9TextStyleEf t2d/render   # t2d::TextRenderer::measure

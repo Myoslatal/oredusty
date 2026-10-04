@@ -78,7 +78,7 @@ set(MINE_TABLE_PATH "${CMAKE_CURRENT_BINARY_DIR}/${MINE_TABLE_NAME}")
 add_custom_command(
     OUTPUT "${MINE_TABLE_PATH}"
     COMMAND $<TARGET_FILE:codetab> pack $<TARGET_OBJECTS:mine_table>
-            -o "${MINE_TABLE_PATH}" --id mine --name "Mine" --version 1.0
+            -o "${MINE_TABLE_PATH}" --id mine --name "Mine" --version 1.0 --requires engine@1.0
     DEPENDS mine_table $<TARGET_OBJECTS:mine_table> codetab
     # The object list is a list, not one long argument: without this the shell sees the semicolons.
     COMMAND_EXPAND_LISTS

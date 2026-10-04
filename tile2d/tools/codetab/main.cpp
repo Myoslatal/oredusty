@@ -16,15 +16,20 @@
 #include <t2d/core/code_table.h>
 #include <t2d/core/object_file.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
 
+using t2d::ApiVerdict;
+using t2d::ApiVersion;
 using t2d::CodeRequirement;
 using t2d::CodeTable;
 using t2d::ObjectFile;
@@ -40,6 +45,10 @@ struct Options {
     std::string version;
     std::vector<CodeRequirement> requirements;
     std::string optimization = "-O2";
+    /// The published surface, and the engine the tables are being checked against.
+    std::string surface;
+    std::string host_version = "1.0";
+    std::string engine_id = "engine";
     bool exceptions = false;
     bool keep = false;
     bool verbose = false;
@@ -51,6 +60,7 @@ void usage() {
                  "  codetab build <source.cpp>... -o <out.codetab> [options]   compile, then pack\n"
                  "  codetab pack <object.o>... -o <out.codetab> [options]        pack what is there\n"
                  "  codetab dump <table.codetab>                                 what is in one\n"
+                 "  codetab api --surface <engine.api> <table.codetab>...        check it against the engine\n"
                  "\n"
                  "options:\n"
                  "  --compiler <path>   the compiler to drive (default: c++)\n"
@@ -97,6 +107,9 @@ void usage() {
         else if (argument == "--name") { if (!value(options.name)) return false; }
         else if (argument == "--version") { if (!value(options.version)) return false; }
         else if (argument == "--opt") { if (!value(options.optimization)) return false; }
+        else if (argument == "--surface") { if (!value(options.surface)) return false; }
+        else if (argument == "--host") { if (!value(options.host_version)) return false; }
+        else if (argument == "--engine") { if (!value(options.engine_id)) return false; }
         else if (argument == "-o" || argument == "--output") { if (!value(options.output)) return false; }
         else if (argument == "--include" || argument == "-I") { std::string dir; if (!value(dir)) return false; options.includes.push_back(dir); }
         else if (argument == "--define" || argument == "-D") { std::string define; if (!value(define)) return false; options.defines.push_back(define); }
@@ -241,6 +254,106 @@ void usage() {
     return 0;
 }
 
+/// Whether a symbol belongs to one of the engine's own namespaces. The platform's symbols - libc,
+/// libstdc++, the exception machinery - are not the engine's to publish, so a table is never asked to
+/// have them on the list: a mod may use the C++ library as freely as the engine does.
+[[nodiscard]] bool engine_symbol(std::string_view name) {
+    for (const char* space : {"3t2d", "3ore", "4mine"}) {
+        const std::size_t at = name.find(space);
+        if (at != std::string_view::npos && at < 12) return true;
+    }
+    return false;
+}
+
+/// The published surface: one symbol a line, with its tier and module after it. Comments and blank
+/// lines are the file's own business, not the checker's.
+[[nodiscard]] std::optional<std::unordered_set<std::string>> load_surface(const std::string& path, std::string* error) {
+    std::ifstream stream(path);
+    if (!stream) {
+        if (error != nullptr) *error = std::format("'{}' cannot be read", path);
+        return std::nullopt;
+    }
+    std::unordered_set<std::string> symbols;
+    std::string line;
+    while (std::getline(stream, line)) {
+        const std::size_t comment = line.find('#');
+        if (comment != std::string::npos) line.erase(comment);
+        std::string_view text(line);
+        while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
+        while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) text.remove_suffix(1);
+        if (text.empty()) continue;
+        const std::size_t space = text.find(' ');
+        if (space == std::string_view::npos) continue;      // a tier with no symbol is not a symbol
+        std::string_view rest = text.substr(space + 1);
+        while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
+        const std::size_t end = rest.find(' ');
+        symbols.emplace(rest.substr(0, end));
+    }
+    return symbols;
+}
+
+/// Checks tables against the published surface and the version rule. What a module asks the engine for
+/// is what no module in the set defines: everything else is answered inside the merged tables.
+[[nodiscard]] int api_check(const Options& options) {
+    if (options.surface.empty()) {
+        std::cerr << "codetab api: --surface <engine.api> is required\n";
+        return 2;
+    }
+    std::string error;
+    std::optional<std::unordered_set<std::string>> surface = load_surface(options.surface, &error);
+    if (!surface.has_value()) {
+        std::cerr << std::format("codetab api: {}\n", error);
+        return 2;
+    }
+    const std::optional<ApiVersion> host = ApiVersion::parse(options.host_version);
+    if (!host.has_value()) {
+        std::cerr << std::format("codetab api: '{}' is not a version (want major.minor)\n", options.host_version);
+        return 2;
+    }
+    std::vector<CodeTable> tables;
+    for (const std::string& path : options.sources) {
+        std::optional<CodeTable> table = CodeTable::load(path, &error);
+        if (!table.has_value()) {
+            std::cerr << std::format("codetab api: {}\n", error);
+            return 2;
+        }
+        tables.push_back(std::move(*table));
+    }
+    std::unordered_set<std::string> defined;
+    for (const CodeTable& table : tables) {
+        for (const t2d::CodeTableSymbol& symbol : table.symbols) {
+            if (symbol.defined() && symbol.shared() && !symbol.name.empty()) defined.insert(symbol.name);
+        }
+    }
+
+    int refused = 0;
+    for (const CodeTable& table : tables) {
+        std::vector<std::string> unlisted;
+        for (const t2d::CodeTableSymbol& symbol : table.symbols) {
+            if (symbol.defined() || !symbol.shared() || symbol.name.empty()) continue;
+            if (defined.count(symbol.name) != 0) continue;          // answered inside the tables
+            if (!engine_symbol(symbol.name)) continue;   // the platform's, not the engine's
+            if (surface->count(symbol.name) == 0) unlisted.push_back(symbol.name);
+        }
+        std::sort(unlisted.begin(), unlisted.end());
+        unlisted.erase(std::unique(unlisted.begin(), unlisted.end()), unlisted.end());
+
+        ApiVersion built = *host;
+        for (const CodeRequirement& requirement : table.requirements) {
+            if (requirement.id != options.engine_id || requirement.version.empty()) continue;
+            built = ApiVersion::parse(requirement.version).value_or(*host);
+        }
+        const bool inside = unlisted.empty();
+        const ApiVerdict verdict = api_verdict(built, *host, inside);
+        const char* word = verdict == ApiVerdict::Accept ? "accept" : (verdict == ApiVerdict::Warn ? "warn" : "refuse");
+        std::cout << std::format("{}: built for {} {}, engine is {}: {} ({} symbol(s) outside the surface)\n",
+                                 table.id, options.engine_id, built.text(), host->text(), word, unlisted.size());
+        for (const std::string& name : unlisted) std::cout << std::format("  outside: {}\n", name);
+        if (verdict == ApiVerdict::Refuse) ++refused;
+    }
+    return refused == 0 ? 0 : 1;
+}
+
 [[nodiscard]] int dump(const std::string& path) {
     std::string error;
     std::optional<CodeTable> table = CodeTable::load(path, &error);
@@ -263,6 +376,19 @@ int main(int argc, char** argv) {
     if (command == "help" || command == "--help" || command == "-h") {
         usage();
         return 0;
+    }
+    if (command == "api") {
+        Options options;
+        std::string error;
+        std::vector<char*> rest(argv + 2, argv + argc);
+        std::vector<char*> with_name;
+        with_name.push_back(argv[0]);
+        with_name.insert(with_name.end(), rest.begin(), rest.end());
+        if (!parse(static_cast<int>(with_name.size()), with_name.data(), options, error)) {
+            std::cerr << std::format("codetab api: {}\n", error);
+            return 2;
+        }
+        return api_check(options);
     }
     if (command == "dump") {
         if (argc < 3) {
