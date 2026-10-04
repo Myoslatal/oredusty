@@ -19,14 +19,20 @@ namespace {
 
 namespace fs = std::filesystem;
 
+using t2d::ApiSurface;
+using t2d::ApiVerdict;
+using t2d::ApiVersion;
 using t2d::CodeImage;
+using t2d::CodeModuleInfo;
 using t2d::CodeOverride;
+using t2d::CodeRequirement;
 using t2d::CodeTable;
 
 constexpr const char* kGameTableName = "mine.codetab";   ///< travels with the executable
 constexpr const char* kEntrySymbol = "mine_game_main";
 constexpr const char* kEngineId = "engine";
-constexpr const char* kEngineVersion = "0.1";
+/// The published surface travels with the executable, like the game's own table.
+constexpr const char* kSurfaceName = "engine.api";
 
 /// The game's own table first, then the ones named on the command line, then the ones beside the
 /// executable: a mod drops its table into "packs" next to its content. Sorted, so the merge order does
@@ -76,16 +82,25 @@ int main(int argc, char** argv) {
     game_argv.reserve(kept.size());
     for (std::string& argument : kept) game_argv.push_back(argument.data());
 
-    const std::vector<std::string> paths =
-        collect_tables(named, t2d::parent_directory_of(t2d::executable_path()));
+    const std::string directory = t2d::parent_directory_of(t2d::executable_path());
+    const std::vector<std::string> paths = collect_tables(named, directory);
     if (paths.empty()) return 1;
+
+    // The engine's published surface, and the version it belongs to: a module's requirements are
+    // checked against it, and so is everything the module asks the engine for.
+    std::string surface_error;
+    const std::optional<ApiSurface> surface = ApiSurface::load((fs::path(directory) / kSurfaceName).string(),
+                                                               &surface_error);
+    if (!surface.has_value()) T2D_WARN("surface: {} (no surface check this run)", surface_error);
+    const ApiVersion host = surface.has_value() ? surface->version : ApiVersion{1, 0};
 
     // The image is deliberately never destroyed. It owns the memory the game was placed in, and the
     // C++ runtime runs the module's static destructors *after* main returns - a destroyed image would
     // have unmapped the code those destructors are made of. A program that ends in a moment is not a
     // program that needs to hand memory back.
     CodeImage& image = *new CodeImage();
-    image.declare_host(kEngineId, kEngineVersion);
+    image.declare_host(kEngineId, host.text());
+    std::vector<ApiVersion> built_against;
     for (const std::string& path : paths) {
         std::string error;
         std::optional<CodeTable> table = CodeTable::load(path, &error);
@@ -93,6 +108,13 @@ int main(int argc, char** argv) {
             T2D_ERROR("table: {}", error);
             return 1;
         }
+        // What this module was built for, before the image takes the table over.
+        ApiVersion built = host;
+        for (const CodeRequirement& requirement : table->requirements) {
+            if (requirement.id != kEngineId || requirement.version.empty()) continue;
+            built = ApiVersion::parse(requirement.version).value_or(host);
+        }
+        built_against.push_back(built);
         image.add(std::move(*table));
     }
 
@@ -107,6 +129,36 @@ int main(int argc, char** argv) {
              report.modules.size(), report.symbols, report.relocations, report.overrides.size(),
              report.errors.size());
     if (!report.clean()) return 1;
+
+    // The surface verdict, module by module: a module that stays inside the published surface loads
+    // across the whole major version and says nothing; one that reaches outside it is held to a narrow
+    // range - the same version quietly, a minor version either way with a warning, further is refused.
+    if (surface.has_value()) {
+        bool refused = false;
+        for (std::size_t index = 0; index < report.modules.size(); ++index) {
+            const CodeModuleInfo& module = report.modules[index];
+            if (!module.ok) continue;
+            std::vector<std::string> outside;
+            for (const std::string& name : module.host_symbols) {
+                if (!ApiSurface::engine_symbol(name)) continue;   // the platform's, not the engine's
+                if (!surface->contains(name)) outside.push_back(name);
+            }
+            const ApiVersion built = index < built_against.size() ? built_against[index] : host;
+            const ApiVerdict verdict = api_verdict(built, host, outside.empty());
+            if (verdict == ApiVerdict::Warn) {
+                T2D_WARN("surface: '{}' was built for engine {} and this is {}: {} symbol(s) outside the "
+                         "published surface, loading anyway",
+                         module.id, built.text(), host.text(), outside.size());
+            } else if (verdict == ApiVerdict::Refuse) {
+                T2D_ERROR("surface: '{}' was built for engine {}, this is {}, and it uses {} symbol(s) "
+                          "outside the published surface",
+                          module.id, built.text(), host.text(), outside.size());
+                for (const std::string& name : outside) T2D_ERROR("surface:   {}", name);
+                refused = true;
+            }
+        }
+        if (refused) return 1;
+    }
 
     const auto entry = image.function<int(int, char**)>(kEntrySymbol);
     if (entry == nullptr) {

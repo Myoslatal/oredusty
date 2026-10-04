@@ -426,4 +426,53 @@ T2D_TEST(a_requirement_nothing_provides_is_refused) {
     T2D_CHECK(said_so);
 }
 
+T2D_TEST(the_version_rule_follows_the_surface_a_module_uses) {
+    const ApiVersion one{1, 0};
+    const ApiVersion next{1, 1};
+    const ApiVersion far{1, 3};
+    const ApiVersion other{2, 0};
+    // Inside the published surface: the whole major version, and nothing said about it.
+    T2D_CHECK(api_verdict(one, next, true) == ApiVerdict::Accept);
+    T2D_CHECK(api_verdict(far, one, true) == ApiVerdict::Accept);
+    // Outside it: the same version quietly, one minor either way with a warning, further is refused.
+    T2D_CHECK(api_verdict(one, one, false) == ApiVerdict::Accept);
+    T2D_CHECK(api_verdict(one, next, false) == ApiVerdict::Warn);
+    T2D_CHECK(api_verdict(next, one, false) == ApiVerdict::Warn);
+    T2D_CHECK(api_verdict(far, one, false) == ApiVerdict::Refuse);
+    // A different major version is refused whichever surface the module used.
+    T2D_CHECK(api_verdict(other, one, true) == ApiVerdict::Refuse);
+    T2D_CHECK(api_verdict(other, one, false) == ApiVerdict::Refuse);
+
+    T2D_REQUIRE(ApiVersion::parse("1.0").has_value());
+    T2D_CHECK_EQ(ApiVersion::parse("1.0")->major, static_cast<i64>(1));
+    T2D_CHECK_EQ(ApiVersion::parse("2").value().minor, static_cast<i64>(0));
+    T2D_CHECK_EQ(ApiVersion::parse("3.14").value().minor, static_cast<i64>(14));
+    T2D_CHECK_FALSE(ApiVersion::parse("x.y").has_value());
+    T2D_CHECK_FALSE(ApiVersion::parse("1.").has_value());
+    T2D_CHECK_FALSE(ApiVersion::parse("").has_value());
+}
+
+T2D_TEST(a_surface_says_which_symbols_are_the_engines) {
+    std::string error;
+    const char* text = "engine 1.2\nA _ZN3t2d3logEv t2d/core   # t2d::log\nB _ZN3ore5WindowD1Ev ore/platform\n";
+    std::optional<ApiSurface> surface = ApiSurface::parse(text, &error);
+    T2D_REQUIRE(surface.has_value());
+    T2D_CHECK_EQ(surface->version.major, static_cast<i64>(1));
+    T2D_CHECK_EQ(surface->version.minor, static_cast<i64>(2));
+    T2D_CHECK_EQ(surface->symbols.size(), 2u);
+    T2D_CHECK(surface->contains("_ZN3t2d3logEv"));
+    T2D_CHECK_FALSE(surface->contains("_ZN3t2d4nopeEv"));
+
+    // The platform's symbols are not the engine's to publish, and are never asked about - while a const
+    // member function and a vtable are, whatever their mangling starts with.
+    T2D_CHECK_FALSE(ApiSurface::engine_symbol("memcpy"));
+    T2D_CHECK_FALSE(ApiSurface::engine_symbol("_ZSt20__throw_length_errorPKc"));
+    T2D_CHECK(ApiSurface::engine_symbol("_ZNK3t2d8Camera2D8world_ofENS_4Vec2E"));
+    T2D_CHECK(ApiSurface::engine_symbol("_ZTVN3ore8RendererE"));
+    T2D_CHECK(ApiSurface::engine_symbol("_ZN4mine13ContentPack4loadERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPS6_"));
+
+    // A surface that does not say which engine it belongs to is refused, not assumed.
+    T2D_CHECK_FALSE(ApiSurface::parse("A _ZN3t2d3logEv t2d/core", &error).has_value());
+}
+
 T2D_TEST_MAIN

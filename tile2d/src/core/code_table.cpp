@@ -103,6 +103,60 @@ std::optional<ApiVersion> ApiVersion::parse(std::string_view text) {
 
 std::string ApiVersion::text() const { return std::format("{}.{}", major, minor); }
 
+bool ApiSurface::engine_symbol(std::string_view name) {
+    for (const char* space : {"3t2d", "3ore", "4mine"}) {
+        const std::size_t at = name.find(space);
+        if (at != std::string_view::npos && at < 12) return true;
+    }
+    return false;
+}
+
+std::optional<ApiSurface> ApiSurface::parse(std::string_view text, std::string* error) {
+    ApiSurface surface;
+    bool saw_version = false;
+    while (!text.empty()) {
+        const std::size_t end = text.find('\n');
+        std::string_view line = text.substr(0, end);
+        text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+        const std::size_t comment = line.find('#');
+        if (comment != std::string_view::npos) line = line.substr(0, comment);
+        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) line.remove_suffix(1);
+        if (line.empty()) continue;
+        const std::size_t first = line.find(' ');
+        const std::string_view head = line.substr(0, first);
+        if (first == std::string_view::npos) continue;
+        std::string_view rest = line.substr(first + 1);
+        while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
+        if (head == "engine") {
+            const std::optional<ApiVersion> version = ApiVersion::parse(rest.substr(0, rest.find(' ')));
+            if (!version.has_value()) {
+                if (error != nullptr) *error = std::format("'{}' is not a version", rest);
+                return std::nullopt;
+            }
+            surface.version = *version;
+            saw_version = true;
+            continue;
+        }
+        surface.symbols.emplace(rest.substr(0, rest.find(' ')));   // "<tier> <symbol> <module>"
+    }
+    if (!saw_version) {
+        if (error != nullptr) *error = "the surface does not say which engine version it is";
+        return std::nullopt;
+    }
+    return surface;
+}
+
+std::optional<ApiSurface> ApiSurface::load(const std::string& path, std::string* error) {
+    std::ifstream stream(path);
+    if (!stream) {
+        if (error != nullptr) *error = std::format("'{}' cannot be read", path);
+        return std::nullopt;
+    }
+    const std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    return parse(text, error);
+}
+
 ApiVerdict api_verdict(const ApiVersion& built_against, const ApiVersion& host, bool inside_surface) {
     if (built_against.major != host.major) return ApiVerdict::Refuse;
     if (inside_surface) return ApiVerdict::Accept;
@@ -743,6 +797,12 @@ void CodeImage::resolve_symbols() {
             }
 #if !defined(_WIN32)
             module.symbol_address[s] = static_cast<u8*>(dlsym(RTLD_DEFAULT, symbol.name.c_str()));
+            // What the program the tables were loaded by had to answer for: the surface check reads
+            // this list, so it is recorded here rather than worked out again later.
+            if (module.symbol_address[s] != nullptr && index < report_.modules.size()) {
+                std::vector<std::string>& asked = report_.modules[index].host_symbols;
+                if (std::find(asked.begin(), asked.end(), symbol.name) == asked.end()) asked.push_back(symbol.name);
+            }
 #endif
             if (module.symbol_address[s] == nullptr) {
                 if (std::find(report_.unresolved.begin(), report_.unresolved.end(), symbol.name) ==

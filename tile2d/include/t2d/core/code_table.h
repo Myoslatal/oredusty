@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 
@@ -116,6 +117,24 @@ inline constexpr i64 kUnlistedMinorRange = 1;
 ///     should know why it might not), and anything further is refused.
 [[nodiscard]] ApiVerdict api_verdict(const ApiVersion& built_against, const ApiVersion& host, bool inside_surface);
 
+/// The engine's published surface: the version it belongs to, and the symbols a table may ask it for
+/// (engine.api, docs/ENGINE_API.md).
+struct ApiSurface {
+    ApiVersion version{};
+    std::unordered_set<std::string> symbols;
+
+    [[nodiscard]] static std::optional<ApiSurface> parse(std::string_view text, std::string* error = nullptr);
+    [[nodiscard]] static std::optional<ApiSurface> load(const std::string& path, std::string* error = nullptr);
+
+    /// Whether the engine owns this symbol at all. The platform's symbols - libc, libstdc++, the
+    /// exception machinery - are not the engine's to publish, so a table is never asked to have them on
+    /// the list: a mod may use the C++ library as freely as the engine does.
+    [[nodiscard]] static bool engine_symbol(std::string_view name);
+    [[nodiscard]] bool contains(std::string_view name) const {
+        return symbols.find(std::string(name)) != symbols.end();
+    }
+};
+
 /// What a module says it needs before it may be merged: another module's id, and optionally the exact
 /// version of it.
 ///
@@ -172,6 +191,9 @@ struct CodeModuleInfo {
     /// False: the module was refused - a requirement nothing provides, a version that does not match,
     /// or a relocation that could not be filled in. What it defined is not in the symbol table.
     bool ok = true;
+    /// What the module asks the engine for: the symbols nothing in the merged tables defines, so they
+    /// were resolved from the program the tables were loaded by. This is what a surface check reads.
+    std::vector<std::string> host_symbols;
 };
 
 /// One symbol a merge replaced, and who replaced it.

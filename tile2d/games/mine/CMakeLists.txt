@@ -86,6 +86,13 @@ add_custom_command(
 add_custom_target(mine_game_table ALL DEPENDS "${MINE_TABLE_PATH}")
 add_dependencies(mine_game_table mine_table)
 
+# The published surface travels with the executable: the launcher reads it to decide what a module may
+# ask the engine for, and which versions it may be from.
+add_custom_command(TARGET mine_game_table POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/engine.api" "${CMAKE_CURRENT_BINARY_DIR}/engine.api"
+    COMMENT "Copying engine.api beside the game")
+
 # A demo mod: one table that replaces a function of the game's own table. It is built, not installed:
 # the game only loads it when it is asked to (--table), so a plain run stays a plain run.
 set(MINE_DEMO_MOD "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod.codetab")

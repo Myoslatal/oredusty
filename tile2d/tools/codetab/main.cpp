@@ -28,11 +28,65 @@
 
 namespace {
 
+using t2d::ApiSurface;
 using t2d::ApiVerdict;
 using t2d::ApiVersion;
 using t2d::CodeRequirement;
 using t2d::CodeTable;
 using t2d::ObjectFile;
+
+/// What one table asks the engine for, and what the rule says about it. \p also_defined is what the
+/// other tables in the same load define, so a symbol answered inside them is not the engine's to give.
+struct SurfaceCheck {
+    ApiVerdict verdict = ApiVerdict::Accept;
+    ApiVersion built{};
+    std::vector<std::string> outside;
+};
+
+[[nodiscard]] SurfaceCheck surface_check(const CodeTable& table, const ApiSurface& surface,
+                                         const std::string& engine_id,
+                                         const std::unordered_set<std::string>& also_defined = {}) {
+    SurfaceCheck check;
+    check.built = surface.version;
+    for (const CodeRequirement& requirement : table.requirements) {
+        if (requirement.id != engine_id || requirement.version.empty()) continue;
+        check.built = ApiVersion::parse(requirement.version).value_or(surface.version);
+    }
+    std::unordered_set<std::string> defined = also_defined;
+    for (const t2d::CodeTableSymbol& symbol : table.symbols) {
+        if (symbol.defined() && symbol.shared() && !symbol.name.empty()) defined.insert(symbol.name);
+    }
+    for (const t2d::CodeTableSymbol& symbol : table.symbols) {
+        if (symbol.defined() || !symbol.shared() || symbol.name.empty()) continue;
+        if (defined.count(symbol.name) != 0) continue;              // answered inside the tables
+        if (!ApiSurface::engine_symbol(symbol.name)) continue;      // the platform's, not the engine's
+        if (!surface.contains(symbol.name)) check.outside.push_back(symbol.name);
+    }
+    std::sort(check.outside.begin(), check.outside.end());
+    check.outside.erase(std::unique(check.outside.begin(), check.outside.end()), check.outside.end());
+    check.verdict = api_verdict(check.built, surface.version, check.outside.empty());
+    return check;
+}
+
+[[nodiscard]] const char* verdict_word(ApiVerdict verdict) {
+    switch (verdict) {
+        case ApiVerdict::Warn: return "warn";
+        case ApiVerdict::Refuse: return "refuse";
+        case ApiVerdict::Accept: break;
+    }
+    return "accept";
+}
+
+/// Reports one table against the surface and returns whether it may be loaded.
+[[nodiscard]] bool report_surface(const CodeTable& table, const SurfaceCheck& check, const ApiSurface& surface,
+                                  const std::string& engine_id) {
+    std::cout << std::format("{}: built for {} {}, engine is {}: {} ({} symbol(s) outside the surface)\n",
+                             table.id, engine_id, check.built.text(), surface.version.text(),
+                             verdict_word(check.verdict), check.outside.size());
+    for (const std::string& name : check.outside) std::cout << std::format("  outside: {}\n", name);
+    return check.verdict != ApiVerdict::Refuse;
+}
+
 
 struct Options {
     std::vector<std::string> sources;
@@ -47,6 +101,7 @@ struct Options {
     std::string optimization = "-O2";
     /// The published surface, and the engine the tables are being checked against.
     std::string surface;
+    std::string api_surface;   ///< the surface a table being built is checked against, when given
     std::string host_version = "1.0";
     std::string engine_id = "engine";
     bool exceptions = false;
@@ -108,6 +163,7 @@ void usage() {
         else if (argument == "--version") { if (!value(options.version)) return false; }
         else if (argument == "--opt") { if (!value(options.optimization)) return false; }
         else if (argument == "--surface") { if (!value(options.surface)) return false; }
+        else if (argument == "--api") { if (!value(options.api_surface)) return false; }
         else if (argument == "--host") { if (!value(options.host_version)) return false; }
         else if (argument == "--engine") { if (!value(options.engine_id)) return false; }
         else if (argument == "-o" || argument == "--output") { if (!value(options.output)) return false; }
@@ -139,6 +195,10 @@ void usage() {
     }
     return true;
 }
+
+// Defined below, where the surface check lives: a build asks it before it writes anything.
+struct SurfaceCheck;
+[[nodiscard]] bool check_before_writing(const CodeTable& table, const Options& options, std::string& error);
 
 [[nodiscard]] int build(const Options& options) {
     if (options.sources.empty()) {
@@ -199,6 +259,7 @@ void usage() {
     table->name = options.name.empty() ? table->id : options.name;
     table->version = options.version;
     table->requirements = options.requirements;
+    if (!check_before_writing(*table, options, error)) return 1;
     if (!table->save(options.output, &error)) {
         std::cerr << std::format("codetab build: {}\n", error);
         return 1;
@@ -214,6 +275,17 @@ void usage() {
 /// Packs objects somebody else compiled. \c build drives the compiler itself, which is what a mod
 /// author wants; a build system that already knows the include paths, the defines and the flags wants
 /// this one instead, because then there is one place that decides how the code is compiled.
+/// The surface check a build does before it writes a table: a mod that reaches outside the engine's
+/// published surface is refused here, where its author can do something about it, rather than when
+/// somebody tries to run it.
+[[nodiscard]] bool check_before_writing(const CodeTable& table, const Options& options, std::string& error) {
+    if (options.api_surface.empty()) return true;
+    std::optional<ApiSurface> surface = ApiSurface::load(options.api_surface, &error);
+    if (!surface.has_value()) return false;
+    const SurfaceCheck check = surface_check(table, *surface, options.engine_id);
+    return report_surface(table, check, *surface, options.engine_id);
+}
+
 [[nodiscard]] int pack(const Options& options) {
     if (options.sources.empty()) {
         std::cerr << "codetab pack: no object files were given\n";
@@ -243,6 +315,7 @@ void usage() {
     table->name = options.name.empty() ? table->id : options.name;
     table->version = options.version;
     table->requirements = options.requirements;
+    if (!check_before_writing(*table, options, error)) return 1;
     if (!table->save(options.output, &error)) {
         std::cerr << std::format("codetab pack: {}\n", error);
         return 1;
@@ -254,44 +327,6 @@ void usage() {
     return 0;
 }
 
-/// Whether a symbol belongs to one of the engine's own namespaces. The platform's symbols - libc,
-/// libstdc++, the exception machinery - are not the engine's to publish, so a table is never asked to
-/// have them on the list: a mod may use the C++ library as freely as the engine does.
-[[nodiscard]] bool engine_symbol(std::string_view name) {
-    for (const char* space : {"3t2d", "3ore", "4mine"}) {
-        const std::size_t at = name.find(space);
-        if (at != std::string_view::npos && at < 12) return true;
-    }
-    return false;
-}
-
-/// The published surface: one symbol a line, with its tier and module after it. Comments and blank
-/// lines are the file's own business, not the checker's.
-[[nodiscard]] std::optional<std::unordered_set<std::string>> load_surface(const std::string& path, std::string* error) {
-    std::ifstream stream(path);
-    if (!stream) {
-        if (error != nullptr) *error = std::format("'{}' cannot be read", path);
-        return std::nullopt;
-    }
-    std::unordered_set<std::string> symbols;
-    std::string line;
-    while (std::getline(stream, line)) {
-        const std::size_t comment = line.find('#');
-        if (comment != std::string::npos) line.erase(comment);
-        std::string_view text(line);
-        while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
-        while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) text.remove_suffix(1);
-        if (text.empty()) continue;
-        const std::size_t space = text.find(' ');
-        if (space == std::string_view::npos) continue;      // a tier with no symbol is not a symbol
-        std::string_view rest = text.substr(space + 1);
-        while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
-        const std::size_t end = rest.find(' ');
-        symbols.emplace(rest.substr(0, end));
-    }
-    return symbols;
-}
-
 /// Checks tables against the published surface and the version rule. What a module asks the engine for
 /// is what no module in the set defines: everything else is answered inside the merged tables.
 [[nodiscard]] int api_check(const Options& options) {
@@ -300,16 +335,18 @@ void usage() {
         return 2;
     }
     std::string error;
-    std::optional<std::unordered_set<std::string>> surface = load_surface(options.surface, &error);
+    std::optional<ApiSurface> surface = ApiSurface::load(options.surface, &error);
     if (!surface.has_value()) {
         std::cerr << std::format("codetab api: {}\n", error);
         return 2;
     }
+    // --host overrides what the surface says it is, which is how "what if the engine moves" is asked.
     const std::optional<ApiVersion> host = ApiVersion::parse(options.host_version);
     if (!host.has_value()) {
         std::cerr << std::format("codetab api: '{}' is not a version (want major.minor)\n", options.host_version);
         return 2;
     }
+    surface->version = *host;
     std::vector<CodeTable> tables;
     for (const std::string& path : options.sources) {
         std::optional<CodeTable> table = CodeTable::load(path, &error);
@@ -328,28 +365,8 @@ void usage() {
 
     int refused = 0;
     for (const CodeTable& table : tables) {
-        std::vector<std::string> unlisted;
-        for (const t2d::CodeTableSymbol& symbol : table.symbols) {
-            if (symbol.defined() || !symbol.shared() || symbol.name.empty()) continue;
-            if (defined.count(symbol.name) != 0) continue;          // answered inside the tables
-            if (!engine_symbol(symbol.name)) continue;   // the platform's, not the engine's
-            if (surface->count(symbol.name) == 0) unlisted.push_back(symbol.name);
-        }
-        std::sort(unlisted.begin(), unlisted.end());
-        unlisted.erase(std::unique(unlisted.begin(), unlisted.end()), unlisted.end());
-
-        ApiVersion built = *host;
-        for (const CodeRequirement& requirement : table.requirements) {
-            if (requirement.id != options.engine_id || requirement.version.empty()) continue;
-            built = ApiVersion::parse(requirement.version).value_or(*host);
-        }
-        const bool inside = unlisted.empty();
-        const ApiVerdict verdict = api_verdict(built, *host, inside);
-        const char* word = verdict == ApiVerdict::Accept ? "accept" : (verdict == ApiVerdict::Warn ? "warn" : "refuse");
-        std::cout << std::format("{}: built for {} {}, engine is {}: {} ({} symbol(s) outside the surface)\n",
-                                 table.id, options.engine_id, built.text(), host->text(), word, unlisted.size());
-        for (const std::string& name : unlisted) std::cout << std::format("  outside: {}\n", name);
-        if (verdict == ApiVerdict::Refuse) ++refused;
+        const SurfaceCheck check = surface_check(table, *surface, options.engine_id, defined);
+        if (!report_surface(table, check, *surface, options.engine_id)) ++refused;
     }
     return refused == 0 ? 0 : 1;
 }
