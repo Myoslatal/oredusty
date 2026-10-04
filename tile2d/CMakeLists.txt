@@ -52,6 +52,10 @@ configure_file(include/t2d/config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/t2
 
 add_subdirectory(src)
 
+# The toolchain that turns what a compiler emitted into a code table (docs/TABLES.md). It is a host
+# tool: no graphics, no game, and it builds in every preset.
+add_subdirectory(tools)
+
 if(T2D_BUILD_TESTS)
     enable_testing()
 endif()

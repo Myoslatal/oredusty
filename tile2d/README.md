@@ -14,7 +14,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 
 | Module | What it does | Tested by |
 |---|---|---|
-| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, the **2D camera** (pan, zoom about an anchor, fit, clamp, world↔screen, the cell range a viewport touches), byte streams with varints, the `.ecfg` reader, the dynamic loader, **where the running program is** (so a game can find what travels with it), CLI | `test_ecfg`, `test_module`, `test_camera2d`, `test_executable` |
+| `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, the **2D camera** (pan, zoom about an anchor, fit, clamp, world↔screen, the cell range a viewport touches), byte streams with varints, the `.ecfg` reader, the dynamic loader, **where the running program is** (so a game can find what travels with it), the **object reader and code tables** (see below), CLI | `test_ecfg`, `test_module`, `test_camera2d`, `test_executable`, `test_code_table` |
 | `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring) and the tileset (what a tile id means for physics, where it lives in an atlas) | `test_tilemap` |
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
@@ -29,6 +29,7 @@ that direction. What is left is what the game actually uses, and it is all teste
     include/t2d/net       ILink, shared-memory link (mmap + lock-free SPSC rings), KCP, UDP, protocol
     include/t2d/render    sprite batch, glyph atlas, text renderer, tile map renderer, bitmap font
     games/mine            the sandbox/industrial-automation game: registry, content packs, mod host, map grid, sandbox
+    tools/t2dtab          the code table toolchain: source -> compiler -> object -> .t2dtab
     tests                 unit tests and the shader fixture the offscreen render test needs
 
 ## Build and test
@@ -365,6 +366,39 @@ it ticks in its own list, which is where the saving is.
 
 Guide: [docs/TYPES.md](docs/TYPES.md).
 
+## Code tables: code that can replace the code it was loaded by
+
+A shared library loaded at run time cannot change how the program calls *itself*: those calls were bound
+when the program was linked. A **code table** moves that link to start-up. The system compiler still does
+the compiling; `t2dtab` packs what it emitted into one file, and the runtime places the tables in memory,
+builds one symbol table out of them, and fills in every relocation **after** the merge — so a mod's
+definition of a symbol replaces the game's everywhere, including inside the game's own code and inside
+its vtables.
+
+    t2dtab build game/*.cpp -o mine.t2dtab --id mine
+    t2dtab build mod.cpp    -o mod.t2dtab  --id my_mod --requires mine
+
+    CodeImage image;
+    image.add(mine_table);      // first in: its definitions can be replaced
+    image.add(mod_table);
+    image.load();               // place, resolve, relocate, run the constructors
+    image.function<int()>("mine::produce")();
+
+What that buys, measured on real compiler output (`test_code_table`, 8 cases / 183 checks):
+
+* a mod replacing a function the game defined: the game's own call goes to the mod (`use_base()` 11 → **101**),
+  and `find_previous()` still reaches the original, so a mod can wrap rather than only replace;
+* a mod replacing a **virtual method**: the vtable's entry is a relocation, so the game's virtual call goes
+  to the mod too (`machine_output()` 25 → **97**) — no patching, no vtable surgery;
+* weak symbols (inline functions, templates, vtables, typeinfo) **coalesce** instead of colliding, which is
+  what keeps one C++ program one program;
+* a table calling back into the engine: undefined symbols are resolved from the running program;
+* a module that cannot be relocated is reported and skipped, never half loaded.
+
+`docs/TABLES.md` is the whole design: the file format, the merge rules, what the runtime does step by step,
+the honest limits (x86-64 ELF only, no TLS, no exception unwinding yet, weak definitions cannot be
+replaced) and the plan for turning the game itself into a table.
+
 ## The game on top of the framework
 
 `games/mine` is a sandbox/industrial-automation game in progress: a top-down 2D mine of stacked
@@ -478,6 +512,14 @@ separately.
   `text`, `shot`, `quit`), and `ok` means the frame loop has *applied* it, so a screenshot taken after a reply
   is a screenshot of the result. This is how every screenshot below was taken, including the headless ones.
 
+* **Code tables are merged and run for real.** `test_code_table` (8 cases / 183 checks) reads objects the
+  build compiled from `tests/data/tables/`, packs them into tables, merges two tables in memory and calls
+  into the result: a mod's definition of a function the game defined takes over the game's own call (11 → 101),
+  a mod's definition of a virtual method takes over the game's virtual call (25 → 97), weak vtable/typeinfo
+  symbols coalesce, a static constructor runs, `strlen` is answered by the running program, and a module
+  asking for something nobody defines is reported and refused. One case drives `t2dtab` itself, so the
+  compiler is in the loop.
+
 Usage, keys and limits: [docs/SANDBOX.md](docs/SANDBOX.md) (§10 is the list and the debug input server).
 
 ## Verification status
@@ -487,11 +529,11 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 19/19 tests green |
-| `release` | 19/19 tests green |
-| `asan` (Address + UB sanitizers) | 19/19 tests green |
-| `tsan` (ThreadSanitizer) | 19/19 tests green |
-| `no-renderer` | 9/9 tests green, no Vulkan, GLFW or game binary |
+| `debug` | 24/24 tests green |
+| `release` | 24/24 tests green |
+| `asan` (Address + UB sanitizers) | 24/24 tests green |
+| `tsan` (ThreadSanitizer) | 24/24 tests green |
+| `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
 
 Ore itself is a separate tree with its own suite (13/13 in `debug`, `release` and `asan`), which now includes
 `test_debug_input`: the debug input server's command parser and a real socket round trip that ends in an

@@ -30,6 +30,41 @@ target_compile_definitions(test_module PRIVATE T2D_TEST_MODULE_PATH="$<TARGET_FI
 # The path is baked in at configure time, so the library has to exist before the test runs.
 add_dependencies(test_module t2d_test_module)
 
+
+# --- code tables ------------------------------------------------------------------------------------
+# The fixtures are compiled by the build and *not* linked into the test: a table holds exactly what the
+# compiler emitted, so the test has to read a real object. The flags are the ones the toolchain uses,
+# and -fsemantic-interposition is the one that matters: without it the call the tests replace would
+# have been inlined away before the table ever saw it.
+set(T2D_TABLE_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/tables")
+set(T2D_TABLE_FIXTURE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/data/tables")
+set(T2D_TABLE_FIXTURE_FLAGS
+    -std=c++20 -O2 -fPIC -fsemantic-interposition -ffunction-sections -fdata-sections
+    -fno-stack-protector -fno-exceptions
+    -I${T2D_TABLE_FIXTURE_SOURCES})
+set(T2D_TABLE_FIXTURE_OBJECTS "")
+foreach(fixture base caller mod missing machine factory mod_machine)
+    add_custom_command(
+        OUTPUT "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${T2D_TABLE_FIXTURE_DIR}"
+        COMMAND ${CMAKE_CXX_COMPILER} ${T2D_TABLE_FIXTURE_FLAGS}
+                -c "${T2D_TABLE_FIXTURE_SOURCES}/${fixture}.cpp"
+                -o "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o"
+        DEPENDS "${T2D_TABLE_FIXTURE_SOURCES}/${fixture}.cpp" "${T2D_TABLE_FIXTURE_SOURCES}/machine.h"
+        COMMENT "Compiling the code table fixture ${fixture}.cpp")
+    list(APPEND T2D_TABLE_FIXTURE_OBJECTS "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o")
+endforeach()
+add_custom_target(t2d_table_fixtures DEPENDS ${T2D_TABLE_FIXTURE_OBJECTS})
+
+# The object reader, the table format, and the merge that lets one table replace another's symbols.
+t2d_add_test(test_code_table test_code_table.cpp)
+target_compile_definitions(test_code_table PRIVATE
+    T2D_TEST_TABLE_DIR="${T2D_TABLE_FIXTURE_DIR}"
+    T2D_TEST_TABLE_SOURCES="${T2D_TABLE_FIXTURE_SOURCES}"
+    T2D_TEST_TOOLCHAIN="$<TARGET_FILE:t2dtab>"
+    T2D_TEST_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(test_code_table t2d_table_fixtures t2dtab)
+
 # The transports: KCP reliability over a lossy link, framing, the session handshake, the map chunk
 # transfer and the shared memory rings. No game rides them yet - that is the point of the split.
 t2d_add_test(test_kcp test_kcp.cpp)

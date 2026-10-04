@@ -1,10 +1,12 @@
 # ------------------------------------------------------------------ t2d_core --
 add_library(t2d_core STATIC
     core/camera2d.cpp
+    core/code_table.cpp
     core/ecfg.cpp
     core/executable.cpp
     core/log.cpp
     core/module.cpp
+    core/object_file.cpp
     core/rng.cpp
     core/time.cpp
 )
