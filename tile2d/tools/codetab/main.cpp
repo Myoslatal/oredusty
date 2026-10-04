@@ -48,8 +48,9 @@ struct Options {
 void usage() {
     std::cout << "codetab - pack compiled C++ into a code table, and read one back\n"
                  "\n"
-                 "  codetab build <source.cpp>... -o <out.codetab> [options]\n"
-                 "  codetab dump <table.codetab>\n"
+                 "  codetab build <source.cpp>... -o <out.codetab> [options]   compile, then pack\n"
+                 "  codetab pack <object.o>... -o <out.codetab> [options]        pack what is there\n"
+                 "  codetab dump <table.codetab>                                 what is in one\n"
                  "\n"
                  "options:\n"
                  "  --compiler <path>   the compiler to drive (default: c++)\n"
@@ -197,6 +198,49 @@ void usage() {
     return 0;
 }
 
+/// Packs objects somebody else compiled. \c build drives the compiler itself, which is what a mod
+/// author wants; a build system that already knows the include paths, the defines and the flags wants
+/// this one instead, because then there is one place that decides how the code is compiled.
+[[nodiscard]] int pack(const Options& options) {
+    if (options.sources.empty()) {
+        std::cerr << "codetab pack: no object files were given\n";
+        return 2;
+    }
+    if (options.output.empty()) {
+        std::cerr << "codetab pack: -o <out.codetab> is required\n";
+        return 2;
+    }
+    std::vector<ObjectFile> objects;
+    for (const std::string& source : options.sources) {
+        std::string error;
+        std::optional<ObjectFile> object = ObjectFile::load(source, &error);
+        if (!object.has_value()) {
+            std::cerr << std::format("codetab pack: {}\n", error);
+            return 1;
+        }
+        objects.push_back(std::move(*object));
+    }
+    std::string error;
+    std::optional<CodeTable> table = CodeTable::from_objects(objects, &error);
+    if (!table.has_value()) {
+        std::cerr << std::format("codetab pack: {}\n", error);
+        return 1;
+    }
+    table->id = options.id.empty() ? std::filesystem::path(options.output).stem().string() : options.id;
+    table->name = options.name.empty() ? table->id : options.name;
+    table->version = options.version;
+    table->requirements = options.requirements;
+    if (!table->save(options.output, &error)) {
+        std::cerr << std::format("codetab pack: {}\n", error);
+        return 1;
+    }
+    std::cout << std::format("{}: {} object(s) -> {} section(s), {} symbol(s), {} relocation(s), {} overridable "
+                             "name(s)\n",
+                             options.output, objects.size(), table->sections.size(), table->symbols.size(),
+                             table->relocations.size(), table->overridable_symbols().size());
+    return 0;
+}
+
 [[nodiscard]] int dump(const std::string& path) {
     std::string error;
     std::optional<CodeTable> table = CodeTable::load(path, &error);
@@ -226,6 +270,19 @@ int main(int argc, char** argv) {
             return 2;
         }
         return dump(argv[2]);
+    }
+    if (command == "pack") {
+        Options options;
+        std::string error;
+        std::vector<char*> rest(argv + 2, argv + argc);
+        std::vector<char*> with_name;
+        with_name.push_back(argv[0]);
+        with_name.insert(with_name.end(), rest.begin(), rest.end());
+        if (!parse(static_cast<int>(with_name.size()), with_name.data(), options, error)) {
+            std::cerr << std::format("codetab pack: {}\n", error);
+            return 2;
+        }
+        return pack(options);
     }
     if (command == "build") {
         Options options;

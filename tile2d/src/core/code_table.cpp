@@ -116,6 +116,14 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             table.sections.push_back(std::move(packed));
         }
 
+        // What the sections of this object are called, so a symbol left behind in a section the table
+        // does not carry can still be found (see below).
+        std::map<std::string, u32> section_by_name;
+        for (usize index = 0; index < object.sections.size(); ++index) {
+            if (section_map[index] == kInvalidId) continue;
+            section_by_name.emplace(object.sections[index].name, section_map[index]);
+        }
+
         // Every symbol is kept, including the ones the table does not define and the empty symbol at
         // index zero: a relocation names its symbol by index, so dropping one would move every index
         // after it.
@@ -129,6 +137,24 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             packed.size = symbol.size;
             packed.section = symbol.defined() && symbol.section < section_map.size() ? section_map[symbol.section]
                                                                                     : kInvalidId;
+            // A C++ compiler marks the code of an inline function with the *signature of its COMDAT
+            // group*, and that signature lives in a section the table does not carry (a group is
+            // bookkeeping, not something the program runs). The code itself is here, and with
+            // -ffunction-sections its section is named after the symbol - so it is found by name and
+            // made weak, which is what a COMDAT definition is: two modules carrying it coalesce instead
+            // of colliding. Without this, every inline function a table calls - and the C++ library is
+            // full of them - would be reported as something nobody defines.
+            if (packed.section == kInvalidId && packed.binding == ObjectSymbolBinding::Local &&
+                packed.kind == ObjectSymbolKind::None && packed.size == 0 && !packed.name.empty()) {
+                for (const char* prefix : {".text.", ".rodata.", ".data."}) {
+                    const auto found = section_by_name.find(std::string(prefix) + packed.name);
+                    if (found == section_by_name.end()) continue;
+                    packed.section = found->second;
+                    packed.binding = ObjectSymbolBinding::Weak;
+                    if (std::string_view(prefix) == ".text.") packed.kind = ObjectSymbolKind::Function;
+                    break;
+                }
+            }
             table.symbols.push_back(std::move(packed));
         }
         for (const ObjectRelocation& relocation : object.relocations) {
