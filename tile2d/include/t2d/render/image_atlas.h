@@ -7,6 +7,12 @@
 //
 // An image larger than a cell is refused rather than scaled: silently scaling art is worse than saying
 // no, and a caller that wants a different cell size can ask for one.
+//
+// The mine game does **not** use this for its content art: the designer's rule is one picture per
+// content entry, in whatever size it was drawn in, drawn from its own texture
+// (docs/GAME_DESIGN.md section 1.18). What still wants a page is the other case - many small pictures
+// that are always drawn together (UI icons, particles) - so this stays a framework utility with no
+// user in the game rather than being deleted.
 #pragma once
 
 #include <ore/rhi/context.h>
