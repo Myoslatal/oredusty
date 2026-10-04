@@ -299,6 +299,25 @@ A pack that has to *run* something is a mod package instead:
 Guide, ABI and limits: [docs/MODS.md](docs/MODS.md) (§5 is the list). Loading a library is not a sandbox:
 a native mod runs with the game's privileges.
 
+### Content logic: `mine::types`
+
+Content has two halves. The **definitions** are data — `.ecfg` tables, ids from the registry. The
+**logic** is C++, and it lives in `mine::types`: what a thing *is* and *does* once it is part of a
+mine. Nothing in that namespace names a resource, a structure or a machine — what exists is what the
+designer's data says exists.
+
+The first type is the **plot** (`types/tile.h`): a fixed thing that occupies cells of one layer — a
+floor, an ore vein, a machine. It carries the kind and id a save stores (never a name: the registry
+answers that, and content that comes back repairs a plot by name), and a **rectangle of cells** whose
+top left corner is its anchor, so a 2×2 or 3×3 structure is the same thing as a single cell rather
+than a special case. Plots come in two kinds, because of how often they have to run: `SceneTile` —
+scenery, with **no per-frame path at all** (a dirty flag and `refresh()`, so a frame costs what
+changed, not what exists) — and `EntityTile` — machines, which own a cadence (`period_seconds()`,
+0 meaning every tick) and are handed the frame's seconds, carrying the remainder and accounting for a
+long frame once rather than replaying the ticks it missed.
+
+Guide: [docs/TYPES.md](docs/TYPES.md).
+
 ## The game on top of the framework
 
 `games/mine` is a sandbox/industrial-automation game in progress: a top-down 2D mine of stacked

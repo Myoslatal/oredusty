@@ -71,6 +71,11 @@ target_compile_definitions(test_content_pack PRIVATE
     T2D_TEST_MODS_DIR="${MINE_TEST_MODS_DIR}")
 add_dependencies(test_content_pack example_native example_native_bad_api example_native_fails)
 
+# The content-logic types: a plot's identity and footprint, scenery that is refreshed on demand, and
+# functional plots that run on a cadence.
+t2d_add_test(test_mine_types test_mine_types.cpp)
+target_link_libraries(test_mine_types PRIVATE mine_core)
+
 # The list of what the registry was filled from: the same data the game's content screen draws.
 t2d_add_test(test_content_list test_content_list.cpp)
 target_link_libraries(test_content_list PRIVATE mine_core)
