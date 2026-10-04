@@ -31,7 +31,10 @@ using t2d::usize;
 
 /// The kinds of content a save can reference. This list is engineering, not content: it mirrors what
 /// a save has to point at and grows when the designer introduces a new kind of data.
-enum class ContentKind : u8 { Item = 0, Structure, Machine, Recipe, Layer, Channel, Count };
+///
+/// A new kind is **appended**: the value is packed into every map cell and written into every save, so
+/// inserting one in the middle would renumber the content behind it.
+enum class ContentKind : u8 { Item = 0, Structure, Machine, Recipe, Layer, Channel, Floor, Count };
 inline constexpr usize kContentKindCount = static_cast<usize>(ContentKind::Count);
 [[nodiscard]] const char* content_kind_name(ContentKind kind);
 

@@ -7,7 +7,9 @@
 #include <ore/core/image.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <vector>
@@ -91,6 +93,19 @@ constexpr const char* kCjkCandidates[] = {
 template <class... Args>
 [[nodiscard]] std::string format_localized(std::string_view pattern, Args&&... args) {
     return std::vformat(pattern, std::make_format_args(args...));
+}
+
+/// The content files the game itself ships, in file name order. They are the game's own content - the
+/// first stage of the load order (docs/MODS.md) - so a run does not have to be told about them. A
+/// missing directory is reported rather than silently leaving the game empty.
+[[nodiscard]] std::vector<std::string> shipped_content_files() {
+    const std::string directory = std::string(T2D_SOURCE_DIR) + "/games/mine/content";
+    std::error_code code;
+    if (!std::filesystem::is_directory(directory, code)) {
+        T2D_WARN("content: the game's own content directory '{}' is missing", directory);
+        return {};
+    }
+    return ContentPack::scan_directory(directory);
 }
 
 /// Writes a whole file; false when it cannot be written.
@@ -233,6 +248,7 @@ void MineApp::on_start() {
     body_px_ = static_cast<u16>(std::max(14.0f, 5.0f * unit_));
 
     load_localisation();
+    shipped_content_ = shipped_content_files();
     // The game's content, its packs and its mods, loaded once at startup: a session reports what it
     // has before anything is created, and the sandbox reloads the same set with F5.
     (void)load_content();
@@ -907,8 +923,8 @@ void MineApp::open_sandbox() {
     }
     sandbox_.set_active_layer(options_.start_layer);
     sandbox_.set_content_paths(options_.content_paths);
-    if (options_.content_paths.empty() && options_.pack_paths.empty() && options_.pack_directories.empty() &&
-        options_.mod_directories.empty()) {
+    if (shipped_content_.empty() && options_.content_paths.empty() && options_.pack_paths.empty() &&
+        options_.pack_directories.empty() && options_.mod_directories.empty()) {
         sandbox_.rebind(registry_);
         set_status(locale_.text("sandbox.no.content"), true);
     } else {
@@ -962,32 +978,46 @@ void MineApp::apply_fill() {
     sandbox_.set_active_layer(options_.start_layer);
 }
 
-void MineApp::load_pack_images() {
+void MineApp::load_content_images() {
     image_errors_.clear();
     image_atlas_.reset();
+    // How big a cell has to be is decided by the art the content actually ships: the atlas refuses an
+    // image larger than a cell rather than scaling it (silently scaling art is worse than saying no),
+    // and content comes in whatever size it was drawn in. The first pass reads the sizes, the second
+    // fills the atlas, so the pixels of every picture are not held at once.
+    constexpr u32 kPageSize = 1024;
+    u32 cell = 64;
+    for (const ResolvedImage& image : content_.report().images) {
+        if (!image.ok) continue;   // the content loader already reported why
+        const std::optional<ore::Image> pixels = ore::Image::load_png(image.resolved);
+        if (!pixels.has_value()) {
+            image_errors_.push_back(std::format("{}: cannot be decoded", image.resolved));
+            continue;
+        }
+        cell = std::max(cell, std::max(pixels->width, pixels->height));
+    }
+    // A power of two keeps the grid aligned, and the page is the ceiling: an image that does not fit
+    // is reported below, with its own name on it.
+    cell = std::min(std::bit_ceil(cell), kPageSize);
+
     t2d::ImageAtlas::Options options;
-    options.page_size = 1024;
-    options.cell_size = 64;
+    options.page_size = kPageSize;
+    options.cell_size = cell;
     image_atlas_ = t2d::ImageAtlas::create(context(), options);
     if (image_atlas_ == nullptr) {
         image_errors_.emplace_back("the image atlas could not be created");
         return;
     }
     usize loaded = 0;
-    for (const ContentPack& pack : content_.packs()) {
-        for (const PackImage& image : pack.images) {
-            if (!image.ok) continue;   // the content loader already reported why
-            const std::optional<ore::Image> pixels = ore::Image::load_png(image.resolved);
-            if (!pixels.has_value()) {
-                image_errors_.push_back(std::format("{}: cannot be decoded", image.resolved));
-                continue;
-            }
-            if (!image_atlas_->add(image_key(image.kind, image.content), *pixels)) {
-                image_errors_.push_back(std::format("{}: does not fit the atlas", image.resolved));
-                continue;
-            }
-            ++loaded;
+    for (const ResolvedImage& image : content_.report().images) {
+        if (!image.ok) continue;
+        const std::optional<ore::Image> pixels = ore::Image::load_png(image.resolved);
+        if (!pixels.has_value()) continue;   // reported by the pass above
+        if (!image_atlas_->add(image_key(image.kind, image.content), *pixels)) {
+            image_errors_.push_back(std::format("{}: does not fit a {} pixel cell", image.resolved, cell));
+            continue;
         }
+        ++loaded;
     }
     if (loaded > 0) {
         T2D_INFO("images: {} loaded into a {}x{} atlas ({} cell)", loaded, image_atlas_->page_size(),
@@ -1000,12 +1030,17 @@ const ContentPipelineReport& MineApp::load_content() {
     // One place decides what the registry holds: the game's own files, then packs, then mods. Loading
     // again is a reload - the pipeline unloads the mods (on_unload, then the library closes) and clears
     // the registry first, so ids come out the same every time.
-    content_.set_base_files(options_.content_paths);
+    //
+    // The game's own content is the game: what it ships is loaded first, and --content adds to it
+    // rather than replacing it.
+    std::vector<std::string> base_files = shipped_content_;
+    base_files.insert(base_files.end(), options_.content_paths.begin(), options_.content_paths.end());
+    content_.set_base_files(std::move(base_files));
     content_.set_pack_files(options_.pack_paths);
     content_.set_pack_directories(options_.pack_directories);
     content_.set_mod_directories(options_.mod_directories);
     const ContentPipelineReport& report = content_.load(registry_);
-    load_pack_images();
+    load_content_images();
     return report;
 }
 

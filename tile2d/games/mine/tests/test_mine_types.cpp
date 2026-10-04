@@ -345,4 +345,140 @@ T2D_TEST(a_plot_can_be_told_to_turn_itself_around) {
     T2D_CHECK_FALSE(turnable.mirrored());
 }
 
+T2D_TEST(a_floor_is_scenery_that_says_it_is_a_floor) {
+    static_assert(std::is_base_of_v<SceneTile, Floor>);
+    static_assert(std::is_base_of_v<Tile, Floor>);
+
+    const ContentRegistry registry = registry_with("dirt", ContentKind::Floor);
+    Floor dirt(ContentKind::Floor, 1, 0, GridPos{2, 3}, 2, 2);
+    T2D_CHECK(dirt.is_floor());
+    T2D_CHECK(dirt.kind() == ContentKind::Floor);
+    T2D_CHECK_EQ(dirt.cell_count(), 4);
+    T2D_CHECK_EQ(dirt.name(registry), std::string("dirt"));
+
+    // Being a floor is a kind of thing, not a property every plot has: scenery and machines are not
+    // floors unless they say so, and a floor is not a machine.
+    CountingFloor wall(ContentKind::Structure, 2, 0, GridPos{0, 0});
+    CountingMachine drill(ContentKind::Machine, 3, 0, GridPos{0, 0});
+    T2D_CHECK_FALSE(wall.is_floor());
+    T2D_CHECK_FALSE(drill.is_floor());
+    // A floor is not a machine, and the compiler says so: Floor and EntityTile are siblings under
+    // SceneTile, so a floor can never be asked for a cadence.
+
+    // Everything a scene plot does, a floor does: it is scenery that happens to answer yes.
+    T2D_CHECK(dirt.dirty());
+    T2D_CHECK(dirt.refresh());
+    T2D_CHECK_FALSE(dirt.refresh());
+
+    // What the marker is for: a question anything can ask without knowing a single floor by name.
+    const std::vector<std::unique_ptr<Tile>> plots = [&] {
+        std::vector<std::unique_ptr<Tile>> made;
+        made.push_back(std::make_unique<Floor>(ContentKind::Floor, 1, 0, GridPos{0, 0}));
+        made.push_back(std::make_unique<SceneTile>(ContentKind::Structure, 2, 0, GridPos{1, 0}));
+        made.push_back(std::make_unique<EntityTile>(ContentKind::Machine, 3, 0, GridPos{2, 0}));
+        return made;
+    }();
+    usize floors = 0;
+    for (const std::unique_ptr<Tile>& plot : plots) {
+        if (plot->is_floor()) ++floors;
+    }
+    T2D_CHECK_EQ(floors, 1u);
+}
+
+T2D_TEST(the_data_says_what_a_plot_is_and_the_definer_builds_it) {
+    // Which tables describe a plot at all.
+    T2D_CHECK(kind_is_a_tile(ContentKind::Floor));
+    T2D_CHECK(kind_is_a_tile(ContentKind::Structure));
+    T2D_CHECK(kind_is_a_tile(ContentKind::Machine));
+    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Item));
+    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Recipe));
+    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Layer));
+    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Channel));
+
+    // The two fields the engine reads, out of an entry that carries whatever else the designer likes.
+    const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(R"(
+floor::
+    dirt::
+        image:"art/floor_dirt.png"
+        random_reverse:true
+        note:"anything else here is the designer's"
+machine::
+    drill::
+        random_reverse:false
+item::
+    ore::
+        image:"art/ore.png"
+)");
+    T2D_REQUIRE(document.has_value());
+    const t2d::EcfgValue* floor_table = document->find("floor");
+    T2D_REQUIRE(floor_table != nullptr);
+    const t2d::EcfgValue* dirt = floor_table->find("dirt");
+    T2D_REQUIRE(dirt != nullptr);
+
+    std::string error;
+    const std::optional<TileDefinition> definition =
+        read_tile_definition(ContentKind::Floor, "dirt", *dirt, &error);
+    T2D_REQUIRE(definition.has_value());
+    T2D_CHECK_EQ(definition->name, std::string("dirt"));
+    T2D_CHECK_EQ(definition->image, std::string("art/floor_dirt.png"));
+    T2D_CHECK(definition->random_reverse);
+    T2D_CHECK(definition->is_tile());
+
+    // A field the engine reads and cannot read is refused, never guessed at: "random_reverse:1" would
+    // otherwise be a piece of content that quietly never turns around.
+    const std::optional<t2d::EcfgDocument> wrong = t2d::EcfgDocument::parse(R"(
+floor::
+    sand::
+        random_reverse:1
+)");
+    T2D_REQUIRE(wrong.has_value());
+    const t2d::EcfgValue* sand = wrong->find("floor")->find("sand");
+    T2D_REQUIRE(sand != nullptr);
+    error.clear();
+    T2D_CHECK_FALSE(read_tile_definition(ContentKind::Floor, "sand", *sand, &error).has_value());
+    T2D_CHECK(error.find("random_reverse") != std::string::npos);
+
+    // Every plot a document declares, and nothing else: the item table is not a plot.
+    std::vector<std::string> errors;
+    const std::vector<TileDefinition> definitions = tile_definitions(*document, &errors);
+    T2D_REQUIRE(definitions.size() == 2u);
+    T2D_CHECK(errors.empty());
+    T2D_CHECK_EQ(definitions[0].kind, ContentKind::Floor);
+    T2D_CHECK_EQ(definitions[0].name, std::string("dirt"));
+    T2D_CHECK_EQ(definitions[1].kind, ContentKind::Machine);
+    T2D_CHECK_EQ(definitions[1].name, std::string("drill"));
+    T2D_CHECK_FALSE(definitions[1].random_reverse);
+
+    // The definer turns a definition into the plot it describes: the kind decides the class, and the
+    // data decides the rest.
+    const std::unique_ptr<Tile> floor_plot = make_tile(definitions[0], 7, 1, GridPos{4, 5}, 2, 3);
+    T2D_REQUIRE(floor_plot != nullptr);
+    T2D_CHECK(floor_plot->is_floor());
+    T2D_CHECK(dynamic_cast<Floor*>(floor_plot.get()) != nullptr);
+    T2D_CHECK_EQ(floor_plot->id(), 7u);
+    T2D_CHECK_EQ(floor_plot->layer(), 1);
+    T2D_CHECK_EQ(floor_plot->cell_count(), 6);
+    T2D_CHECK(floor_plot->random_reverse());
+    T2D_CHECK_FALSE(floor_plot->mirrored());
+
+    const std::unique_ptr<Tile> machine_plot = make_tile(definitions[1], 8, 0, GridPos{0, 0});
+    T2D_REQUIRE(machine_plot != nullptr);
+    T2D_CHECK(dynamic_cast<EntityTile*>(machine_plot.get()) != nullptr);
+    T2D_CHECK_FALSE(machine_plot->is_floor());
+
+    TileDefinition structure;
+    structure.kind = ContentKind::Structure;
+    structure.name = "wall";
+    const std::unique_ptr<Tile> wall_plot = make_tile(structure, 9, 0, GridPos{0, 0});
+    T2D_REQUIRE(wall_plot != nullptr);
+    T2D_CHECK(dynamic_cast<SceneTile*>(wall_plot.get()) != nullptr);
+    T2D_CHECK(dynamic_cast<EntityTile*>(wall_plot.get()) == nullptr);
+
+    // Something that is not a plot at all does not become one.
+    TileDefinition item;
+    item.kind = ContentKind::Item;
+    item.name = "ore";
+    T2D_CHECK(make_tile(item, 10, 0, GridPos{0, 0}) == nullptr);
+}
+
 T2D_TEST_MAIN

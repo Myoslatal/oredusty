@@ -29,6 +29,7 @@ const char* content_kind_name(ContentKind kind) {
         case ContentKind::Recipe: return "recipe";
         case ContentKind::Layer: return "layer";
         case ContentKind::Channel: return "channel";
+        case ContentKind::Floor: return "floor";
         case ContentKind::Count: break;
     }
     return "?";

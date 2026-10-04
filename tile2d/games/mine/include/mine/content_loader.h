@@ -59,6 +59,28 @@ struct ContentImage {
 [[nodiscard]] std::vector<ContentImage> content_images(const t2d::EcfgDocument& document,
                                                        std::string_view ignore_table = {});
 
+/// One picture a content file ships, and what the engine made of it.
+struct ResolvedImage {
+    ContentKind kind = ContentKind::Item;
+    std::string content;   ///< the content entry it belongs to
+    std::string source;    ///< the file that declared it
+    std::string path;      ///< as written in the file ("art/wall.png")
+    std::string resolved;  ///< absolute path, empty when it could not be resolved
+    bool ok = false;
+    std::string error;     ///< why not, when ok is false
+};
+
+/// Resolves every "image" \p document declares, against the directory of \p source_path - the file that
+/// declares it, whichever kind of source that file is: the game's own content, a pack and a mod's
+/// content file all name their art the same way, relative to themselves.
+///
+/// A picture has to be there and has to be a PNG, because that is what the engine decodes; anything
+/// else is a record with ok == false and an error saying so, never a silent blank. The caller decides
+/// how to report it: a record carries everything a message needs, including where it came from.
+[[nodiscard]] std::vector<ResolvedImage> resolve_content_images(const t2d::EcfgDocument& document,
+                                                                const std::string& source_path,
+                                                                std::string_view ignore_table = {});
+
 /// What one register_declared_content() call did.
 struct ContentRegistrationReport {
     usize registered = 0;

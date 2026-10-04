@@ -34,16 +34,6 @@
 
 namespace mine {
 
-/// One picture a pack ships, and what the engine made of it.
-struct PackImage {
-    ContentKind kind = ContentKind::Item;
-    std::string content;   ///< the content entry it belongs to
-    std::string path;      ///< as written in the pack ("art/wall.png")
-    std::string resolved;  ///< absolute path, empty when it could not be resolved
-    bool ok = false;
-    std::string error;     ///< why not, when ok is false
-};
-
 /// One parsed pack.
 struct ContentPack {
     std::string path;          ///< where it came from
@@ -56,8 +46,6 @@ struct ContentPack {
     t2d::EcfgDocument content;
     /// What this pack added to the registry (filled in by the pipeline).
     std::vector<ContentEntry> registered;
-    /// The pictures it ships, resolved against the pack's own directory.
-    std::vector<PackImage> images;
     bool ok = true;
     std::string error;
 
@@ -75,7 +63,12 @@ struct ContentPipelineReport {
     usize base_registered = 0;   ///< names they added
     usize packs = 0;             ///< packs that loaded
     usize pack_content = 0;      ///< names the packs added
+    usize base_images = 0;       ///< pictures the game's own files referenced and that are there
     usize pack_images = 0;       ///< pictures the packs referenced and that are there
+    usize mod_images = 0;        ///< pictures the mods' content files referenced and that are there
+    /// Every picture the load resolved, in load order, from all three stages: what the engine draws
+    /// the content with. A picture that is not there is in here too, with ok == false and the reason.
+    std::vector<ResolvedImage> images;
     usize mods = 0;              ///< mods that loaded
     usize native_mods = 0;
     usize mod_content = 0;

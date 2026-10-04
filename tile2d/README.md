@@ -299,6 +299,23 @@ A pack that has to *run* something is a mod package instead:
 Guide, ABI and limits: [docs/MODS.md](docs/MODS.md) (§5 is the list). Loading a library is not a sandbox:
 a native mod runs with the game's privileges.
 
+### The game's own content
+
+`games/mine/content/` is what the game itself is made of, and it is the first stage of the load order:
+it loads with no arguments at all, and `--content` adds to it rather than replacing it. It holds the
+first real content — a **dirt floor** (`floor:: dirt::`, texture `art/floor_dirt.png`) — and the
+sandbox paints it: the palette lists `floor #1 dirt`, and a cell painted with it draws that texture.
+
+    games/mine/content/
+        floors.ecfg          floor:: dirt::  with image:"art/floor_dirt.png"
+        art/floor_dirt.png
+
+Two fields are the engine's to read (`image` and `random_reverse`); everything else in an entry is the
+designer's. Both are checked when the content loads: a picture that is not there, or a
+`random_reverse:1` that is not a boolean, is reported rather than quietly ignored. Every source names
+its art the same way — relative to the file that declares it — and the atlas is sized to the art that
+actually ships, so a 256×256 texture is neither refused nor silently scaled.
+
 ### Content logic: `mine::types`
 
 Content has two halves. The **definitions** are data — `.ecfg` tables, ids from the registry. The

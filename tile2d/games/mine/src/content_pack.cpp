@@ -1,5 +1,7 @@
 #include <mine/content_pack.h>
 
+#include <mine/types/tile_definition.h>
+
 #include <t2d/core/log.h>
 
 #include <algorithm>
@@ -185,6 +187,32 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         for (usize index = 0; index < base_documents.size(); ++index) {
             std::vector<std::string> unknown_tables;
             const std::vector<ContentEntry> declared = content_declarations(base_documents[index], &unknown_tables);
+            // The game's own content ships its own art, and names it the way everything else does:
+            // relative to the file that declares it.
+            for (ResolvedImage& image : resolve_content_images(base_documents[index], base_files_[index])) {
+                if (!image.ok) {
+                    const std::string message =
+                        std::format("content: {} '{}': {}", content_kind_name(image.kind), image.content,
+                                    image.error);
+                    report_.errors.push_back(message);
+                    if (report_.sources[index].error.empty()) report_.sources[index].error = message;
+                } else {
+                    ++report_.base_images;
+                    ++report_.sources[index].images;
+                }
+                if (!image.ok) ++report_.sources[index].images_failed;
+                report_.images.push_back(std::move(image));
+            }
+            // The other field the engine reads: a "random_reverse" it cannot read is a data error, not
+            // a plot that quietly never turns around. The definitions themselves are what the layer
+            // builder will use; here they are read so a typo is caught at load time.
+            std::vector<std::string> definition_errors;
+            (void)types::tile_definitions(base_documents[index], &definition_errors);
+            for (const std::string& definition_error : definition_errors) {
+                const std::string message = std::format("content: {}", definition_error);
+                report_.errors.push_back(message);
+                if (report_.sources[index].error.empty()) report_.sources[index].error = message;
+            }
             const ContentRegistrationReport registered =
                 register_declared_content(registry, declared, &report_.sources[index].entries);
             report_.base_registered += registered.registered;
@@ -282,35 +310,27 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         for (const std::string& table : unknown_tables) {
             report_.warnings.push_back(std::format("pack '{}': '{}' is not a content kind", pack.id, table));
         }
-        // The pictures: the one field of the designer's data the engine reads, because it has to be
-        // able to draw what the data describes. Paths are relative to the pack, and a picture that is
-        // not there (or is not something the engine can decode) is reported rather than drawn blank.
-        for (const ContentImage& image : content_images(pack.content, kPackTable)) {
-            PackImage entry;
-            entry.kind = image.kind;
-            entry.content = image.name;
-            entry.path = image.path;
-            const fs::path resolved = fs::path(pack.path).parent_path() / image.path;
-            std::error_code file_code;
-            if (image.path.empty()) {
-                entry.error = "the image path is empty";
-            } else if (!fs::is_regular_file(resolved, file_code)) {
-                entry.error = std::format("'{}' is not there", resolved.string());
-            } else if (resolved.extension() != ".png") {
-                // Ore's decoder reads PNG; anything else would need another one, and pretending
-                // otherwise would fail later, at draw time, where it is much harder to explain.
-                entry.error = std::format("'{}': only PNG is decoded", resolved.extension().string());
+        // The pictures: a field of the designer's data the engine reads, because it has to be able to
+        // draw what the data describes. Paths are relative to the pack, and a picture that is not there
+        // (or is not something the engine can decode) is reported rather than drawn blank.
+        for (ResolvedImage& image : resolve_content_images(pack.content, pack.path, kPackTable)) {
+            if (!image.ok) {
+                report_.errors.push_back(std::format("pack '{}': {} '{}': {}", pack.id,
+                                                     content_kind_name(image.kind), image.content, image.error));
+                if (pack.error.empty()) pack.error = image.error;
             } else {
-                entry.resolved = resolved.string();
-                entry.ok = true;
                 ++report_.pack_images;
             }
-            if (!entry.ok) {
-                report_.errors.push_back(std::format("pack '{}': {} '{}': {}", pack.id,
-                                                     content_kind_name(entry.kind), entry.content, entry.error));
-                if (pack.error.empty()) pack.error = entry.error;
-            }
-            pack.images.push_back(std::move(entry));
+            report_.images.push_back(std::move(image));
+        }
+        // The other field the engine reads, read here so a typo in a pack is caught when the pack
+        // loads rather than when a layer is built out of it.
+        std::vector<std::string> definition_errors;
+        (void)types::tile_definitions(pack.content, &definition_errors, kPackTable);
+        for (const std::string& definition_error : definition_errors) {
+            const std::string message = std::format("pack '{}': {}", pack.id, definition_error);
+            report_.errors.push_back(message);
+            if (pack.error.empty()) pack.error = message;
         }
         ++report_.packs;
         packs_.push_back(std::move(pack));
@@ -325,7 +345,9 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         source.version = pack.version;
         source.requirements = pack.requirements;
         source.entries = pack.registered;
-        for (const PackImage& image : pack.images) {
+        // What it ships: counted from the load's own list, so a source's line and the atlas agree.
+        for (const ResolvedImage& image : report_.images) {
+            if (image.source != pack.path) continue;
             if (image.ok) ++source.images;
             else ++source.images_failed;
         }
@@ -359,6 +381,15 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         source.error = mod.error;
         for (const ModContentEntry& entry : mod.registered) {
             source.entries.push_back(ContentEntry{entry.kind, entry.id, entry.name});
+        }
+        for (const ResolvedImage& image : mod.images) {
+            if (image.ok) {
+                ++source.images;
+                ++report_.mod_images;
+            } else {
+                ++source.images_failed;
+            }
+            report_.images.push_back(image);
         }
         report_.sources.push_back(std::move(source));
     }

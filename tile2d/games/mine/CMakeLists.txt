@@ -14,8 +14,10 @@ add_library(mine_core STATIC
     src/registry.cpp
     src/sandbox.cpp
     src/types/entity_tile.cpp
+    src/types/floor.cpp
     src/types/scene_tile.cpp
     src/types/tile.cpp
+    src/types/tile_definition.cpp
 )
 add_library(mine::core ALIAS mine_core)
 t2d_apply_settings(mine_core)

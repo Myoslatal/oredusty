@@ -2,6 +2,9 @@
 
 #include <t2d/core/log.h>
 
+#include <filesystem>
+#include <format>
+
 namespace mine {
 
 std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
@@ -63,6 +66,36 @@ std::vector<ContentImage> content_images(const t2d::EcfgDocument& document, std:
             }
             images.push_back(ContentImage{kind, std::string(entry.key()), std::string(image->as_string())});
         }
+    }
+    return images;
+}
+
+std::vector<ResolvedImage> resolve_content_images(const t2d::EcfgDocument& document,
+                                                        const std::string& source_path,
+                                                        std::string_view ignore_table) {
+    std::vector<ResolvedImage> images;
+    const std::filesystem::path base_directory = std::filesystem::path(source_path).parent_path();
+    for (const ContentImage& declared : content_images(document, ignore_table)) {
+        ResolvedImage entry;
+        entry.kind = declared.kind;
+        entry.content = declared.name;
+        entry.source = source_path;
+        entry.path = declared.path;
+        const std::filesystem::path resolved = base_directory / declared.path;
+        std::error_code code;
+        if (declared.path.empty()) {
+            entry.error = "the image path is empty";
+        } else if (!std::filesystem::is_regular_file(resolved, code)) {
+            entry.error = std::format("'{}' is not there", resolved.string());
+        } else if (resolved.extension() != ".png") {
+            // Ore's decoder reads PNG; anything else would need another one, and pretending otherwise
+            // would fail later, at draw time, where it is much harder to explain.
+            entry.error = std::format("'{}': only PNG is decoded", resolved.extension().string());
+        } else {
+            entry.resolved = resolved.string();
+            entry.ok = true;
+        }
+        images.push_back(std::move(entry));
     }
     return images;
 }

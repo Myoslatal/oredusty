@@ -48,6 +48,13 @@ public:
     /// The name the registry has for this plot's content, or "#<id>" when the content is gone - the
     /// same text the sandbox shows for a cell whose content disappeared.
     [[nodiscard]] std::string name(const ContentRegistry& registry) const;
+    /// True for content that is a floor: something other plots are placed on and walk over. It is the
+    /// one thing a Floor (types/floor.h) adds, and the reason it is a method rather than a field in the
+    /// data: being a floor is a kind of thing, not a property a file can hand out. Everything else asks
+    /// this question - a machine about the cell under it, pathing about the cell it is walking into -
+    /// without knowing the name of a single floor.
+    [[nodiscard]] virtual bool is_floor() const { return false; }
+
     /// The content behind the plot is not in the registry any more (a reload can take it away).
     [[nodiscard]] bool missing() const { return missing_; }
     void set_missing(bool missing) { missing_ = missing; }

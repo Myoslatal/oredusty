@@ -1,7 +1,7 @@
 # 外部内容：纯 ecfg 内容包与模组包
 
 本体只做**核心逻辑**（tilemap、渲染、文字、传输、注册表、沙盒）。内容——定义与逻辑——从外部加载，
-有两种形式，按需要选：
+有两种形式，按需要选（此外，**游戏自己带的内容**放在 `games/mine/content/`，永远是加载顺序的第一段）：
 
 | 形式 | 是什么 | 能带代码吗 |
 |---|---|---|
@@ -44,9 +44,16 @@ structure::
   你写的顺序。
 * 同名内容、重复的包 id、依赖缺失或成环、语法错（带行列号）、`pack::` 里的未知键——全部**报告**，
   该包不加载或只加载不冲突的部分；`pack::` 表本身是元数据，不会被当成"不是内容类别的表"来报警告。
-* **`image` 是引擎唯一会读的字段**（其余字段是你的）：内容条目写 `image:"art/wall.png"`，
-  路径相对**本包目录**。加载时引擎校验文件存在、是 PNG（Ore 自带解码器），不存在/不是 PNG 都会报告；
-  能解码的图片被装进一张图集，沙盒直接画出**你写的贴图**而不是占位颜色：
+* **引擎只读两个字段**，其余字段是你的：
+
+  | 字段 | 含义 |
+  |---|---|
+  | `image:"art/wall.png"` | 这块内容画出来用的贴图。路径相对**声明它的那个文件**（包、本体内容文件、模组内容文件都一样） |
+  | `random_reverse:true` | 允许地图初始化时把这份内容的若干份**左右翻转渲染**（50%），避免同一份贴图重复成千上万次时全部朝同一边。**由内容作者决定**，不写就是不翻转 |
+
+  加载时引擎校验：文件存在、是 PNG（Ore 自带解码器），不存在/不是 PNG 都会报告；`random_reverse` 写成
+  非布尔值也会报告（`random_reverse:1` 不会悄悄当成假）。能解码的图片被装进一张图集，沙盒直接画出
+  **你写的贴图**而不是占位颜色：
 
   ![内容包里的贴图](../games/mine/docs/images/sandbox_pack_art_en.png)
 
@@ -58,7 +65,10 @@ structure::
   ```
 
   美术风格是多边形，资源仍是图片：引擎不做矢量多边形渲染（见 `docs/GAME_DESIGN.md` §1.10）。
-* 内容包不能新增 `ContentKind`，也不能跑代码；要这两样就用下面的模组包。
+* 内容包不能新增 `ContentKind`，也不能跑代码；要这两样就用下面的模组包。类别本身由引擎定义
+  （`item` / `structure` / `machine` / `recipe` / `layer` / `channel` / `floor`，
+  见 `games/mine/include/mine/registry.h`）：**`floor` 是地板**——其他东西站上去的那一层，
+  它也是"地块"的一种（`mine::types::Floor`，见 `docs/TYPES.md`）。
 
 
     mods/
@@ -77,7 +87,8 @@ structure::
 ![本体内容 + 两个模组](../games/mine/docs/images/sandbox_mods_en.png)
 
 ```sh
-# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 5 项 + 模组 7 项 = 12 项，bands 填充
+# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的泥地 1 项 + 模组 6 项
+# = 13 项，bands 填充
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
     --content games/mine/tests/data/placeholder_content.ecfg \
     --mods build/debug/games/mine/tests/mods --fill bands
@@ -201,6 +212,22 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 `requires` 指向不存在的模组、依赖成环、两个包同 id、两个模组注册同名内容、内容文件语法错（带行列号）、
 内容表名拼错（警告而非错误）、原生库缺失、原生库不是库、ABI 版本不符、库自称 id 与清单不符、
 `on_load` 返回非 0。以及：重载后 id 完全一致，不清理注册表而重复加载时全部报冲突。
+
+## 4.5 游戏自己带的内容
+
+`games/mine/content/` 是**游戏本体内容**：加载顺序的第一段，不需要任何命令行参数就会加载，
+`--content` 是在它之后**追加**（不是替换）。目录里每个 `*.ecfg` 是一个内容文件（按文件名排序），
+它的贴图放在旁边（比如 `content/art/`），条目里用**相对该文件**的路径引用。
+
+现在里面有：
+
+    games/mine/content/
+        floors.ecfg           floor:: dirt::  —— 泥地，贴图 art/floor_dirt.png
+        art/floor_dirt.png
+
+沙盒里打开就能看到它：内容面板列出 `floor #1 dirt`，空格键把泥地铺到格子上，画的就是这张贴图。
+
+![本体内容：泥地](../games/mine/docs/images/content_dirt_floor_en.png)
 
 ## 5. 内容列表：在游戏里看谁加载了
 

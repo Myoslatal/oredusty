@@ -18,6 +18,7 @@
 // the game can do; the ABI check is about compatibility, not safety.
 #pragma once
 
+#include <mine/content_loader.h>
 #include <mine/mod_api.h>
 #include <mine/registry.h>
 
@@ -70,6 +71,9 @@ struct LoadedMod {
     ModManifest manifest;
     std::vector<std::string> content_paths;   ///< absolute paths, in load order
     std::vector<ModContentEntry> registered;  ///< what it actually added to the registry
+    /// The pictures its content files ship, resolved against the directory of the file that declares
+    /// them - the same rule the game's own content and the packs follow.
+    std::vector<ResolvedImage> images;
     bool native_loaded = false;
     bool ok = true;                           ///< false: the report says why, the game runs without it
     std::string error;

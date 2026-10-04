@@ -289,17 +289,21 @@ T2D_TEST(a_pack_image_is_resolved_and_checked) {
     const ContentPipelineReport& report = pipeline.load(registry);
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
     T2D_CHECK_EQ(report.pack_images, 4u);   // two in each pack
-    const ContentPack* base = find_pack(pipeline, "base_pack");
-    T2D_REQUIRE(base != nullptr);
-    T2D_CHECK_EQ(base->images.size(), 2u);
-    for (const PackImage& image : base->images) {
+    T2D_CHECK_EQ(report.images.size(), 4u);
+    for (const ResolvedImage& image : report.images) {
         T2D_CHECK_MSG(image.ok, "{}: {}", image.path, image.error);
         T2D_CHECK(image.resolved.find("packs") != std::string::npos);
-        T2D_CHECK(image.resolved.find("floor.png") != std::string::npos ||
-                  image.resolved.find("tower.png") != std::string::npos);
+        T2D_CHECK(image.resolved.find("art/") != std::string::npos);
+        T2D_CHECK(image.resolved.ends_with(".png"));
+        // A picture knows which file declared it: that is what a source's own line counts.
+        T2D_CHECK(image.source.find("packs") != std::string::npos);
+        T2D_CHECK(image.source.find(".ecfg") != std::string::npos);
     }
-    T2D_CHECK_EQ(base->images[0].content, std::string("pack_ore"));
-    T2D_CHECK_EQ(base->images[0].kind, ContentKind::Item);
+    T2D_CHECK_EQ(report.images[0].content, std::string("pack_ore"));
+    T2D_CHECK_EQ(report.images[0].kind, ContentKind::Item);
+    const ContentPack* base = find_pack(pipeline, "base_pack");
+    T2D_REQUIRE(base != nullptr);
+    T2D_CHECK_EQ(base->registered.size(), 2u);
 
     // A picture that is not there, an empty path, and a file the engine cannot decode are all
     // reported: a content entry that cannot be drawn must not look like one that can.
@@ -335,6 +339,70 @@ T2D_TEST(a_pack_image_is_resolved_and_checked) {
     const ContentPipelineReport& plain_report = plain.load(plain_registry);
     T2D_CHECK(plain_report.clean());
     T2D_CHECK_EQ(plain_report.pack_images, 0u);
+    T2D_CHECK(plain_report.images.empty());
+}
+
+T2D_TEST(the_games_own_content_files_ship_their_own_art) {
+    // The game's own content is the first stage of the load order and it names its art the same way a
+    // pack does - relative to the file that declares it - so the texture of a floor the game ships is
+    // found without anybody passing a --pack.
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_base_files({std::string(T2D_SOURCE_DIR) + "/games/mine/content/floors.ecfg"});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_REQUIRE(report.images.size() == 1u);
+    T2D_CHECK(report.images[0].ok);
+    T2D_CHECK_EQ(report.images[0].kind, ContentKind::Floor);
+    T2D_CHECK_EQ(report.images[0].content, std::string("dirt"));
+    T2D_CHECK(report.images[0].resolved.find("floor_dirt.png") != std::string::npos);
+    T2D_CHECK_EQ(report.base_images, 1u);
+    T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
+    T2D_CHECK(registry.find(ContentKind::Floor, "dirt") != kNoContent);
+
+    // A picture the game's own file cannot find is reported like any other broken reference, and it is
+    // the file's line in the content list that carries the message.
+    Scratch scratch;
+    scratch.write("mine.ecfg", "floor::\n    sand::\n        image:\"art/sand.png\"\n");
+    ContentRegistry missing_registry;
+    ContentPipeline missing;
+    missing.set_base_files({scratch.root() + "/mine.ecfg"});
+    const ContentPipelineReport& missing_report = missing.load(missing_registry);
+    T2D_CHECK_FALSE(missing_report.clean());
+    T2D_CHECK(mentions(missing_report.errors, "is not there"));
+    T2D_REQUIRE(missing_report.sources.size() == 1u);
+    T2D_CHECK_FALSE(missing_report.sources[0].error.empty());
+    T2D_CHECK_EQ(missing_report.sources[0].images, 0u);
+    T2D_CHECK_EQ(missing_report.sources[0].images_failed, 1u);
+    // The content itself still loads: a missing picture is a drawing problem, not a data problem.
+    T2D_CHECK_EQ(missing_registry.count(ContentKind::Floor), 1u);
+}
+
+T2D_TEST(a_field_the_engine_reads_that_it_cannot_read_is_reported) {
+    // "random_reverse:1" would otherwise be content that quietly never turns around, so the load says
+    // so - the same way a picture that is not there is said rather than drawn blank.
+    Scratch scratch;
+    scratch.write("mine.ecfg", "floor::\n    sand::\n        random_reverse:1\n");
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_base_files({scratch.root() + "/mine.ecfg"});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK(mentions(report.errors, "random_reverse must be true or false"));
+    T2D_REQUIRE(report.sources.size() == 1u);
+    T2D_CHECK_FALSE(report.sources[0].error.empty());
+    // The content itself still loads: a field the engine cannot read is a data error, not a reason to
+    // lose the name.
+    T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
+
+    // A value it can read is not reported, and it is what the definition carries.
+    Scratch good;
+    good.write("mine.ecfg", "floor::\n    dirt::\n        random_reverse:true\n");
+    ContentRegistry good_registry;
+    ContentPipeline good_pipeline;
+    good_pipeline.set_base_files({good.root() + "/mine.ecfg"});
+    const ContentPipelineReport& good_report = good_pipeline.load(good_registry);
+    T2D_CHECK_MSG(good_report.clean(), "{}", good_report.first_error());
 }
 
 T2D_TEST(the_pack_workspace_and_its_template_always_load) {

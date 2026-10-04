@@ -137,9 +137,10 @@ private:
     void fit_sandbox_view();
     void load_localisation();
     void load_fonts();
-    /// Decodes every picture the packs ship into one atlas, so the sandbox can draw what the content
-    /// describes instead of a colour standing in for it.
-    void load_pack_images();
+    /// Decodes every picture the content ships into one atlas, so the sandbox can draw what the content
+    /// describes instead of a colour standing in for it. Every source is in here: the game's own files,
+    /// the packs and the mods.
+    void load_content_images();
     /// The cells of the sandbox map a frame has to draw, and how many cells one drawn quad covers.
     /// A map of hundreds of cells per side cannot be drawn cell by cell at every zoom: past a quad
     /// budget the frame draws a sampled overview instead, one quad per block of cells.
@@ -254,6 +255,9 @@ private:
     Scope<t2d::ImageAtlas> image_atlas_;
     Scope<ore::rhi::Sampler> image_sampler_;
     std::vector<std::string> image_errors_;
+    /// The content files the game itself ships (games/mine/content), scanned once at startup: they are
+    /// the game's own content and are loaded before anything a command line names.
+    std::vector<std::string> shipped_content_;
     /// Quads the batch refused in the last frame (both passes): a frame that lost quads is a frame the
     /// screen must not pretend is complete.
     u32 dropped_quads_ = 0;

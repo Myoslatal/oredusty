@@ -1,6 +1,7 @@
 #include <mine/mod_package.h>
 
 #include <mine/content_loader.h>
+#include <mine/types/tile_definition.h>
 
 #include <t2d/core/log.h>
 
@@ -387,7 +388,8 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
             report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
             continue;
         }
-        for (const t2d::EcfgDocument& document : documents) {
+        for (usize file_index = 0; file_index < documents.size(); ++file_index) {
+            const t2d::EcfgDocument& document = documents[file_index];
             std::vector<std::string> unknown_tables;
             const std::vector<ContentEntry> declared = content_declarations(document, &unknown_tables);
             std::vector<ContentEntry> added;
@@ -407,6 +409,28 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
             }
             for (const std::string& table : unknown_tables) {
                 report_.warnings.push_back(std::format("mod '{}': '{}' is not a content kind", manifest.id, table));
+            }
+            // The pictures the file ships, resolved against the file's own directory. A missing one is
+            // reported like any other broken reference: a content entry that cannot be drawn must not
+            // look like one that can.
+            for (ResolvedImage& image :
+                 resolve_content_images(document, slot.loaded.content_paths[file_index])) {
+                if (!image.ok) {
+                    report_.errors.push_back(std::format("mod '{}': {} '{}': {}", manifest.id,
+                                                         content_kind_name(image.kind), image.content,
+                                                         image.error));
+                    if (slot.loaded.error.empty()) slot.loaded.error = image.error;
+                }
+                slot.loaded.images.push_back(std::move(image));
+            }
+            // The fields the engine reads are read here too, so a mod's typo is reported by the mod
+            // that made it rather than by whatever builds a layer out of it later.
+            std::vector<std::string> definition_errors;
+            (void)types::tile_definitions(document, &definition_errors);
+            for (const std::string& definition_error : definition_errors) {
+                const std::string message = std::format("mod '{}': {}", manifest.id, definition_error);
+                report_.errors.push_back(message);
+                if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
         }
 
