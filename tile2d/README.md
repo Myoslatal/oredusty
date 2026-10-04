@@ -308,13 +308,19 @@ designer's data says exists.
 
 The first type is the **plot** (`types/tile.h`): a fixed thing that occupies cells of one layer — a
 floor, an ore vein, a machine. It carries the kind and id a save stores (never a name: the registry
-answers that, and content that comes back repairs a plot by name), and a **rectangle of cells** whose
-top left corner is its anchor, so a 2×2 or 3×3 structure is the same thing as a single cell rather
-than a special case. Plots come in two kinds, because of how often they have to run: `SceneTile` —
-scenery, with **no per-frame path at all** (a dirty flag and `refresh()`, so a frame costs what
-changed, not what exists) — and `EntityTile` — machines, which own a cadence (`period_seconds()`,
-0 meaning every tick) and are handed the frame's seconds, carrying the remainder and accounting for a
-long frame once rather than replaying the ticks it missed.
+answers that, and content that comes back repairs a plot by name), a **rectangle of cells** whose top
+left corner is its anchor, so a 2×2 or 3×3 structure is the same thing as a single cell rather than a
+special case, and a **rendering facing**: with `random_reverse` set, the map rolls it once when it is
+built — half of them come out mirrored left to right — from the layer's own seeded generator, so the
+same mine comes out the same way twice, and what a plot *does* is never mirrored.
+
+Plots are a small inheritance tree, because of how often they have to run: `SceneTile` is scenery and
+has **no per-frame path at all** (a dirty flag and `refresh()`, so a frame costs what changed, not
+what exists); `EntityTile` **is a scene plot** — it is refreshed the same way when the world around
+it changes — **plus** a cadence it owns (`period_seconds()`, 0 meaning every tick), handed the frame's
+seconds, carrying the remainder and accounting for a long frame once rather than replaying the ticks it
+missed. Since a machine *is* scenery, "does this tick?" is not asked at runtime: the layer keeps what
+it ticks in its own list, which is where the saving is.
 
 Guide: [docs/TYPES.md](docs/TYPES.md).
 

@@ -6,19 +6,20 @@
 // rectangle of cells whose top left corner is the plot's anchor. Nothing here assumes one cell.
 //
 // What a plot *is* - which content it stands for - is the registry's business (mine/registry.h): a
-// plot holds the kind and the id a save stores, never a name. What it *does* is in the two kinds of
-// plot below (types/scene_tile.h, types/entity_tile.h), which exist because of how often it has to be
-// done.
+// plot holds the kind and the id a save stores, never a name. What it *does* is in the kinds below
+// (types/scene_tile.h, types/entity_tile.h), which exist because of how often it has to be done.
 //
-// This class is the base of that family: identity, footprint, and whether the content behind it is
-// still there. It has no constructor a caller can reach, because a plot is always one of the two
-// kinds - there is no such thing as a plot that is neither scenery nor a machine.
+// This class is the base of that family: identity, footprint, whether the content behind it is still
+// there, and how it draws itself. It has no constructor a caller can reach, because a plot is always
+// scenery - possibly scenery that also runs (types/entity_tile.h) - and there is no such thing as a
+// plot that is neither.
 #pragma once
 
 #include <mine/content_grid.h>
 #include <mine/registry.h>
 
 #include <t2d/core/math2d.h>
+#include <t2d/core/rng.h>
 
 #include <string>
 
@@ -72,6 +73,26 @@ public:
     /// what a placement check asks before a 2x2 is put down near the edge.
     [[nodiscard]] bool within(i32 map_width, i32 map_height) const;
 
+    // --- how it draws itself ----------------------------------------------------------------------
+    /// Whether this plot's art may be turned around. Some content looks better when every copy of it
+    /// does not face the same way - an ore vein, a patch of floor - and the designer's data says which.
+    [[nodiscard]] bool random_reverse() const { return random_reverse_; }
+    void set_random_reverse(bool value) { random_reverse_ = value; }
+
+    /// True when this plot draws itself mirrored left to right. It is decided once, when the map is
+    /// built (randomise_mirror), and it is about drawing only: what a plot *does* is never mirrored.
+    [[nodiscard]] bool mirrored() const { return mirrored_; }
+    /// Sets the mirroring by hand, for a caller that knows better than the dice (a save that stored
+    /// it, an editor).
+    void set_mirrored(bool value) { mirrored_ = value; }
+
+    /// Decides how this plot draws itself, once, while the map is being built: with random_reverse set,
+    /// half of them come out mirrored, the rest do not. It draws from \p rng - the layer's own
+    /// generator, seeded from the world's seed - so the same mine comes out the same way twice
+    /// (docs/GAME_DESIGN.md section 2). A plot that may not be turned around draws nothing from the
+    /// generator, so it cannot shift the dice for the plots after it.
+    void randomise_mirror(t2d::Rng& rng);
+
 protected:
     /// A plot is constructed where it is: it has no place until it has one. \p width and \p height
     /// are the footprint in cells (at least one).
@@ -83,6 +104,8 @@ private:
     i32 layer_ = 0;
     TileRect cells_{};
     bool missing_ = false;
+    bool random_reverse_ = false;
+    bool mirrored_ = false;
 };
 
 } // namespace mine::types

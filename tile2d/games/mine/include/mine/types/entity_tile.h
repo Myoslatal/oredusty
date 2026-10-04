@@ -1,10 +1,16 @@
 // Mine - plots that do something.
 //
-// An **entity plot** is a functional plot: a machine, a belt, a drill, a demand terminal. Unlike
-// scenery it has to be updated while the game runs, and how often is part of what it is: a fast
+// An **entity plot** is a functional plot: a machine, a belt, a drill, a demand terminal. It **is** a
+// scene plot - it is scenery, it is refreshed the same way when the world around it changes - and on
+// top of that it has to be updated while the game runs. How often is part of what it is: a fast
 // machine runs every tick, a slow one every few seconds (docs/GAME_DESIGN.md section 1.13). That
 // cadence lives here rather than in the simulation loop, so the loop is the same for every plot and a
 // slow machine costs what a slow machine costs.
+//
+// Because an entity plot *is* a scene plot, "does this tick?" is not something to ask a plot at
+// runtime: the layer knows what it created. A layer keeps the plots it ticks in their own list, which
+// is where the saving is - the refresh pass can then walk everything and pay only for what is dirty,
+// while the tick pass walks machines and nothing else.
 //
 // The cadence is time, not ticks: advance() is handed the frame's seconds and decides for itself
 // whether its turn has come. A frame that took longer than a period runs the plot once, with the whole
@@ -13,7 +19,7 @@
 // accounts for five seconds can produce what five seconds are worth.
 #pragma once
 
-#include <mine/types/tile.h>
+#include <mine/types/scene_tile.h>
 
 #include <t2d/core/types.h>
 
@@ -21,13 +27,16 @@ namespace mine::types {
 
 using t2d::f32;
 
-/// A plot that is updated while the game runs, on a cadence it owns.
-class EntityTile : public Tile {
+/// A plot that is updated while the game runs, on a cadence it owns. Everything a scene plot has -
+/// being refreshed when the world changes, the dirty flag - it has too.
+class EntityTile : public SceneTile {
 public:
+    ~EntityTile() override = default;
+
     /// A functional plot is placed where it is, like every plot. Content that needs logic of its own
     /// derives from this and inherits the constructor.
     EntityTile(ContentKind kind, ContentId id, i32 layer, GridPos anchor, i32 width = 1, i32 height = 1)
-        : Tile(kind, id, layer, anchor, width, height) {}
+        : SceneTile(kind, id, layer, anchor, width, height) {}
 
     /// How often it wants its turn: 0 means every tick, anything else is a period in seconds.
     [[nodiscard]] f32 period_seconds() const { return period_; }

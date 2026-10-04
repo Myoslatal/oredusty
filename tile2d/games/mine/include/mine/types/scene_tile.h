@@ -1,9 +1,12 @@
 // Mine - plots that are part of the scenery.
 //
 // A **scene plot** is what the mine is made of rather than what runs in it: floors, walls, ore veins,
-// decorations. It is **not** ticked, and that is the whole reason the two kinds of plot exist - a map
-// of hundreds of cells per side holds orders of magnitude more scenery than machines, and scenery that
-// costs nothing per frame is scenery that can be everywhere (docs/GAME_DESIGN.md section 1.13).
+// decorations. It is **not** ticked, and that is the whole reason the kinds of plot are separate - a
+// map of hundreds of cells per side holds orders of magnitude more scenery than machines, and scenery
+// that costs nothing per frame is scenery that can be everywhere (docs/GAME_DESIGN.md section 1.13).
+//
+// A functional plot is a scene plot that also runs: types/entity_tile.h derives from this class, so
+// everything here - the dirty flag, the refresh pass - covers machines too.
 //
 // A scene plot is brought up to date when something asks it to be: a machine changed the world next to
 // it, a demand wants to know what is there, a save is being written. "When something asks" is what the
@@ -15,9 +18,12 @@
 
 namespace mine::types {
 
-/// A plot that is scenery: it is not ticked, and recomputes itself only when it is told to.
+/// A plot that is scenery: it is not ticked, and recomputes itself only when it is told to. A
+/// functional plot (types/entity_tile.h) is one of these plus a cadence.
 class SceneTile : public Tile {
 public:
+    ~SceneTile() override = default;
+
     /// A scene plot is placed where it is, like every plot. Content that needs logic of its own
     /// derives from this and inherits the constructor.
     SceneTile(ContentKind kind, ContentId id, i32 layer, GridPos anchor, i32 width = 1, i32 height = 1)

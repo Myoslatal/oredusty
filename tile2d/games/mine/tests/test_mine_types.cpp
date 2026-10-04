@@ -25,12 +25,14 @@ protected:
     void on_refresh() override { ++refreshes; }
 };
 
-/// An entity plot that records what it was told, and marks itself when it is destroyed.
+/// An entity plot that records both of the things it can be asked to do: being brought up to date
+/// like scenery, and running on its cadence.
 class CountingMachine final : public EntityTile {
 public:
     using EntityTile::EntityTile;
 
     int runs = 0;
+    int refreshes = 0;
     f32 accounted = 0.0f;
 
 protected:
@@ -38,6 +40,7 @@ protected:
         ++runs;
         accounted += elapsed;
     }
+    void on_refresh() override { ++refreshes; }
 };
 
 /// A machine that says so when it is destroyed through the base class.
@@ -65,9 +68,11 @@ private:
 } // namespace
 
 T2D_TEST(a_plot_is_a_base_class_and_not_a_thing_of_its_own) {
-    // Every plot is scenery or a functional plot; there is no third kind to construct.
+    // Every plot is scenery, and a functional plot is scenery that also runs: there is no third kind
+    // to construct, and nothing that is a plot without being scenery.
     static_assert(!std::is_constructible_v<Tile, ContentKind, ContentId, i32, GridPos, i32, i32>);
     static_assert(std::is_base_of_v<Tile, SceneTile>);
+    static_assert(std::is_base_of_v<SceneTile, EntityTile>);
     static_assert(std::is_base_of_v<Tile, EntityTile>);
     static_assert(std::has_virtual_destructor_v<Tile>);
     T2D_CHECK(true);
@@ -265,10 +270,79 @@ T2D_TEST(a_plot_is_a_plot_through_a_base_pointer) {
         T2D_REQUIRE(machine != nullptr);
         machine->set_period_seconds(0.25f);
         T2D_CHECK(machine->advance(0.25f));
-        T2D_CHECK(dynamic_cast<SceneTile*>(plot.get()) == nullptr);
+        // A machine is scenery too, so it can be reached as one: a pass over the world's scenery does
+        // not walk past the machines.
+        T2D_CHECK(dynamic_cast<SceneTile*>(plot.get()) != nullptr);
+        T2D_CHECK(dynamic_cast<Tile*>(machine) == plot.get());
     }
     // Destroying through the base runs the derived destructor: a plot that owns something releases it.
     T2D_CHECK(destroyed);
+}
+
+T2D_TEST(a_machine_is_scenery_that_also_runs) {
+    CountingMachine machine(ContentKind::Machine, 1, 0, GridPos{4, 4});
+    machine.set_period_seconds(0.5f);
+
+    // Both paths belong to the same object: the scene side brings it up to date when the world around
+    // it changed, the cadence side runs it when its turn comes. Neither stands in for the other.
+    T2D_CHECK(machine.dirty());
+    T2D_CHECK(machine.refresh());
+    T2D_CHECK_FALSE(machine.dirty());
+    T2D_CHECK_EQ(machine.refreshes, 1);
+    T2D_CHECK_EQ(machine.runs, 0);
+
+    T2D_CHECK_FALSE(machine.advance(0.25f));
+    T2D_CHECK(machine.advance(0.25f));
+    T2D_CHECK_EQ(machine.runs, 1);
+    T2D_CHECK_EQ(machine.refreshes, 1);   // running is not refreshing
+
+    machine.mark_dirty();
+    T2D_CHECK(machine.refresh());
+    T2D_CHECK_EQ(machine.refreshes, 2);
+    T2D_CHECK_EQ(machine.runs, 1);        // and refreshing is not running
+}
+
+T2D_TEST(a_plot_can_be_told_to_turn_itself_around) {
+    // Off by default, and a plot that may not be turned around never is - however many times it is
+    // asked, and without touching the generator (so turning the flag on for one plot cannot shift the
+    // dice for the plots after it).
+    CountingFloor plain(ContentKind::Structure, 1, 0, GridPos{0, 0});
+    T2D_CHECK_FALSE(plain.random_reverse());
+    T2D_CHECK_FALSE(plain.mirrored());
+    t2d::Rng rng(7);
+    const t2d::u64 before = rng.state_hash();
+    for (int roll = 0; roll < 100; ++roll) plain.randomise_mirror(rng);
+    T2D_CHECK_FALSE(plain.mirrored());
+    T2D_CHECK_EQ(rng.state_hash(), before);
+
+    // With it on, the map's own generator decides - and the same seed decides the same way twice.
+    CountingFloor turnable(ContentKind::Structure, 2, 0, GridPos{0, 0});
+    turnable.set_random_reverse(true);
+    T2D_CHECK(turnable.random_reverse());
+    t2d::Rng first(2024);
+    t2d::Rng second(2024);
+    usize mirrored = 0;
+    std::string pattern;
+    std::string repeated;
+    for (int roll = 0; roll < 1000; ++roll) {
+        turnable.randomise_mirror(first);
+        pattern.push_back(turnable.mirrored() ? '1' : '0');
+        if (turnable.mirrored()) ++mirrored;
+        CountingFloor other(ContentKind::Structure, 2, 0, GridPos{0, 0});
+        other.set_random_reverse(true);
+        other.randomise_mirror(second);
+        repeated.push_back(other.mirrored() ? '1' : '0');
+    }
+    // Half of them, give or take: 1000 rolls of a fair coin stay well inside this.
+    T2D_CHECK_GT(mirrored, 400u);
+    T2D_CHECK_LT(mirrored, 600u);
+    T2D_CHECK_EQ(pattern, repeated);
+
+    // A caller that knows better - a save that stored the answer, an editor - can set it directly.
+    turnable.set_mirrored(true);
+    T2D_CHECK(turnable.mirrored());
+    turnable.set_mirrored(false);
+    T2D_CHECK_FALSE(turnable.mirrored());
 }
 
 T2D_TEST_MAIN

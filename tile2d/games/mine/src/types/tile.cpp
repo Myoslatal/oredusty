@@ -19,6 +19,12 @@ bool Tile::overlaps(const Tile& other) const {
            cells_.y < other.cells_.bottom() && other.cells_.y < cells_.bottom();
 }
 
+void Tile::randomise_mirror(t2d::Rng& rng) {
+    // Half of them, and only where the content allows it: a plot that may not be turned around never
+    // is, and never touches the generator either.
+    mirrored_ = random_reverse_ && rng.chance(0.5f);
+}
+
 bool Tile::within(i32 map_width, i32 map_height) const {
     return cells_.x >= 0 && cells_.y >= 0 && cells_.right() <= map_width && cells_.bottom() <= map_height;
 }
