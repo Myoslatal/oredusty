@@ -1,12 +1,12 @@
-// t2dtab - the code table toolchain.
+// codetab - the code table toolchain.
 //
 // It drives the system compiler and packs what the compiler emitted into a code table. There is no
 // second C++ compiler here and there never will be: the compiler is the one the project is built
 // with, and this tool is the step after it.
 //
-//     t2dtab build game/*.cpp -o mine.t2dtab --id mine --version 1.0
-//     t2dtab build mod.cpp -o mod.t2dtab --id my_mod --requires mine
-//     t2dtab dump mod.t2dtab
+//     codetab build game/*.cpp -o mine.codetab --id mine --version 1.0
+//     codetab build mod.cpp -o mod.codetab --id my_mod --requires mine@1.0
+//     codetab dump mod.codetab
 //
 // The flags it compiles with are not decoration. \c -fsemantic-interposition is what keeps a call to
 // another translation unit a call *through a relocation* instead of something the compiler inlined
@@ -25,6 +25,7 @@
 
 namespace {
 
+using t2d::CodeRequirement;
 using t2d::CodeTable;
 using t2d::ObjectFile;
 
@@ -37,7 +38,7 @@ struct Options {
     std::string id;
     std::string name;
     std::string version;
-    std::vector<std::string> requirements;
+    std::vector<CodeRequirement> requirements;
     std::string optimization = "-O2";
     bool exceptions = false;
     bool keep = false;
@@ -45,17 +46,19 @@ struct Options {
 };
 
 void usage() {
-    std::cout << "t2dtab - pack compiled C++ into a code table, and read one back\n"
+    std::cout << "codetab - pack compiled C++ into a code table, and read one back\n"
                  "\n"
-                 "  t2dtab build <source.cpp>... -o <out.t2dtab> [options]\n"
-                 "  t2dtab dump <table.t2dtab>\n"
+                 "  codetab build <source.cpp>... -o <out.codetab> [options]\n"
+                 "  codetab dump <table.codetab>\n"
                  "\n"
                  "options:\n"
                  "  --compiler <path>   the compiler to drive (default: c++)\n"
                  "  --id <id>           what the module is called in the merge report\n"
                  "  --name <name>       for humans\n"
-                 "  --version <v>       free form\n"
-                 "  --requires <id>     a table this one expects to be merged with (repeatable)\n"
+                 "  --version <v>       this module's own version\n"
+                 "  --requires <id>     a module this one needs: an id, or id@version to demand that\n"
+                 "                      exact version (repeatable). A requirement nothing provides, or\n"
+                 "                      one whose version does not match, refuses the module at load time\n"
                  "  --include <dir>     added to the compile (repeatable)\n"
                  "  --define <X>        added to the compile (repeatable)\n"
                  "  --opt <level>       -O0 / -O1 / -O2 / -O3 (default -O2)\n"
@@ -96,12 +99,25 @@ void usage() {
         else if (argument == "-o" || argument == "--output") { if (!value(options.output)) return false; }
         else if (argument == "--include" || argument == "-I") { std::string dir; if (!value(dir)) return false; options.includes.push_back(dir); }
         else if (argument == "--define" || argument == "-D") { std::string define; if (!value(define)) return false; options.defines.push_back(define); }
-        else if (argument == "--requires") { std::string need; if (!value(need)) return false; options.requirements.push_back(need); }
+        else if (argument == "--requires") {
+            std::string need;
+            if (!value(need)) return false;
+            // "id" or "id@version": the version is what the load checks, so it is part of the name.
+            const std::size_t at = need.find('@');
+            CodeRequirement requirement;
+            requirement.id = need.substr(0, at);
+            if (at != std::string::npos) requirement.version = need.substr(at + 1);
+            if (requirement.id.empty()) {
+                error = std::format("'{}' is not a requirement: it wants an id, or id@version", need);
+                return false;
+            }
+            options.requirements.push_back(std::move(requirement));
+        }
         else if (argument == "--exceptions") options.exceptions = true;
         else if (argument == "--keep") options.keep = true;
         else if (argument == "--verbose") options.verbose = true;
         else if (!argument.empty() && argument[0] == '-') {
-            error = std::format("'{}' is not an option t2dtab knows", argument);
+            error = std::format("'{}' is not an option codetab knows", argument);
             return false;
         } else {
             options.sources.push_back(argument);
@@ -112,11 +128,11 @@ void usage() {
 
 [[nodiscard]] int build(const Options& options) {
     if (options.sources.empty()) {
-        std::cerr << "t2dtab build: no source files were given\n";
+        std::cerr << "codetab build: no source files were given\n";
         return 2;
     }
     if (options.output.empty()) {
-        std::cerr << "t2dtab build: -o <out.t2dtab> is required\n";
+        std::cerr << "codetab build: -o <out.codetab> is required\n";
         return 2;
     }
     const std::filesystem::path output(options.output);
@@ -125,7 +141,7 @@ void usage() {
     std::error_code code;
     std::filesystem::create_directories(work, code);
     if (code) {
-        std::cerr << std::format("t2dtab build: '{}' cannot be created: {}\n", work.string(), code.message());
+        std::cerr << std::format("codetab build: '{}' cannot be created: {}\n", work.string(), code.message());
         return 2;
     }
 
@@ -146,13 +162,13 @@ void usage() {
         if (options.verbose) std::cout << command << "\n";
         const int status = std::system(command.c_str());
         if (status != 0) {
-            std::cerr << std::format("t2dtab build: the compiler refused '{}' (exit {})\n", source, status);
+            std::cerr << std::format("codetab build: the compiler refused '{}' (exit {})\n", source, status);
             return 1;
         }
         std::string error;
         std::optional<ObjectFile> read = ObjectFile::load(object.string(), &error);
         if (!read.has_value()) {
-            std::cerr << std::format("t2dtab build: {}\n", error);
+            std::cerr << std::format("codetab build: {}\n", error);
             return 1;
         }
         read->source = source;
@@ -162,7 +178,7 @@ void usage() {
     std::string error;
     std::optional<CodeTable> table = CodeTable::from_objects(objects, &error);
     if (!table.has_value()) {
-        std::cerr << std::format("t2dtab build: {}\n", error);
+        std::cerr << std::format("codetab build: {}\n", error);
         return 1;
     }
     table->id = options.id.empty() ? output.stem().string() : options.id;
@@ -170,7 +186,7 @@ void usage() {
     table->version = options.version;
     table->requirements = options.requirements;
     if (!table->save(options.output, &error)) {
-        std::cerr << std::format("t2dtab build: {}\n", error);
+        std::cerr << std::format("codetab build: {}\n", error);
         return 1;
     }
     if (!options.keep) std::filesystem::remove_all(work, code);
@@ -185,7 +201,7 @@ void usage() {
     std::string error;
     std::optional<CodeTable> table = CodeTable::load(path, &error);
     if (!table.has_value()) {
-        std::cerr << std::format("t2dtab dump: {}\n", error);
+        std::cerr << std::format("codetab dump: {}\n", error);
         return 1;
     }
     std::cout << table->describe();
@@ -206,7 +222,7 @@ int main(int argc, char** argv) {
     }
     if (command == "dump") {
         if (argc < 3) {
-            std::cerr << "t2dtab dump: which table?\n";
+            std::cerr << "codetab dump: which table?\n";
             return 2;
         }
         return dump(argv[2]);
@@ -220,11 +236,11 @@ int main(int argc, char** argv) {
         with_name.push_back(argv[0]);
         with_name.insert(with_name.end(), rest.begin(), rest.end());
         if (!parse(static_cast<int>(with_name.size()), with_name.data(), options, error)) {
-            std::cerr << std::format("t2dtab build: {}\n", error);
+            std::cerr << std::format("codetab build: {}\n", error);
             return 2;
         }
         return build(options);
     }
-    std::cerr << std::format("t2dtab: '{}' is not a command (try build or dump)\n", command);
+    std::cerr << std::format("codetab: '{}' is not a command (try build or dump)\n", command);
     return 2;
 }

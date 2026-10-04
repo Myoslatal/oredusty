@@ -61,9 +61,9 @@ t2d_add_test(test_code_table test_code_table.cpp)
 target_compile_definitions(test_code_table PRIVATE
     T2D_TEST_TABLE_DIR="${T2D_TABLE_FIXTURE_DIR}"
     T2D_TEST_TABLE_SOURCES="${T2D_TABLE_FIXTURE_SOURCES}"
-    T2D_TEST_TOOLCHAIN="$<TARGET_FILE:t2dtab>"
+    T2D_TEST_TOOLCHAIN="$<TARGET_FILE:codetab>"
     T2D_TEST_COMPILER="${CMAKE_CXX_COMPILER}")
-add_dependencies(test_code_table t2d_table_fixtures t2dtab)
+add_dependencies(test_code_table t2d_table_fixtures codetab)
 
 # The transports: KCP reliability over a lossy link, framing, the session handshake, the map chunk
 # transfer and the shared memory rings. No game rides them yet - that is the point of the split.

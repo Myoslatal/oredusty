@@ -86,6 +86,48 @@ target_link_libraries(test_content_search PRIVATE mine_core)
 t2d_add_test(test_world test_world.cpp)
 target_link_libraries(test_world PRIVATE mine_core)
 
+
+# --- the game's own code in a code table --------------------------------------------------------------
+# mine_core's registry is compiled into a table and *not* linked into the test: what the test loads is
+# the game's own translation unit, packed the way a mod's is (docs/TABLES.md).
+set(MINE_TABLE_DIR "${CMAKE_CURRENT_BINARY_DIR}/tables")
+set(MINE_TABLE_FLAGS
+    -std=c++20 -O2 -fPIC -fsemantic-interposition -ffunction-sections -fdata-sections
+    -fno-stack-protector -fno-exceptions
+    -I${CMAKE_SOURCE_DIR}/games/mine/include
+    -I${CMAKE_SOURCE_DIR}/include
+    -I${PROJECT_BINARY_DIR}/generated
+    -DT2D_SOURCE_DIR="${T2D_SOURCE_DIR}")
+set(MINE_TABLE_OBJECTS "")
+foreach(fixture game_logic mod_game)
+    add_custom_command(
+        OUTPUT "${MINE_TABLE_DIR}/${fixture}.o"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${MINE_TABLE_DIR}"
+        COMMAND ${CMAKE_CXX_COMPILER} ${MINE_TABLE_FLAGS}
+                -c "${CMAKE_CURRENT_SOURCE_DIR}/data/tables/${fixture}.cpp"
+                -o "${MINE_TABLE_DIR}/${fixture}.o"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/tables/${fixture}.cpp"
+        COMMENT "Compiling the mine table fixture ${fixture}.cpp")
+    list(APPEND MINE_TABLE_OBJECTS "${MINE_TABLE_DIR}/${fixture}.o")
+endforeach()
+# The game's own source, compiled the way a mod's is: this is the whole point of the test.
+add_custom_command(
+    OUTPUT "${MINE_TABLE_DIR}/registry.o"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${MINE_TABLE_DIR}"
+    COMMAND ${CMAKE_CXX_COMPILER} ${MINE_TABLE_FLAGS}
+            -c "${CMAKE_SOURCE_DIR}/games/mine/src/registry.cpp"
+            -o "${MINE_TABLE_DIR}/registry.o"
+    DEPENDS "${CMAKE_SOURCE_DIR}/games/mine/src/registry.cpp"
+    COMMENT "Compiling mine_core's registry.cpp into a code table object")
+list(APPEND MINE_TABLE_OBJECTS "${MINE_TABLE_DIR}/registry.o")
+add_custom_target(mine_table_fixtures DEPENDS ${MINE_TABLE_OBJECTS})
+
+t2d_add_test(test_mine_table test_mine_table.cpp)
+target_compile_definitions(test_mine_table PRIVATE MINE_TABLE_DIR="${MINE_TABLE_DIR}")
+add_dependencies(test_mine_table mine_table_fixtures)
+# The table calls back into this executable, so its symbols have to be in the dynamic symbol table.
+set_target_properties(test_mine_table PROPERTIES ENABLE_EXPORTS ON)
+
 # The list of what the registry was filled from: the same data the game's content screen draws.
 t2d_add_test(test_content_list test_content_list.cpp)
 target_link_libraries(test_content_list PRIVATE mine_core)

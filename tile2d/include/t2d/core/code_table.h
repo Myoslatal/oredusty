@@ -11,8 +11,8 @@
 // function of the game, and the game's own calls go to the mod" work - not a patch to machine code,
 // but a link that happened one step later than usual.
 //
-//     source.cpp --(the system compiler)--> object.o --(t2dtab)--> mod.t2dtab
-//     game.t2dtab + mod.t2dtab --(CodeImage)--> one address space, mod's symbols winning
+//     source.cpp --(the system compiler)--> object.o --(codetab)--> mod.codetab
+//     game.codetab + mod.codetab --(CodeImage)--> one address space, mod's symbols winning
 //
 // A table holds sections (the bytes), symbols (what they are called) and relocations (what has to be
 // filled in). It is deliberately small: this is a container for what a compiler emitted, not an
@@ -40,7 +40,7 @@ namespace t2d {
 
 /// What a table file starts with. The version is bumped when the layout changes; a table written by
 /// another version is refused, never guessed at.
-inline constexpr char kCodeTableMagic[8] = {'T', '2', 'D', 'T', 'A', 'B', 'L', 'E'};
+inline constexpr char kCodeTableMagic[8] = {'C', 'O', 'D', 'E', 'T', 'A', 'B', 'L'};
 inline constexpr u32 kCodeTableVersion = 1;
 /// The only machine a table is placed for today. A table is machine code, so this is checked.
 inline constexpr u32 kCodeTableArchX86_64 = 1;
@@ -85,14 +85,27 @@ struct CodeTableRelocation {
     i64 addend = 0;
 };
 
+/// What a module says it needs before it may be merged: another module's id, and optionally the exact
+/// version of it.
+///
+/// A requirement with no version asks only that somebody provides the id. One with a version asks for
+/// exactly that version - there is no "compatible range", because what makes two versions compatible
+/// is not known until the ABI of the program they are loaded into is written down. Until then the
+/// honest answer to "the engine changed" is to refuse the module and say so, which is what the runtime
+/// does (docs/TABLES.md).
+struct CodeRequirement {
+    std::string id;
+    std::string version;   ///< empty: any version will do
+};
+
 /// One module's worth of code: its bytes, its names, and what has to be filled in.
 struct CodeTable {
     std::string id;        ///< what the module is called, for the merge report
     std::string name;      ///< for humans
     std::string version;
-    /// Ids of the tables this one expects to be merged with. ("requires" is a keyword in C++20, so the
-    /// member carries the plain word and the file carries the key.)
-    std::vector<std::string> requirements;
+    /// What this module needs to be merged with, by id and optionally by version. ("requires" is a
+    /// keyword in C++20, so the member carries the plain word and the file carries the key.)
+    std::vector<CodeRequirement> requirements;
 
     std::vector<CodeTableSection> sections;
     std::vector<CodeTableSymbol> symbols;
@@ -125,6 +138,9 @@ struct CodeModuleInfo {
     usize sections = 0;
     usize symbols = 0;
     usize relocations = 0;
+    /// False: the module was refused - a requirement nothing provides, a version that does not match,
+    /// or a relocation that could not be filled in. What it defined is not in the symbol table.
+    bool ok = true;
 };
 
 /// One symbol a merge replaced, and who replaced it.
@@ -160,6 +176,11 @@ public:
     ~CodeImage();
     T2D_NON_MOVABLE(CodeImage);
 
+    /// Declares the program the tables are loaded by - the engine's own id and version, so that a
+    /// module can require it ("this mod was built for mine 1.0"). Without it, a requirement naming the
+    /// host is a requirement nothing provides, and the module is refused.
+    void declare_host(std::string id, std::string version);
+
     /// Queues a module. Tables are merged in the order they are added: the first definition of a
     /// strong symbol wins, and a later one replaces it and is reported.
     void add(CodeTable table);
@@ -188,12 +209,20 @@ private:
 
     struct Module {
         CodeTable table;
+        /// Everything the module needs is in **one** region: its code, the stubs a call that is out of
+        /// reach jumps through, and its data, a page apart. One region is what keeps a module's own
+        /// references in reach - a call and a load from the global offset table are both 32 bit
+        /// displacements, so code and data that belong together must not end up gigabytes apart.
+        u8* base = nullptr;
+        usize region_size = 0;
         u8* text = nullptr;
         usize text_size = 0;
+        u8* trampolines = nullptr;
+        usize trampoline_count = 0;
+        usize trampoline_used = 0;
         u8* data = nullptr;
         usize data_size = 0;
         u8* got = nullptr;
-        usize got_size = 0;
         std::vector<u8*> section_address;
         std::vector<u8*> symbol_address;
         usize got_count = 0;   ///< how many relocations need a slot in the global offset table
@@ -202,6 +231,8 @@ private:
     };
 
     bool place(Module& module);
+    /// Whether everything \p table asks for is here, at the version it asked for.
+    [[nodiscard]] bool requirements_met(const CodeTable& table, std::string* error) const;
     void resolve_symbols();
     void relocate(Module& module);
     void run_initialisers();
@@ -216,6 +247,9 @@ private:
     /// The module each override came from, in step with report_.overrides.
     std::vector<usize> override_sources_;
     CodeImageReport report_;
+    /// The program the tables are loaded by, as declare_host() was told.
+    std::string host_id_;
+    std::string host_version_;
     bool loaded_ = false;
 };
 

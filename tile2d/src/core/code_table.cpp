@@ -10,6 +10,7 @@
 #if !defined(_WIN32)
 #  include <dlfcn.h>
 #  include <sys/mman.h>
+#  include <unistd.h>
 #endif
 
 namespace t2d {
@@ -20,6 +21,9 @@ namespace {
 // computed from the entry sizes, so a reader never has to agree with the writer about anything except
 // the header itself.
 constexpr u64 kHeaderSize = 104;
+/// The room one stub takes: six bytes of instruction, two of padding, then the address it jumps to.
+constexpr u64 kTrampolineSize = 16;
+constexpr u64 kDefaultPageSize = 4096;
 constexpr u64 kSectionEntrySize = 32;
 constexpr u64 kSymbolEntrySize = 32;
 constexpr u64 kRelocationEntrySize = 32;
@@ -52,17 +56,25 @@ i64 read_i64(const u8* at) {
 void write_u32(u8* at, u32 value) { std::memcpy(at, &value, sizeof(value)); }
 void write_u64(u8* at, u64 value) { std::memcpy(at, &value, sizeof(value)); }
 
-[[nodiscard]] bool is_got_relocation(u32 type) {
-    return type == kRelocationGotPcRel || type == kRelocationGotPcRelX || type == kRelocationRexGotPcRelX;
+/// "jmp qword ptr [rip + 2]" followed by the address: a call that is out of reach points here, and
+/// this points anywhere. It is what a linker's PLT entry is, and it is needed because the engine a
+/// table calls lives wherever the program that loaded it put it.
+void write_trampoline(u8* stub, u64 target) {
+    const u8 code[6] = {0xFF, 0x25, 0x02, 0x00, 0x00, 0x00};
+    std::memcpy(stub, code, sizeof(code));
+    std::memcpy(stub + 8, &target, sizeof(target));
 }
 
-[[nodiscard]] std::string join(const std::vector<std::string>& parts, std::string_view separator) {
-    std::string text;
-    for (const std::string& part : parts) {
-        if (!text.empty()) text += separator;
-        text += part;
-    }
-    return text;
+[[nodiscard]] u64 page_size() {
+#if !defined(_WIN32)
+    const long size = sysconf(_SC_PAGESIZE);
+    if (size > 0) return static_cast<u64>(size);
+#endif
+    return kDefaultPageSize;
+}
+
+[[nodiscard]] bool is_got_relocation(u32 type) {
+    return type == kRelocationGotPcRel || type == kRelocationGotPcRelX || type == kRelocationRexGotPcRelX;
 }
 
 } // namespace
@@ -170,8 +182,14 @@ std::vector<u8> CodeTable::serialize() const {
     }
 
     std::vector<u8> meta;
+    std::string requires_text;
+    for (const CodeRequirement& requirement : requirements) {
+        if (!requires_text.empty()) requires_text += ",";
+        requires_text += requirement.id;
+        if (!requirement.version.empty()) requires_text += "@" + requirement.version;
+    }
     const std::string meta_text = std::format("id={}\nname={}\nversion={}\nrequires={}\n", id, name, version,
-                                              join(requirements, ","));
+                                              requires_text);
     append_bytes(meta, meta_text.data(), meta_text.size());
 
     const u64 strings_offset = kHeaderSize;
@@ -340,11 +358,18 @@ std::optional<CodeTable> CodeTable::parse(ConstSpan<const u8> bytes, std::string
             else if (key == "name") table.name = value;
             else if (key == "version") table.version = value;
             else if (key == "requires") {
+                // "id" or "id@version", separated by commas.
                 usize start = 0;
                 while (start <= value.size() && !value.empty()) {
                     const usize comma = value.find(',', start);
                     const std::string part = value.substr(start, comma == std::string::npos ? comma : comma - start);
-                    if (!part.empty()) table.requirements.push_back(part);
+                    if (!part.empty()) {
+                        const usize at = part.find('@');
+                        CodeRequirement requirement;
+                        requirement.id = part.substr(0, at);
+                        if (at != std::string::npos) requirement.version = part.substr(at + 1);
+                        if (!requirement.id.empty()) table.requirements.push_back(std::move(requirement));
+                    }
                     if (comma == std::string::npos) break;
                     start = comma + 1;
                 }
@@ -398,7 +423,15 @@ std::string CodeTable::describe() const {
     std::string text = std::format("code table '{}'{}: {} section(s), {} symbol(s), {} relocation(s)\n", id,
                                    version.empty() ? "" : std::format(" version {}", version), sections.size(),
                                    symbols.size(), relocations.size());
-    if (!requirements.empty()) text += std::format("  requires: {}\n", join(requirements, ", "));
+    if (!requirements.empty()) {
+        std::string list;
+        for (const CodeRequirement& requirement : requirements) {
+            if (!list.empty()) list += ", ";
+            list += requirement.id;
+            if (!requirement.version.empty()) list += "@" + requirement.version;
+        }
+        text += std::format("  requires: {}\n", list);
+    }
     for (const CodeTableSection& section : sections) {
         text += std::format("  section {:<24} {:>8} bytes  align {:<4} {}{}\n", section.name, section.data.size(),
                             section.align, (section.flags & kSectionAlloc) != 0 ? "alloc " : "",
@@ -426,6 +459,45 @@ std::string CodeTable::describe() const {
 
 CodeImage::~CodeImage() { release(); }
 
+void CodeImage::declare_host(std::string id, std::string version) {
+    host_id_ = std::move(id);
+    host_version_ = std::move(version);
+}
+
+bool CodeImage::requirements_met(const CodeTable& table, std::string* error) const {
+    for (const CodeRequirement& requirement : table.requirements) {
+        std::string version;
+        bool found = false;
+        if (!host_id_.empty() && requirement.id == host_id_) {
+            found = true;
+            version = host_version_;
+        } else {
+            for (const Module& module : modules_) {
+                if (&module.table == &table) continue;   // a module does not provide for itself
+                if (module.table.id != requirement.id) continue;
+                found = true;
+                version = module.table.version;
+                break;
+            }
+        }
+        if (!found) {
+            if (error != nullptr) {
+                *error = std::format("requires '{}', which is not loaded", requirement.id);
+            }
+            return false;
+        }
+        if (!requirement.version.empty() && requirement.version != version) {
+            if (error != nullptr) {
+                *error = std::format("was built for '{}' version {}, and {} is here: rebuild it against this one",
+                                     requirement.id, requirement.version,
+                                     version.empty() ? "an unversioned build" : version.c_str());
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 void CodeImage::add(CodeTable table) {
     if (loaded_) {
         report_.errors.push_back("a code table was added after the image was loaded: the relocations "
@@ -440,8 +512,8 @@ void CodeImage::add(CodeTable table) {
 void CodeImage::release() {
 #if !defined(_WIN32)
     for (Module& module : modules_) {
-        if (module.text != nullptr) munmap(module.text, module.text_size);
-        if (module.data != nullptr) munmap(module.data, module.data_size);
+        if (module.base != nullptr) munmap(module.base, module.region_size);
+        module.base = nullptr;
         module.text = nullptr;
         module.data = nullptr;
     }
@@ -454,8 +526,9 @@ bool CodeImage::place(Module& module) {
     report_.errors.push_back("the code table runtime places machine code for ELF x86-64 only");
     return false;
 #else
-    // Two regions per module: what the processor executes, and what it only reads or writes. They are
-    // kept apart so the executable one can be made read only once every relocation is in.
+    // One region, code first and data a page later: a call and a load from the global offset table are
+    // both 32 bit displacements, so what belongs together must not end up gigabytes apart.
+    const u64 page = page_size();
     u64 text_size = 0;
     u64 data_size = 0;
     for (const CodeTableSection& section : module.table.sections) {
@@ -467,27 +540,34 @@ bool CodeImage::place(Module& module) {
         }
     }
     module.got_count = 0;
+    module.trampoline_count = 0;
     for (const CodeTableRelocation& relocation : module.table.relocations) {
         if (is_got_relocation(relocation.type)) ++module.got_count;
+        // Every call gets room for a stub, because any of them may turn out to be out of reach.
+        if (relocation.type == kRelocationPlt32 || relocation.type == kRelocationPc32) ++module.trampoline_count;
     }
+    const u64 stubs_at = align_up(text_size, 16);
+    const u64 text_total = stubs_at + module.trampoline_count * kTrampolineSize;
+    const u64 data_start = align_up(text_total, page);
     data_size = align_up(data_size, 8) + module.got_count * 8;
+    const u64 total = data_start + data_size;
 
-    const auto allocate = [&](u64 size) -> u8* {
-        if (size == 0) return nullptr;
-        void* memory = mmap(nullptr, static_cast<usize>(size), PROT_READ | PROT_WRITE,
+    if (total != 0) {
+        void* memory = mmap(nullptr, static_cast<usize>(total), PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        return memory == MAP_FAILED ? nullptr : static_cast<u8*>(memory);
-    };
-    module.text_size = static_cast<usize>(text_size);
-    module.data_size = static_cast<usize>(data_size);
-    module.text = allocate(text_size);
-    module.data = allocate(data_size);
-    if ((text_size != 0 && module.text == nullptr) || (data_size != 0 && module.data == nullptr)) {
-        report_.errors.push_back(std::format("module '{}': {} bytes of code and {} bytes of data could not "
-                                             "be placed",
-                                             module.table.id, text_size, data_size));
-        return false;
+        if (memory == MAP_FAILED) {
+            report_.errors.push_back(
+                std::format("module '{}': {} bytes could not be placed", module.table.id, total));
+            return false;
+        }
+        module.base = static_cast<u8*>(memory);
     }
+    module.region_size = static_cast<usize>(total);
+    module.text = module.base;
+    module.text_size = static_cast<usize>(text_total);
+    module.trampolines = module.base != nullptr ? module.base + stubs_at : nullptr;
+    module.data = module.base != nullptr ? module.base + data_start : nullptr;
+    module.data_size = static_cast<usize>(data_size);
 
     module.section_address.assign(module.table.sections.size(), nullptr);
     u64 text_at = 0;
@@ -638,9 +718,24 @@ void CodeImage::relocate(Module& module) {
             case kRelocationPc32:
             case kRelocationPlt32: {
                 if (!room(4)) return fail(std::format("a relocation in '{}' runs past the section", section.name));
-                const i64 value = static_cast<i64>(target) + relocation.addend - static_cast<i64>(where);
+                i64 value = static_cast<i64>(target) + relocation.addend - static_cast<i64>(where);
                 if (value < std::numeric_limits<i32>::min() || value > std::numeric_limits<i32>::max()) {
-                    return fail(std::format("'{}' is more than 2 GiB away from the call that wants it", name));
+                    // Out of reach: a stub beside the call jumps the rest of the way. What a table calls
+                    // into is wherever the program that loaded it put it, and that can be more than the
+                    // 2 GiB a call can name.
+                    if (module.trampolines == nullptr || module.trampoline_used >= module.trampoline_count) {
+                        return fail(std::format("'{}' is more than 2 GiB away and the module has no room left "
+                                                "for a stub to reach it",
+                                                name));
+                    }
+                    u8* stub = module.trampolines + module.trampoline_used * kTrampolineSize;
+                    ++module.trampoline_used;
+                    write_trampoline(stub, target);
+                    value = static_cast<i64>(reinterpret_cast<u64>(stub)) + relocation.addend -
+                            static_cast<i64>(where);
+                    if (value < std::numeric_limits<i32>::min() || value > std::numeric_limits<i32>::max()) {
+                        return fail(std::format("a stub for '{}' is out of reach of the call that wants it", name));
+                    }
                 }
                 write_u32(at, static_cast<u32>(static_cast<i32>(value)));
                 break;
@@ -718,6 +813,14 @@ const CodeImageReport& CodeImage::load() {
         report_.modules.push_back(std::move(info));
         report_.symbols += module.table.symbols.size();
         report_.relocations += module.table.relocations.size();
+        // What it needs comes first: a module built for another engine is refused before anything of
+        // it is placed, and never half merged.
+        std::string unmet;
+        if (!requirements_met(module.table, &unmet)) {
+            module.failed = true;
+            report_.errors.push_back(std::format("module '{}': {}", module.table.id, unmet));
+            continue;
+        }
         if (!place(module)) module.failed = true;
     }
     resolve_symbols();
@@ -725,14 +828,18 @@ const CodeImageReport& CodeImage::load() {
         if (!module.failed) relocate(module);
     }
 #if !defined(_WIN32)
-    // Code that can still be written after it was filled in is a hole nobody needs.
+    // Code that can still be written after it was filled in is a hole nobody needs. The data half of
+    // the region starts on a page of its own, so it stays writable while the code does not.
     for (Module& module : modules_) {
-        if (module.text != nullptr && module.text_size != 0) {
-            mprotect(module.text, module.text_size, PROT_READ | PROT_EXEC);
+        if (module.base != nullptr && module.text_size != 0) {
+            mprotect(module.base, module.text_size, PROT_READ | PROT_EXEC);
         }
     }
 #endif
     prune_failed();
+    for (usize index = 0; index < report_.modules.size() && index < modules_.size(); ++index) {
+        report_.modules[index].ok = !modules_[index].failed;
+    }
     run_initialisers();
     return report_;
 }

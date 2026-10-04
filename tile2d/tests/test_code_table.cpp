@@ -126,7 +126,7 @@ T2D_TEST(a_table_is_the_objects_packed_and_reads_back_the_same) {
         T2D_CHECK((section.flags & kSectionAlloc) != 0);
     }
     table->version = "1.0";
-    table->requirements = {"engine", "art"};
+    table->requirements = {CodeRequirement{"engine", "1.0"}, CodeRequirement{"art", ""}};
 
     const std::vector<u8> bytes = table->serialize();
     std::optional<CodeTable> again = CodeTable::parse(ConstSpan<const u8>(bytes.data(), bytes.size()), &error);
@@ -134,7 +134,10 @@ T2D_TEST(a_table_is_the_objects_packed_and_reads_back_the_same) {
     T2D_CHECK_EQ(again->id, std::string("vanilla"));
     T2D_CHECK_EQ(again->version, std::string("1.0"));
     T2D_CHECK_EQ(again->requirements.size(), 2u);
-    T2D_CHECK_EQ(again->requirements[0], std::string("engine"));
+    T2D_CHECK_EQ(again->requirements[0].id, std::string("engine"));
+    T2D_CHECK_EQ(again->requirements[0].version, std::string("1.0"));
+    T2D_CHECK_EQ(again->requirements[1].id, std::string("art"));
+    T2D_CHECK_EQ(again->requirements[1].version, std::string(""));
     T2D_CHECK_EQ(again->sections.size(), table->sections.size());
     T2D_CHECK_EQ(again->symbols.size(), table->symbols.size());
     T2D_CHECK_EQ(again->relocations.size(), table->relocations.size());
@@ -262,11 +265,11 @@ T2D_TEST(a_symbol_nobody_defines_is_reported_and_the_module_is_refused) {
 }
 
 T2D_TEST(the_toolchain_packs_sources_into_a_table) {
-    const std::filesystem::path output = std::filesystem::path(T2D_TEST_TABLE_DIR) / "toolchain.t2dtab";
+    const std::filesystem::path output = std::filesystem::path(T2D_TEST_TABLE_DIR) / "toolchain.codetab";
     // The toolchain drives the real compiler, so this is the whole path a mod author walks:
     // source -> compiler -> object -> table -> merged and called.
     const std::string command = std::format("\"{}\" build \"{}\" \"{}\" -o \"{}\" --id toolchain "
-                                            "--compiler \"{}\"",
+                                            "--version 1.0 --requires engine@0.1 --compiler \"{}\"",
                                             T2D_TEST_TOOLCHAIN, source_of("base"), source_of("caller"),
                                             output.string(), T2D_TEST_COMPILER);
     T2D_CHECK_EQ(std::system(command.c_str()), 0);
@@ -275,9 +278,17 @@ T2D_TEST(the_toolchain_packs_sources_into_a_table) {
     std::optional<CodeTable> table = CodeTable::load(output.string(), &error);
     T2D_REQUIRE(table.has_value());
     T2D_CHECK_EQ(table->id, std::string("toolchain"));
+    T2D_CHECK_EQ(table->version, std::string("1.0"));
+    // "id@version" went through the command line, the file and the reader: what the load checks is
+    // what the author asked for.
+    T2D_REQUIRE(table->requirements.size() == 1u);
+    T2D_CHECK_EQ(table->requirements[0].id, std::string("engine"));
+    T2D_CHECK_EQ(table->requirements[0].version, std::string("0.1"));
     T2D_CHECK_GT(table->overridable_symbols().size(), 0u);
 
     CodeImage image;
+    // The table asked for "engine@0.1", so the program loading it says it is that.
+    image.declare_host("engine", "0.1");
     image.add(std::move(*table));
     const CodeImageReport& report = image.load();
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
@@ -347,6 +358,72 @@ T2D_TEST(a_mod_replaces_a_virtual_method_and_the_vtable_follows_it) {
     T2D_REQUIRE(output != nullptr);
     // 9 * 10 + 7: the call the game makes through the vtable went to the mod, and so did the plain one.
     T2D_CHECK_EQ(output(), 97);
+}
+
+T2D_TEST(a_module_built_for_another_engine_version_is_refused) {
+    std::string error;
+    std::optional<CodeTable> vanilla = pack({object_of("base"), object_of("caller")}, "mine", &error);
+    T2D_REQUIRE(vanilla.has_value());
+    vanilla->version = "1.0";
+
+    // A mod that was built for this engine, and one that was built for the next one.
+    std::optional<CodeTable> matching = pack({object_of("mod")}, "matching_mod", &error);
+    std::optional<CodeTable> stale = pack({object_of("mod")}, "stale_mod", &error);
+    T2D_REQUIRE(matching.has_value());
+    T2D_REQUIRE(stale.has_value());
+    matching->version = "1.0";
+    matching->requirements = {CodeRequirement{"mine", "1.0"}};
+    stale->requirements = {CodeRequirement{"mine", "2.0"}};
+
+    CodeImage image;
+    image.declare_host("mine", "1.0");
+    image.add(*vanilla);
+    image.add(std::move(*matching));
+    image.add(std::move(*stale));
+    const CodeImageReport& report = image.load();
+
+    // Three modules were looked at, and the one that asked for a version this engine is not is refused
+    // with a message naming both versions - it is not merged and its symbols are not in the table.
+    T2D_REQUIRE(report.modules.size() == 3u);
+    T2D_CHECK(report.modules[0].ok);
+    T2D_CHECK(report.modules[1].ok);
+    T2D_CHECK_FALSE(report.modules[2].ok);
+    T2D_CHECK_FALSE(report.clean());
+    bool named_both = false;
+    for (const std::string& message : report.errors) {
+        if (message.find("stale_mod") != std::string::npos && message.find("2.0") != std::string::npos &&
+            message.find("1.0") != std::string::npos) {
+            named_both = true;
+        }
+    }
+    T2D_CHECK(named_both);
+    // The matching mod was merged, so the engine's own call goes to it; the stale one changed nothing.
+    const auto use_base = image.function<int()>("use_base");
+    T2D_REQUIRE(use_base != nullptr);
+    T2D_CHECK_EQ(use_base(), 101);
+    T2D_CHECK_EQ(report.overrides.size(), 1u);
+    T2D_CHECK_EQ(report.overrides[0].from, std::string("matching_mod"));
+}
+
+T2D_TEST(a_requirement_nothing_provides_is_refused) {
+    std::string error;
+    std::optional<CodeTable> mod = pack({object_of("mod")}, "lonely_mod", &error);
+    T2D_REQUIRE(mod.has_value());
+    // An id on its own only asks that somebody provides it; nobody does here.
+    mod->requirements = {CodeRequirement{"some_engine", ""}};
+
+    CodeImage image;
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_FALSE(report.clean());
+    T2D_REQUIRE(report.modules.size() == 1u);
+    T2D_CHECK_FALSE(report.modules[0].ok);
+    T2D_CHECK(image.find("base_value") == nullptr);
+    bool said_so = false;
+    for (const std::string& message : report.errors) {
+        if (message.find("some_engine") != std::string::npos) said_so = true;
+    }
+    T2D_CHECK(said_so);
 }
 
 T2D_TEST_MAIN
