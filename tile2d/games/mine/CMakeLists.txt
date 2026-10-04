@@ -144,6 +144,11 @@ add_custom_command(TARGET mine_game_table POST_BUILD
 
 # A release: everything a run needs, assembled in one directory and then zipped. Nothing here is
 # optional - a package without the table, the surface or the content is a package that does not start.
+# Debug information belongs to the build tree, where somebody is actually debugging: a package that
+# carries nine megabytes of it is a package that is nine megabytes too large for everyone else. The
+# switch is here for the one case that wants it - handing somebody a binary to debug.
+option(MINE_PACKAGE_DEBUG_SYMBOLS "Keep debug information in the package" OFF)
+
 set(MINE_PACKAGE_NAME "mine-${PROJECT_VERSION}")
 set(MINE_PACKAGE_ROOT "${CMAKE_BINARY_DIR}/package")
 set(MINE_PACKAGE_DIR "${MINE_PACKAGE_ROOT}/${MINE_PACKAGE_NAME}")
@@ -151,6 +156,14 @@ set(MINE_PACKAGE_ZIP "${CMAKE_BINARY_DIR}/${MINE_PACKAGE_NAME}-${CMAKE_BUILD_TYP
 # The working directory of a custom command has to exist before the command runs, and the commands
 # below are what put the package together: the root is made at configure time, the rest at build time.
 file(MAKE_DIRECTORY "${MINE_PACKAGE_ROOT}")
+set(MINE_PACKAGE_STRIP "")
+if(NOT MINE_PACKAGE_DEBUG_SYMBOLS)
+    # --strip-all drops the symbol table and the debug sections; the *dynamic* symbols stay, which is
+    # what the launcher exports and the game's table resolves the engine through. Stripping a launcher
+    # whose symbols the game needs is exactly the mistake this comment exists to prevent.
+    set(MINE_PACKAGE_STRIP COMMAND ${CMAKE_STRIP} --strip-all "${MINE_PACKAGE_DIR}/mine_game")
+endif()
+
 add_custom_target(mine_package
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${MINE_PACKAGE_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${MINE_PACKAGE_DIR}"
@@ -163,6 +176,7 @@ add_custom_target(mine_package
             "${CMAKE_CURRENT_BINARY_DIR}/shaders" "${MINE_PACKAGE_DIR}/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/packs" "${MINE_PACKAGE_DIR}/packs"
+    ${MINE_PACKAGE_STRIP}
     COMMAND ${CMAKE_COMMAND} -E remove "${MINE_PACKAGE_ZIP}"
     COMMAND ${CMAKE_COMMAND} -E tar cf "${MINE_PACKAGE_ZIP}" --format=zip -- "${MINE_PACKAGE_NAME}"
     WORKING_DIRECTORY "${MINE_PACKAGE_ROOT}"
