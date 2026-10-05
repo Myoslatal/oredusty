@@ -135,6 +135,64 @@ struct ApiSurface {
     }
 };
 
+/// What a module was compiled as, so that "may these two pieces of C++ share one address space?" has
+/// an answer that is measured rather than assumed.
+///
+/// It is deliberately not a compiler name or a list of flags. Those are means; what decides the
+/// question is the end - the sizes and alignments of the types two sides share, the C++ library's own
+/// ABI macros, and the headers the code was compiled against. Measured: -O0 and -O3 -DNDEBUG agree on
+/// every one of those, so they are one program and are merged fully. Two std::string ABIs do not, and
+/// no loader can make them: the same name would have to mean two layouts at once (docs/ABI.md).
+struct CodeAbi {
+    /// The fingerprint over everything that must agree. Empty: the table does not say what it was
+    /// built as, and the load says so out loud instead of guessing.
+    std::string id;
+    /// What must agree, by name: "_GLIBCXX_USE_CXX11_ABI" = "1", "sizeof(std::string)" = "32".
+    std::vector<std::pair<std::string, std::string>> required;
+    /// What may differ, and is reported when it does: the optimisation level, NDEBUG, RTTI, exceptions,
+    /// the defines the build passed. None of them changes a layout, so none of them is a reason to
+    /// refuse - and saying which ones differ is how "it was built differently" stops being a mystery.
+    std::vector<std::pair<std::string, std::string>> allowed;
+    /// Every header the module was compiled against, path -> content hash. Compared path by path: a
+    /// header only one side included says nothing about the other.
+    std::vector<std::pair<std::string, std::string>> headers;
+    /// What the code needs of the machine: "avx2", "sse4.2". Checked against the machine it is loaded
+    /// on, not against the other module: code built for a narrower machine runs everywhere.
+    std::vector<std::string> cpu;
+
+    [[nodiscard]] bool recorded() const { return !id.empty(); }
+
+    /// The lines a table carries in its metadata - and the same lines an engine writes its own record
+    /// as ("abi=<id>", "abi.require.<name>=<value>", ...). One format, so both are read the same way.
+    [[nodiscard]] std::string text() const;
+    /// Reads the record out of the lines a table carries - or out of a file written by
+    /// "codetab abi --record". Nothing here can fail: an unknown key is not this record's business.
+    [[nodiscard]] static CodeAbi parse(std::string_view text);
+    [[nodiscard]] static std::optional<CodeAbi> load(const std::string& path, std::string* error = nullptr);
+};
+
+/// What a load decided about one module's ABI.
+enum class AbiVerdict : u8 {
+    Match,       ///< the same fingerprint: one program, merged fully
+    Unrecorded,  ///< one side does not say what it was built as: loaded, and said out loud
+    Refuse,      ///< different fingerprints: what the module means cannot be what the program means
+};
+
+/// The rule for two records, and the whole of it:
+///
+///   * neither side recorded anything -> Unrecorded: the module is loaded and the warning names it;
+///   * the fingerprints agree -> Match, and the facts that are *allowed* to differ are reported;
+///   * they differ -> Refuse, with \p differences saying which fact, and which header, differs.
+///
+/// There is no third answer, and in particular no "load it with fewer rights": a module whose types do
+/// not match the program's cannot call it correctly, and a half-loaded module that silently could not
+/// would be a trap rather than a limitation (docs/ABI.md).
+[[nodiscard]] AbiVerdict abi_verdict(const CodeAbi& module, const CodeAbi& reference,
+                                     std::vector<std::string>* differences = nullptr);
+
+/// What the machine this program runs on has, by the names CodeAbi::cpu uses ("avx2", "sse4.2", ...).
+[[nodiscard]] std::vector<std::string> machine_cpu_features();
+
 /// What a module says it needs before it may be merged: another module's id, and optionally the exact
 /// version of it.
 ///
@@ -156,6 +214,9 @@ struct CodeTable {
     /// What this module needs to be merged with, by id and optionally by version. ("requires" is a
     /// keyword in C++20, so the member carries the plain word and the file carries the key.)
     std::vector<CodeRequirement> requirements;
+    /// What this module was compiled as. A module built by the toolchain carries one; a table from
+    /// somewhere else may not, and then the load says so rather than assuming (docs/ABI.md).
+    CodeAbi abi;
 
     std::vector<CodeTableSection> sections;
     std::vector<CodeTableSymbol> symbols;
@@ -188,8 +249,14 @@ struct CodeModuleInfo {
     usize sections = 0;
     usize symbols = 0;
     usize relocations = 0;
+    /// The ABI this module was built as, empty when it does not say.
+    std::string abi;
+    /// Whether it was checked against what it is loaded into and agreed. False also when there was
+    /// nothing to check it against - the report says which of the two it was.
+    bool abi_match = false;
     /// False: the module was refused - a requirement nothing provides, a version that does not match,
-    /// or a relocation that could not be filled in. What it defined is not in the symbol table.
+    /// a different ABI, or a relocation that could not be filled in. What it defined is not in the
+    /// symbol table.
     bool ok = true;
     /// What the module asks the engine for: the symbols nothing in the merged tables defines, so they
     /// were resolved from the program the tables were loaded by. This is what a surface check reads.
@@ -233,6 +300,12 @@ public:
     /// module can require it ("this mod was built for mine 1.0"). Without it, a requirement naming the
     /// host is a requirement nothing provides, and the module is refused.
     void declare_host(std::string id, std::string version);
+
+    /// Declares what the program itself was compiled as - the engine's own record, so that a module is
+    /// measured against the code it will actually call rather than against a version string. Without
+    /// it, the first table added is the reference, which is the same answer when the program and its
+    /// first table were built together (they are: games/mine/CMakeLists.txt).
+    void declare_host_abi(CodeAbi abi);
 
     /// Queues a module. Tables are merged in the order they are added: the first definition of a
     /// strong symbol wins, and a later one replaces it and is reported.
@@ -303,6 +376,7 @@ private:
     /// The program the tables are loaded by, as declare_host() was told.
     std::string host_id_;
     std::string host_version_;
+    std::optional<CodeAbi> host_abi_;
     bool loaded_ = false;
 };
 

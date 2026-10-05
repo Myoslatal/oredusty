@@ -8,20 +8,21 @@
 
 ## 0. 结论（先看这段）
 
-1. **今天检查的是名字，不是字节。** `engine.api` 是一张符号名清单（`ApiSurface::parse`，`code_table.h:122-136`），
-   版本规则只管"差多远"（`api_verdict`，`code_table.cpp:176-183`）。名字对得上就放行——而 ABI 不一致恰恰
-   都发生在"名字一样、东西不一样"的地方。
-2. **十二处里有九处今天就能查**，因为数据已经在表里：节字节、符号大小（`st_size`）、重定位、
-   `.gcc_except_table*`、`.note.gnu.property`；一处部分能（H2：两边都带 vtable 时能比大小）；
-   一处完全不能（H4：类型布局与编译开关，表里根本没有这些信息）。后两处要表里多记两样东西——
-   头文件哈希与编译开关——而元数据块本来就是 `key=value`（`code_table.cpp:571-602`），
-   **加键不用动格式版本**，旧运行时忽略不认识的键。
-3. **两条最要紧，都是"加载 0 error，然后崩"**：
-   * 表里的 `try`/`catch` **是死的**（实测 `terminate`，exit 134）；活体在 `games/mine/src/mod_package.cpp:630-634`，
-     触发者是模组自己的 `mod.ecfg`。
-   * **vtable 槽位漂移直接段错误**（实测 SIGSEGV，exit 139）：类里多一个虚函数就够了。
-4. **有一条不是"可能"而是"现在就是这样"**：本体表 Release 用 `-O3 -DNDEBUG` 且**异常开着**，
-   而 `codetab build` 给模组用 `-O2` 且 `-fno-exceptions`。它是上面两条的放大器。
+**两条路线，都已经落地**（§1.5）：**构建时把 ABI 统一**，以及**构建方式不同的表完全共同加载**——
+只要差异不影响类型。没有中间态：指纹不同就拒绝并指名，不做"受限加载"。
+
+1. **构建时统一 ABI：工具链就是 ABI。** `codetab build` 用一套规范开关驱动系统编译器，并**问编译器**这个构建的
+   ABI 是什么（一个生成的探针 TU 打印宏、`sizeof`/`alignof`、CPU 特性），把用到的头文件按内容哈希，
+   把结果写进表的元数据。**本体自己的表也走同一扇门**（`games/mine/CMakeLists.txt` 用 `codetab build`），
+   启动器自己那份记录是 `engine.abi`，和 `engine.api` 一起随可执行文件走。于是"不同 ABI"在实践中不会出现。
+2. **指纹刻意做窄**，只覆盖真正决定布局的东西：C++ 库 ABI 宏、共享类型的大小与对齐、头文件内容、CPU 特性。
+   实测 `-O0` / `-O2` / `-O3 -DNDEBUG` 三种构建**指纹完全相同**，合并后就是一个程序，差异只在日志里说一句。
+   `-D_GLIBCXX_USE_CXX11_ABI=0` 指纹不同：同一批符号名要对应两种布局，没有任何加载器能办到——**拒绝**。
+3. **拒绝时指名到事实**：`_GLIBCXX_USE_CXX11_ABI: 0 here, 1 there`、`sizeof(std::string): 8 here, 32 there`、
+   `header t2d/core/log.h differs`、`it was compiled for 'avx512f' and this machine does not have it`。
+4. **十二处不一致里这一轮修掉三处**：H1（异常：构建期拒绝 + 本体那处活体）、H4 的主体（指纹与头哈希）、
+   以及新发现的 H13（销毁映像会把析构函数要跑的代码解除映射，实测退出时段错误）。其余按 §3 的状态表推进。
+   两条历史结论不变：**表里的 `try`/`catch` 是死的**、**vtable 槽位漂移会段错误**。
 
 ## 1. 今天检查什么，粒度有多粗
 
@@ -35,6 +36,47 @@
 | 机器对不对 | 表头 arch + ELF machine | x86-64 | — |
 
 一句话：**名字级已经做完了，字节级还没开始。** 而字节级要的数据，大部分表里已经有了。
+
+
+## 1.5 两条路线：构建时统一，或完全共同加载（已落地）
+
+**为什么没有"受限运行"这个中间态。** 一个类型与本体不同的模块，调用本体时用的就是错的布局——它不是"权限少一点"，
+而是"算出来的地址是错的"。把它加载成"只能调 C 符号"看着温和，实际是给作者一个能跑但会错的模块，比拒绝更糟。
+所以规则只有两条：**指纹相同 → 完全合并；指纹不同 → 拒绝并指名**。而"指纹相同"的判据被刻意做窄，只覆盖真正
+决定布局的东西，这样"构建方式不同"不会被误伤——这正是"不同 ABI 的表能够共同加载"落地的方式。
+
+| 构建差异 | 判据 | 结果 | 实测 |
+|---|---|---|---|
+| `-O0` / `-O2` / `-O3 -DNDEBUG` | 指纹相同 | **完全合并**，差异写进日志 | 三次构建 id 都是 `f3ca0b9119e3c2cb`；日志 `__OPTIMIZE__: 0 here, 1 there (does not change a layout)` |
+| `-fno-exceptions` / `-fno-rtti` | 指纹相同 | **完全合并**（能力差异，报出来） | `__EXCEPTIONS: 1 here, 0 there` |
+| `-DNDEBUG`、别的 `-D` | 指纹相同 | **完全合并** | `NDEBUG: 1 here, 0 there` |
+| 另一个 `std::string` ABI | 指纹**不同** | **拒绝**，指名事实 | `_GLIBCXX_USE_CXX11_ABI: 0 here, 1 there`、`sizeof(std::string): 8 here, 32 there` |
+| 引擎头文件改了一行 | 指纹相同、**头哈希不同** | **拒绝**，指名文件 | `header greeting.h differs` |
+| 模块要 `avx512f`，机器没有 | **对照本机 CPU** | **拒绝** | `it was compiled for 'avx512f' and this machine does not have it` |
+| 表里没说自己的 ABI | — | 加载，**警告一次** | `module 'mod' does not say what ABI it was built as` |
+
+怎么做到的（`codetab` + `code_table.h` 的 `CodeAbi`）：
+
+* **探针**：工具生成一个 TU，用**与模块相同的** `-std`/`-O`/`-I`/`-D` 编译并运行，逐行打印事实——
+  `_GLIBCXX_USE_CXX11_ABI`、`_GLIBCXX_DEBUG`、`__GXX_ABI_VERSION`、`__cplusplus`、`__SIZEOF_*`、`__CHAR_BIT__`、
+  `__STDCPP_DEFAULT_NEW_ALIGNMENT__`，以及 `sizeof`/`alignof`：`std::string`、`std::string_view`、`std::vector<int>`、
+  `std::map`、`std::unordered_map`、`shared_ptr`、`unique_ptr`、`std::function`、`std::filesystem::path`、
+  `optional`、`variant`。实测 `-D_GLIBCXX_USE_CXX11_ABI=0` 下 `string` 8 字节 / `path` 16 字节，默认 32 / 40。
+* **事实分三类**：必须一致的（布局）、可以不同的（`NDEBUG`、`__EXCEPTIONS`、`__GXX_RTTI`、`__OPTIMIZE__`、
+  `_GLIBCXX_ASSERTIONS`、sanitizer、构建传的 `-D`）、机器特性（`__AVX2__` → `avx2`，**对照本机 CPU**）。
+* **指纹** = 必须一致的事实（排序后）的 FNV-1a 64。头文件按**内容**哈希、按**相对路径**记录：源树与 dev 包的路径不同、
+  内容相同，只有相对路径对得上；系统头文件不记——C++ 库的 ABI 是事实，不是文件。
+* **记录怎么走**：表的元数据块（`key=value`）里加 `abi=` 与 `abi.require.*` / `abi.allow.*` / `abi.header.*` /
+  `abi.cpu`。**加键不动格式版本**，旧运行时忽略不认识的键（`code_table.cpp:571-602`）。
+* **加载**：参考是 `engine.abi`（启动器自己的记录，`CodeImage::declare_host_abi`）；没有它时用第一个带记录的表。
+  指纹不同或共享头文件不同 → 该模块**整体拒绝**（与重定位失败同一条路径：它定义的符号不进符号表）；
+  CPU 特性缺失 → 拒绝；没记录 → 警告后加载（不因为"没说"就拒绝一个可能好好的表）。
+* **构建期也拦一次**：`codetab build|pack` 拒绝带异常机制的表（`.gcc_except_table*`），
+  `--exceptions` 是作者说"我知道"，那时只提示一行。
+
+实测（本机，debug 与 release 两个预设）：`engine.abi` 与 `mine.codetab` 的指纹都是 `f3ca0b9119e3c2cb`，
+演示模组也是；启动日志只有一行 `table: module 'mine': __EXCEPTIONS: 0 here, 1 there (does not change a layout)`，
+随后 `tables: 1 module(s), 21410 symbol(s), 12999 relocation(s), 0 override(s), 0 error(s)`（debug）。
 
 ## 2. 十二处不一致
 
@@ -85,6 +127,11 @@ if (value->type() == t2d::EcfgType::String) {
 exit 134。触发路径完全在模组作者手里：`mod_int` 是公开的模组 ABI（`include/mine/mod_api.h:48`），
 值来自模组自己的 `mod.ecfg`（`mod_package.cpp:602` 的 `mod_value_of`）——**写一个字符串给一个整数键，
 游戏就 abort**。
+
+**这一轮修掉了两端**：本体那处 `std::stoll` 换成 `std::from_chars`（不抛），本体表改由工具链编（`-fno-exceptions`），
+于是 Release 表里 `.gcc_except_table*` **0 节**、`__cxa_begin_catch` / `_Unwind_Resume` **0 条**；
+`codetab build|pack` 也**拒绝**带异常机制的表（`--exceptions` 是作者说"我知道"，那时只提示一行），
+加载期对这样的表同样只提示。真正的展开支持仍是 §3 的 P2-1。
 
 根因：`code_table.cpp:243` 丢掉 `.eh_frame`，而且是**精确名匹配**——`-ffunction-sections` 下编译器产的是
 `.gcc_except_table.<函数>`，于是异常**表**留下来了、**帧描述**没留下。Release 表实测：
@@ -178,18 +225,59 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 `LOCAL`、名字也没有前缀（但名字本身就带 `(anonymous namespace)`，跨模块本来就对不上）。
 结论：今天能用，但这是标准库实现细节在兜底；换标准库、换编译器要重新实测。
 
+### H13 被销毁的映像会解除映射析构函数要跑的代码（已修）
+
+`__dso_handle` 被回答成模块自己的基址，所以模块的静态析构函数是**注册在模块基址上的**（`__cxa_atexit`）。
+`CodeImage` 在栈上被销毁时（嵌入者最自然的写法）直接 `munmap`，而进程退出时 glibc 会跑那些 handler——
+跳进一个已经解除映射的页。
+
+实测：加一个带非平凡析构函数的 fixture（`tests/data/tables/dtor.cpp`）之后，`test_code_table` 在 debug 与 release
+**两个预设里都是 exit 139**，而且所有用例都已经打印过 `0 failure(s)`——崩在退出时。
+
+修法（`code_table.cpp` 的 `CodeImage::release()`）：销毁时先对每个模块 `__cxa_finalize(module.base)`——这正是
+`dlclose` 做的事——**全部跑完再解除映射**（一个模块的析构可能调用另一个模块的代码）。回归测试
+`a_destroyed_image_runs_the_destructors_it_registered` 让 fixture 的析构函数写宿主里的一个 flag，
+销毁映像后断言它已经是 1。启动器仍然故意不销毁映像（退出时由 glibc 正常跑析构），那条路径不变。
+
 ### H10 ~ H12（低）
 
 * **对齐**：数据区从页边界开始（`code_table.cpp:773`），节内 `align_up`（797-812）——
-  `align ≤ 4096` 一定对，`alignas(8192)` 会错位。实测 Release 表 986 节的 align 分布
-  `{1:309, 2:92, 4:15, 8:91, 16:420, 32:33, 64:26}`，没有超过 4096 的。
+  `align ≤ 4096` 一定对，`alignas(8192)` 会错位。实测 Release 表 772 节的 align 分布
+  `{1:174, 2:55, 4:8, 8:88, 16:388, 32:32, 64:27}`，没有超过 4096 的。
 * **`SHN_ABS`**：`object_file.cpp:214-220` 把绝对符号的值丢掉，当"未定义"处理 → 走 `dlsym` → 找不到 →
   **模块被拒**（响亮，不是静默）。留着值更好。
 * **CET**：本机 GCC 不产 `endbr64`（`-fcf-protection` 默认关），但每个对象都带 48 字节
   `.note.gnu.property`，而且它**进了表**（Release 表 17 节，alloc）。宿主开、模组不开时，
   在强制 IBT 的机器上间接调用表内函数会 #CP。今天不是问题，发行版默认一改就是。
 
-## 3. 方案
+## 3. 方案与状态
+
+| 项 | 内容 | 状态 |
+|---|---|---|
+| **P0-1** | 异常：构建期拒绝带异常机制的表；本体那处 `std::stoll` 换成 `std::from_chars`；本体表改由工具链编 | **已落地**（Release 表 0 节 `.gcc_except_table`、0 条 `__cxa_begin_catch`/`_Unwind_Resume`） |
+| **P0-2** | `R_X86_64_32` 范围检查（`code_table.cpp:941-951`） | 未做 |
+| **P0-3** | 模块定义了宿主也导出的符号 → 警告 | 未做 |
+| **P0-4** | `.init_array.NNNNN` 按后缀数字排序 | 未做 |
+| **P0-5** | 同名 vtable 符号 `st_size` 不一致 → 拒绝 | 未做 |
+| **P1-1** | **构建时统一 ABI**：探针 + 头文件哈希 + 表的记录 + 加载期比较（§1.5） | **已落地** |
+| **P1-3** | 编译开关指纹（探针事实 + 构建传的 `-D`） | **已落地** |
+| **P1-2** | 跨表同名定义的字节比较（内联函数"一个进程两种行为"，H3） | 未做 |
+| **P2-1** | 真正支持展开：保留 `.eh_frame` 与 `.gcc_except_table*` + `__register_frame` | 未做（做完 H1 的构建期拒绝可以放宽成警告） |
+| **P2-2** | 类型探针清单（`--abi-type`，把"某个头变了"细化成"某个类型变了"） | 未做（头哈希已覆盖漂移本身） |
+| **P2-3** | vtable 槽位指纹（H2 的完整答案） | 未做 |
+| **P3** | 读 `st_other`、`align > page` 报错、`SHN_ABS` 保留常量、CET 位进指纹 | 未做 |
+| **新增** | H13：销毁映像前先跑模块注册的析构（`__cxa_finalize`） | **已落地** |
+
+验收方式写在每一项里（命令 + 期望输出）。已经落地的那几项，回归测试在
+`tile2d/tests/test_code_table.cpp`：`two_tables_that_differ_only_in_what_may_differ_are_one_program`、
+`a_table_built_for_another_abi_is_refused_and_the_fact_is_named`、
+`a_header_that_differs_is_refused_even_when_the_fingerprint_agrees`、
+`a_table_that_does_not_say_what_it_was_built_as_is_loaded_and_said_out_loud`、
+`the_engines_own_record_is_what_a_module_is_measured_against`、
+`the_toolchain_records_what_a_build_is_and_two_of_them_agree`、
+`a_destroyed_image_runs_the_destructors_it_registered`。
+
+## 3.9 原来的分步计划（留档）
 
 ### P0（半天，几行到几十行；全是"别再静默"）
 
@@ -256,6 +344,7 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 
 ## 4. 不做的事（写在明处）
 
+* **不做"受限加载"**：没有 C-only 模式，也没有"少给点权限先跑起来"。类型不同就是不能调用，拒绝比一个会错的模块诚实。
 * **不按 mangled 名推签名**：返回类型不在里面（实测），推不出来；签名级检查只能靠探针或哈希。
 * **不承诺混用兼容**：指纹只负责**发现**，不负责让 `-fno-rtti` / 别的 `_GLIBCXX` ABI / 别的 `-march`
   变得能用。
@@ -284,5 +373,12 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 | H6 | 表里定义 `sin` | 宿主自己调 `std::sin(0.5)` | 表 42 / 宿主 0.479426 |
 | H7 | 两个对象各一个构造（101 与默认） | 合并后看顺序 | 41（"D,A"） |
 | H9 | 宿主与模组各一份 `typeid(Box)` | 两边打印地址 | 地址不同、`dynamic_cast` 仍成功 |
+| ABI | 同一源码 `--opt -O0` 与 `--opt -O3 --define NDEBUG` 各建一次 | `codetab abi <表>`、两表一起加载 | 同一指纹，两个表都加载 |
+| ABI | `--define _GLIBCXX_USE_CXX11_ABI=0` | 同上 | 指纹不同，第二个表被拒并指名 |
+| ABI | 改一行头文件后用 `--include` 指向改动的那份 | 同上 | `header <名字> differs` |
+| ABI | `--define __AVX512F__=1` | 同上 | `it was compiled for 'avx512f' and this machine does not have it` |
+| ABI | `--no-abi` 建一张表 | 同上 | 加载 + `does not say what ABI it was built as` |
+| H13 | 带非平凡析构的 fixture，栈上 `CodeImage` | 运行测试二进制 | 修复前退出时 SIGSEGV（139）；修复后析构在销毁映像时跑 |
+| H1 | `codetab pack` 一个用 `-fexceptions` 编出来的目标文件 | 看退出码 | 退出 1，并说明为什么（`--exceptions` 则只提示） |
 
 每条修复的验收标准都写在 §3 对应条目里（命令 + 期望输出）。

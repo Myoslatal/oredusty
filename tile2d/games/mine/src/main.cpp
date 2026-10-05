@@ -22,6 +22,7 @@ namespace fs = std::filesystem;
 using t2d::ApiSurface;
 using t2d::ApiVerdict;
 using t2d::ApiVersion;
+using t2d::CodeAbi;
 using t2d::CodeImage;
 using t2d::CodeModuleInfo;
 using t2d::CodeOverride;
@@ -33,6 +34,10 @@ constexpr const char* kEntrySymbol = "mine_game_main";
 constexpr const char* kEngineId = "engine";
 /// The published surface travels with the executable, like the game's own table.
 constexpr const char* kSurfaceName = "engine.api";
+/// What the launcher itself was compiled as. It travels with the executable too, and it is what every
+/// module is measured against: a table whose types are not this program's types is refused, with the
+/// fact that differs named, rather than loaded into a program it cannot call (docs/ABI.md).
+constexpr const char* kAbiName = "engine.abi";
 
 /// The game's own table first, then the ones named on the command line, then the ones beside the
 /// executable: a mod drops its table into "packs" next to its content. Sorted, so the merge order does
@@ -100,6 +105,16 @@ int main(int argc, char** argv) {
     // program that needs to hand memory back.
     CodeImage& image = *new CodeImage();
     image.declare_host(kEngineId, host.text());
+
+    // The engine's own ABI, written by the toolchain at build time. Without it the first table added is
+    // the reference, which is the same answer when the two were built together - and they are, by the
+    // same build, with the same toolchain (games/mine/CMakeLists.txt).
+    std::string abi_error;
+    if (std::optional<CodeAbi> abi = CodeAbi::load((fs::path(directory) / kAbiName).string(), &abi_error)) {
+        image.declare_host_abi(std::move(*abi));
+    } else {
+        T2D_WARN("abi: {} (no record to measure the tables against this run)", abi_error);
+    }
     std::vector<ApiVersion> built_against;
     for (const std::string& path : paths) {
         std::string error;
@@ -121,6 +136,9 @@ int main(int argc, char** argv) {
     const t2d::CodeImageReport& report = image.load();
     for (const std::string& message : report.errors) T2D_ERROR("table: {}", message);
     for (const std::string& name : report.unresolved) T2D_ERROR("table: nothing defines '{}'", name);
+    // What was built differently but is still one program, and which tables do not say what they were
+    // built as: said out loud, because "why is this mod different" should have an answer.
+    for (const std::string& message : report.warnings) T2D_WARN("table: {}", message);
     // Who replaced what is the first question asked of a modded run, so it is said out loud.
     for (const CodeOverride& replaced : report.overrides) {
         T2D_WARN("table: '{}' from '{}' replaced '{}'", replaced.symbol, replaced.from, replaced.replaced);

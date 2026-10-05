@@ -43,7 +43,7 @@ set(T2D_TABLE_FIXTURE_FLAGS
     -fno-stack-protector -fno-exceptions
     -I${T2D_TABLE_FIXTURE_SOURCES})
 set(T2D_TABLE_FIXTURE_OBJECTS "")
-foreach(fixture base caller mod missing machine factory mod_machine twin_small twin_big twin_caller)
+foreach(fixture base caller mod missing machine factory mod_machine twin_small twin_big twin_caller dtor)
     add_custom_command(
         OUTPUT "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${T2D_TABLE_FIXTURE_DIR}"
@@ -64,6 +64,9 @@ target_compile_definitions(test_code_table PRIVATE
     T2D_TEST_TOOLCHAIN="$<TARGET_FILE:codetab>"
     T2D_TEST_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(test_code_table t2d_table_fixtures codetab)
+# One fixture's destructor writes to a flag in this program, which is what a table calling its host
+# looks like: the symbol has to be in the dynamic symbol table for the table to find it.
+set_target_properties(test_code_table PROPERTIES ENABLE_EXPORTS ON)
 
 # The transports: KCP reliability over a lossy link, framing, the session handshake, the map chunk
 # transfer and the shared memory rings. No game rides them yet - that is the point of the split.

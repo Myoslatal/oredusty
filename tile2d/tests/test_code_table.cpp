@@ -344,6 +344,310 @@ T2D_TEST(the_toolchain_packs_sources_into_a_table) {
     T2D_CHECK_EQ(use_base(), 11);
 }
 
+
+// --- what a build was compiled as (docs/ABI.md) ----------------------------------------------------
+//
+// Two tables are one program when the things that decide what a type looks like agree: the C++ library's
+// own ABI macros, the sizes and alignments of the types the two sides share, and the headers each was
+// compiled against. What does *not* decide that - the optimisation level, NDEBUG, RTTI, exceptions - is
+// allowed to differ, and a table that differs only there is merged fully rather than loaded "with fewer
+// rights". There is no third answer: a module whose types are not the program's is refused, with the
+// fact that differs named.
+
+/// The fingerprint a record's facts make, written the way the toolchain writes it: so that what the
+/// tool produces and what the loader compares are the same thing and not two opinions of it.
+[[nodiscard]] std::string fingerprint_of(const std::vector<std::pair<std::string, std::string>>& facts) {
+    unsigned long long hash = 1469598103934665603ull;
+    for (const auto& [name, value] : facts) {
+        for (const char letter : name + "=" + value + "\n") {
+            hash ^= static_cast<unsigned char>(letter);
+            hash *= 1099511628211ull;
+        }
+    }
+    return std::format("{:016x}", hash);
+}
+
+/// A record with those facts, fingerprinted the same way the toolchain fingerprints them.
+[[nodiscard]] CodeAbi record_of(std::vector<std::pair<std::string, std::string>> required,
+                                std::vector<std::pair<std::string, std::string>> allowed = {},
+                                std::vector<std::pair<std::string, std::string>> headers = {}) {
+    CodeAbi abi;
+    abi.id = fingerprint_of(required);
+    abi.required = std::move(required);
+    abi.allowed = std::move(allowed);
+    abi.headers = std::move(headers);
+    return abi;
+}
+
+/// Whether some message says this.
+[[nodiscard]] bool says(const std::vector<std::string>& messages, std::string_view text) {
+    for (const std::string& message : messages) {
+        if (message.find(text) != std::string::npos) return true;
+    }
+    return false;
+}
+
+T2D_TEST(two_tables_that_differ_only_in_what_may_differ_are_one_program) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+    // The same build twice: one at -O3 with NDEBUG, one at -O0 without. Every fact that decides what a
+    // type looks like is the same, so this is one program and the mod's override still lands.
+    game->abi = record_of({{"_GLIBCXX_USE_CXX11_ABI", "1"}, {"sizeof(std::string)", "32"}},
+                          {{"__OPTIMIZE__", "1"}, {"NDEBUG", "1"}});
+    mod->abi = record_of({{"_GLIBCXX_USE_CXX11_ABI", "1"}, {"sizeof(std::string)", "32"}},
+                         {{"__OPTIMIZE__", "0"}, {"NDEBUG", "0"}});
+
+    CodeImage image;
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_REQUIRE(report.modules.size() == 2u);
+    T2D_CHECK(report.modules[0].abi_match);
+    T2D_CHECK(report.modules[1].abi_match);
+    // Both differences are said out loud - "why is this mod different" should have an answer - and
+    // neither of them stops anything.
+    T2D_CHECK_EQ(report.warnings.size(), 2u);
+    T2D_CHECK(says(report.warnings, "__OPTIMIZE__: 0 here, 1 there"));
+    T2D_CHECK(says(report.warnings, "NDEBUG: 0 here, 1 there"));
+    T2D_REQUIRE(report.overrides.size() == 1u);
+    const auto use_base = image.function<int()>("use_base");
+    T2D_REQUIRE(use_base != nullptr);
+    T2D_CHECK_EQ(use_base(), 101);
+}
+
+T2D_TEST(a_table_built_for_another_abi_is_refused_and_the_fact_is_named) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+    // Another std::string: the same names, two layouts. No loader can make that work, so it is not
+    // attempted - and the message says which fact, because a build that has to be fixed should say what.
+    game->abi = record_of({{"_GLIBCXX_USE_CXX11_ABI", "1"}, {"sizeof(std::string)", "32"}});
+    mod->abi = record_of({{"_GLIBCXX_USE_CXX11_ABI", "0"}, {"sizeof(std::string)", "8"}});
+
+    CodeImage image;
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_FALSE(report.clean());
+    T2D_REQUIRE(report.modules.size() == 2u);
+    T2D_CHECK(report.modules[0].ok);
+    T2D_CHECK_FALSE(report.modules[1].ok);
+    T2D_CHECK(says(report.errors, "_GLIBCXX_USE_CXX11_ABI: 0 here, 1 there"));
+    T2D_CHECK(says(report.errors, "sizeof(std::string): 8 here, 32 there"));
+    // A refused module is not merged at all: the game's own call still goes where it went.
+    const auto use_base = image.function<int()>("use_base");
+    T2D_REQUIRE(use_base != nullptr);
+    T2D_CHECK_EQ(use_base(), 11);
+    T2D_CHECK_EQ(image.find_previous("base_value"), nullptr);
+}
+
+T2D_TEST(a_header_that_differs_is_refused_even_when_the_fingerprint_agrees) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    T2D_REQUIRE(game.has_value());
+    // The same compiler, the same macros, the same sizes - and a different declaration of a type the
+    // two share. The fingerprint cannot see that; the header hashes can, and do (docs/ABI.md H4).
+    game->abi = record_of({{"sizeof(std::string)", "32"}}, {}, {{"t2d/core/log.h", "aaaaaaaaaaaaaaaa"}});
+
+    std::optional<CodeTable> other = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(other.has_value());
+    other->abi = record_of({{"sizeof(std::string)", "32"}}, {}, {{"t2d/core/log.h", "bbbbbbbbbbbbbbbb"}});
+
+    CodeImage image;
+    image.add(std::move(*game));
+    image.add(std::move(*other));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK(says(report.errors, "header t2d/core/log.h differs"));
+
+    // A header only one side included says nothing about the other: a mod does not include what the
+    // engine includes, and refusing it for that would refuse every mod there is.
+    std::optional<CodeTable> game2 = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod2 = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game2.has_value());
+    T2D_REQUIRE(mod2.has_value());
+    game2->abi = record_of({{"sizeof(std::string)", "32"}}, {}, {{"t2d/core/log.h", "aaaaaaaaaaaaaaaa"}});
+    mod2->abi = record_of({{"sizeof(std::string)", "32"}}, {},
+                          {{"t2d/core/log.h", "aaaaaaaaaaaaaaaa"}, {"mine/app.h", "cccccccccccccccc"}});
+    CodeImage image2;
+    image2.add(std::move(*game2));
+    image2.add(std::move(*mod2));
+    const CodeImageReport& report2 = image2.load();
+    T2D_CHECK_MSG(report2.clean(), "{}", report2.first_error());
+    T2D_REQUIRE(report2.modules.size() == 2u);
+    T2D_CHECK(report2.modules[1].abi_match);
+}
+
+T2D_TEST(a_table_that_does_not_say_what_it_was_built_as_is_loaded_and_said_out_loud) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+    game->abi = record_of({{"sizeof(std::string)", "32"}});
+    // No record: the load cannot tell, so it says so and trusts the author rather than refusing a table
+    // that was built before records existed - or by hand.
+    CodeImage image;
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK(says(report.warnings, "module 'mod' does not say what ABI it was built as"));
+    const auto use_base = image.function<int()>("use_base");
+    T2D_REQUIRE(use_base != nullptr);
+    T2D_CHECK_EQ(use_base(), 101);
+}
+
+T2D_TEST(the_engines_own_record_is_what_a_module_is_measured_against) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+    // The launcher's own record: the game's table agrees with it, the mod's does not. What a module is
+    // measured against is the code it will call, not the table that happens to be first.
+    game->abi = record_of({{"_GLIBCXX_USE_CXX11_ABI", "1"}});
+    mod->abi = record_of({{"_GLIBCXX_USE_CXX11_ABI", "0"}});
+
+    CodeImage image;
+    image.declare_host("engine", "1.0");
+    image.declare_host_abi(record_of({{"_GLIBCXX_USE_CXX11_ABI", "1"}}));
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_REQUIRE(report.modules.size() == 2u);
+    T2D_CHECK(report.modules[0].ok);
+    T2D_CHECK(report.modules[0].abi_match);
+    T2D_CHECK_FALSE(report.modules[1].ok);
+    T2D_CHECK(says(report.errors, "_GLIBCXX_USE_CXX11_ABI: 0 here, 1 there"));
+}
+
+T2D_TEST(a_module_is_measured_against_the_games_headers_too) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+    // The engine's own record was written without compiling anything, so it carries facts but no
+    // headers. The game's table carries the headers, and a module is measured against both: a mod
+    // compiled against a different copy of an engine header is caught by the table, not by the record.
+    game->abi = record_of({{"sizeof(std::string)", "32"}}, {}, {{"t2d/core/log.h", "aaaaaaaaaaaaaaaa"}});
+    mod->abi = record_of({{"sizeof(std::string)", "32"}}, {}, {{"t2d/core/log.h", "bbbbbbbbbbbbbbbb"}});
+
+    CodeImage image;
+    image.declare_host("engine", "1.0");
+    image.declare_host_abi(record_of({{"sizeof(std::string)", "32"}}));
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_REQUIRE(report.modules.size() == 2u);
+    T2D_CHECK(report.modules[0].ok);
+    T2D_CHECK_FALSE(report.modules[1].ok);
+    T2D_CHECK(says(report.errors, "header t2d/core/log.h differs"));
+    // And a header only the mod includes still says nothing: this is not a check that every module
+    // included the same files.
+    std::optional<CodeTable> game2 = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod2 = pack({object_of("mod")}, "mod", &error);
+    T2D_REQUIRE(game2.has_value());
+    T2D_REQUIRE(mod2.has_value());
+    game2->abi = record_of({{"sizeof(std::string)", "32"}}, {}, {{"t2d/core/log.h", "aaaaaaaaaaaaaaaa"}});
+    mod2->abi = record_of({{"sizeof(std::string)", "32"}}, {},
+                          {{"t2d/core/log.h", "aaaaaaaaaaaaaaaa"}, {"mine/app.h", "dddddddddddddddd"}});
+    CodeImage image2;
+    image2.declare_host("engine", "1.0");
+    image2.declare_host_abi(record_of({{"sizeof(std::string)", "32"}}));
+    image2.add(std::move(*game2));
+    image2.add(std::move(*mod2));
+    const CodeImageReport& report2 = image2.load();
+    T2D_CHECK_MSG(report2.clean(), "{}", report2.first_error());
+    T2D_REQUIRE(report2.modules.size() == 2u);
+    T2D_CHECK(report2.modules[1].abi_match);
+}
+
+T2D_TEST(the_toolchain_records_what_a_build_is_and_two_of_them_agree) {
+    // The whole path a mod author walks, twice: the compiler is asked what the build's ABI is, the
+    // answer travels in the table, and two builds that differ only in what may differ are one program.
+    const std::filesystem::path debug_build = std::filesystem::path(T2D_TEST_TABLE_DIR) / "abi_debug.codetab";
+    const std::filesystem::path release_build = std::filesystem::path(T2D_TEST_TABLE_DIR) / "abi_release.codetab";
+    // Both halves of the class: the machine and the factory that makes one.
+    const std::string common = std::format("\"{}\" build \"{}\" \"{}\" --compiler \"{}\" --include \"{}\"",
+                                           T2D_TEST_TOOLCHAIN, source_of("machine"), source_of("factory"),
+                                           T2D_TEST_COMPILER, T2D_TEST_TABLE_SOURCES);
+    T2D_CHECK_EQ(std::system(std::format("{} -o \"{}\" --id debug_build --opt -O0", common, debug_build.string()).c_str()), 0);
+    T2D_CHECK_EQ(std::system(std::format("{} -o \"{}\" --id release_build --opt -O3 --define NDEBUG", common,
+                                         release_build.string()).c_str()),
+                 0);
+
+    std::string error;
+    std::optional<CodeTable> debug = CodeTable::load(debug_build.string(), &error);
+    std::optional<CodeTable> release = CodeTable::load(release_build.string(), &error);
+    T2D_REQUIRE(debug.has_value());
+    T2D_REQUIRE(release.has_value());
+    T2D_REQUIRE(debug->abi.recorded());
+    T2D_REQUIRE(release->abi.recorded());
+    // The optimisation level and NDEBUG are not part of the ABI: the compiler was asked, and its answer
+    // is the same. What the compiler *did* answer with is in the record, and the fingerprint is over
+    // exactly the facts that must agree - the same formula the loader compares by.
+    T2D_CHECK_EQ(debug->abi.id, release->abi.id);
+    T2D_CHECK_EQ(debug->abi.id, fingerprint_of(debug->abi.required));
+    T2D_CHECK_GT(debug->abi.required.size(), 10u);
+    bool saw_abi_macro = false;
+    for (const auto& [name, value] : debug->abi.required) {
+        if (name == "_GLIBCXX_USE_CXX11_ABI") saw_abi_macro = true;
+    }
+    T2D_CHECK(saw_abi_macro);
+    // The header it included is pinned by content, under a path that does not depend on where the build
+    // tree is: that is what lets a mod built against a package be compared with the engine.
+    bool saw_header = false;
+    for (const auto& [name, hash] : debug->abi.headers) {
+        if (name == "machine.h") saw_header = true;
+    }
+    T2D_CHECK(saw_header);
+
+    // And the load accepts both, in either order: the same record, so the same program.
+    CodeImage image;
+    image.add(std::move(*debug));
+    image.add(std::move(*release));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_REQUIRE(report.modules.size() == 2u);
+    T2D_CHECK(report.modules[0].abi_match);
+    T2D_CHECK(report.modules[1].abi_match);
+}
+
+
+/// A module's static destructors are registered against the address the runtime answered __dso_handle
+/// with, so destroying the image has to run them first - the way dlclose does. The flag this destructor
+/// writes to lives in the test program, not in the table: reading it after the image is gone is only
+/// safe because what it points at was never the image's memory.
+extern "C" {
+int dtor_host_flag = 0;
+}
+
+T2D_TEST(a_destroyed_image_runs_the_destructors_it_registered) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("dtor")}, "dtor", &error);
+    T2D_REQUIRE(table.has_value());
+    dtor_host_flag = 0;
+    {
+        CodeImage image;
+        image.add(std::move(*table));
+        const CodeImageReport& report = image.load();
+        T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+        // The static constructor has run, and the destructor it registered has not.
+        T2D_CHECK_EQ(dtor_host_flag, 0);
+    }
+    // The image is gone: its memory is unmapped, and the destructor ran before that happened rather
+    // than at exit, when it would have been a jump into an unmapped page.
+    T2D_CHECK_EQ(dtor_host_flag, 1);
+}
+
 T2D_TEST(a_mod_replaces_a_virtual_method_and_the_vtable_follows_it) {
     std::string error;
     // The game's own half: the class, the object and the call that goes through the vtable.

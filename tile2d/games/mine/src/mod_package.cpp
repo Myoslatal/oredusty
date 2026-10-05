@@ -6,6 +6,7 @@
 #include <t2d/core/log.h>
 
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
 #include <format>
 #include <map>
@@ -626,12 +627,18 @@ i64 ModHost::api_mod_int(void* self, const char* key, i64 fallback) {
     if (value->type() == t2d::EcfgType::Int || value->type() == t2d::EcfgType::Bool) return value->as_int(fallback);
     if (value->type() == t2d::EcfgType::Float) return static_cast<i64>(value->as_float(static_cast<t2d::f64>(fallback)));
     if (value->type() == t2d::EcfgType::String) {
+        // from_chars rather than stoll, and not for speed: this code travels in a **code table**, and
+        // a table has no frame descriptions, so a throw inside one never finds its handler - it ends
+        // the process instead (docs/ABI.md H1). A conversion that cannot throw is the only kind that
+        // belongs here.
         const std::string text(value->as_string());
-        try {
-            return std::stoll(text);
-        } catch (const std::exception&) {
-            return fallback;
+        i64 number = 0;
+        const char* first = text.data();
+        const char* last = first + text.size();
+        if (const auto parsed = std::from_chars(first, last, number); parsed.ec == std::errc{} && parsed.ptr == last) {
+            return number;
         }
+        return fallback;
     }
     return fallback;
 }

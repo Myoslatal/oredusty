@@ -277,8 +277,15 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
       mine_game
       mine.codetab              # 本体：整个游戏都在里面
       engine.api                # 引擎公开面
+      engine.abi                # 启动器自己是什么 ABI 编的（模组的对照物）
       packs/
         my_mod.codetab          # 放进 packs/ 就会自动合并（按路径排序）
+
+**用 dev 包里的 `codetab` 与头文件编，别的什么都不用管**：工具链会问编译器这次构建的 ABI 是什么，
+把头文件按内容哈希，写进表里；加载时与 `engine.abi` 比，指纹相同就完全合并（`-O0` 编的模组和 `-O3` 编的
+本体就是一个程序，差异只在日志里说一句），不同就拒绝并指名是哪个事实——另一个 `std::string` ABI、
+头文件改了、机器没有这个 CPU 特性。**没有"降级加载"**：类型不同的模块调用本体时算出来的地址就是错的
+（[`ABI.md`](ABI.md) §1.5）。
 
 不想放进 `packs/` 就用启动器自己的开关指名：`./mine_game --table mods/demo_mod/mod.codetab`。
 
@@ -368,8 +375,12 @@ printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0
   覆盖语义，那是后续的设计。
 * **原生模组改不了本体的内部函数**：`dlopen` 进来的库无法改变本体在链接时就绑定好的调用。要改内部函数
   与类，用**代码表**（§3.5、[`TABLES.md`](TABLES.md)）：**整个本体已经在表里**（`mine.codetab`，release
-  986 节 / 3000 符号 / 9828 重定位），`mine_game` 是启动器，模组表在启动时合并，强定义连 vtable 条目一起改道。
-  测试：`test_code_table`（13 用例 / 231 断言）、`test_mine_table`（3 用例 / 17 断言）。加载时按 `requires`
+  772 节 / 2485 符号 / 7600 重定位，由 `codetab build` 编），`mine_game` 是启动器，模组表在启动时合并，
+  强定义连 vtable 条目一起改道。表里还带一份**构建记录**（`abi=`）：`codetab build` 问编译器这个构建的 ABI 是什么，
+  头文件按内容哈希；加载时指纹相同就**完全合并**（`-O0` 的模组与 `-O3` 的本体就是一个程序），
+  不同就**拒绝并指名是哪个事实**（另一个 `std::string` ABI、头文件改动、CPU 缺特性）——没有"降级加载"
+  （[`ABI.md`](ABI.md) §1.5）。所以模组请用 dev 包里的 `codetab` 与头文件编：指纹天然一致。
+  测试：`test_code_table`（21 用例 / 274 断言）、`test_mine_table`（3 用例 / 17 断言）。加载时按 `requires`
   校验版本，并按**公开面**（`engine.api`）判断越界：清单内跨整个 major 放行，清单外同版本静默、相差一个 minor
   警告后仍然加载、再远拒绝，major 不同一律拒绝。
 * **代码表模组有一层 ABI 边界**：名字解析只保证"符号找得到"，不保证类型布局、vtable 形状、内联函数体与编译开关

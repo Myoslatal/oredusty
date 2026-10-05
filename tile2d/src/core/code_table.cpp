@@ -11,6 +11,13 @@
 #  include <dlfcn.h>
 #  include <sys/mman.h>
 #  include <unistd.h>
+
+// The Itanium C++ ABI's "run the handlers this module registered" entry point, and the other half of
+// __dso_handle: a module's static destructors are registered against the address the runtime answered
+// __dso_handle with, and this is how they are run when that module goes away (what dlclose does).
+// Declared here rather than included: it is the ABI's own name, and the header that carries it is not
+// the same everywhere.
+extern "C" void __cxa_finalize(void* dso_handle);
 #endif
 
 namespace t2d {
@@ -171,6 +178,156 @@ std::optional<ApiSurface> ApiSurface::load(const std::string& path, std::string*
     }
     const std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     return parse(text, error);
+}
+
+
+// --- what a module was compiled as ----------------------------------------------------------------
+
+std::string CodeAbi::text() const {
+    std::string out = std::format("abi={}\n", id);
+    for (const auto& [name, value] : required) out += std::format("abi.require.{}={}\n", name, value);
+    for (const auto& [name, value] : allowed) out += std::format("abi.allow.{}={}\n", name, value);
+    for (const auto& [path, hash] : headers) out += std::format("abi.header.{}={}\n", path, hash);
+    if (!cpu.empty()) {
+        std::string list;
+        for (const std::string& feature : cpu) {
+            if (!list.empty()) list += ",";
+            list += feature;
+        }
+        out += std::format("abi.cpu={}\n", list);
+    }
+    return out;
+}
+
+CodeAbi CodeAbi::parse(std::string_view text) {
+    CodeAbi abi;
+    while (!text.empty()) {
+        const std::size_t end = text.find('\n');
+        std::string_view line = text.substr(0, end);
+        text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+        const std::size_t comment = line.find('#');
+        if (comment != std::string_view::npos) line = line.substr(0, comment);
+        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) line.remove_suffix(1);
+        if (line.empty()) continue;
+        const std::size_t equals = line.find('=');
+        if (equals == std::string_view::npos) continue;
+        const std::string_view key = line.substr(0, equals);
+        const std::string value(line.substr(equals + 1));
+        if (key == "abi") abi.id = value;
+        else if (key.starts_with("abi.require.")) abi.required.emplace_back(std::string(key.substr(12)), value);
+        else if (key.starts_with("abi.allow.")) abi.allowed.emplace_back(std::string(key.substr(10)), value);
+        else if (key.starts_with("abi.header.")) abi.headers.emplace_back(std::string(key.substr(11)), value);
+        else if (key == "abi.cpu") {
+            std::size_t start = 0;
+            while (start <= value.size() && !value.empty()) {
+                const std::size_t comma = value.find(',', start);
+                const std::string feature = value.substr(start, comma == std::string::npos ? comma : comma - start);
+                if (!feature.empty()) abi.cpu.push_back(feature);
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+        }
+    }
+    return abi;
+}
+
+std::optional<CodeAbi> CodeAbi::load(const std::string& path, std::string* error) {
+    std::ifstream stream(path);
+    if (!stream) {
+        if (error != nullptr) *error = std::format("'{}' cannot be read", path);
+        return std::nullopt;
+    }
+    const std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    return parse(text);
+}
+
+AbiVerdict abi_verdict(const CodeAbi& module, const CodeAbi& reference, std::vector<std::string>* differences) {
+    const auto note = [differences](std::string text) {
+        if (differences != nullptr) differences->push_back(std::move(text));
+    };
+    if (!module.recorded() || !reference.recorded()) return AbiVerdict::Unrecorded;
+
+    const auto value_of = [](const std::vector<std::pair<std::string, std::string>>& facts,
+                             std::string_view name) -> const std::string* {
+        for (const auto& [key, value] : facts) {
+            if (key == name) return &value;
+        }
+        return nullptr;
+    };
+
+    // The headers are compared whatever the fingerprint says: the fingerprint is over the facts a
+    // compiler answers with, and two builds can agree on every one of those while having been
+    // compiled against different declarations (docs/ABI.md, H4). A path only one side included says
+    // nothing about the other, so only shared paths are compared.
+    bool refused = false;
+    for (const auto& [path, hash] : module.headers) {
+        const std::string* other = value_of(reference.headers, path);
+        if (other != nullptr && *other != hash) {
+            note(std::format("header {} differs", path));
+            refused = true;
+        }
+    }
+    if (module.id != reference.id) {
+        // Which fact, and which header: "the fingerprints differ" is not something an author can act
+        // on, and a build that has to be fixed should say what to fix.
+        refused = true;
+        for (const auto& [name, value] : module.required) {
+            const std::string* other = value_of(reference.required, name);
+            if (other != nullptr && *other != value) {
+                note(std::format("{}: {} here, {} there", name, value, *other));
+            }
+        }
+        if (differences != nullptr && differences->empty()) {
+            note(std::format("the fingerprints differ ({} here, {} there), in facts the two records do "
+                             "not share - build both with the same toolchain",
+                             module.id, reference.id));
+        }
+    }
+    if (refused) return AbiVerdict::Refuse;
+
+    // The same ABI, built differently: -O0 against -O3, NDEBUG against not, and so on. None of it
+    // changes a layout, and saying so is how "it was built differently" stops being a mystery.
+    for (const auto& [name, value] : module.allowed) {
+        const std::string* other = value_of(reference.allowed, name);
+        if (other != nullptr && *other != value) {
+            note(std::format("{}: {} here, {} there (does not change a layout)", name, value, *other));
+        }
+    }
+    return AbiVerdict::Match;
+}
+
+std::vector<std::string> machine_cpu_features() {
+    std::vector<std::string> features;
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+    // The names have to be literals - the builtin is resolved by the compiler, not at run time - so
+    // this is a list of calls rather than a loop over a list of names.
+    __builtin_cpu_init();
+    const auto add = [&features](const char* name, int present) {
+        if (present != 0) features.emplace_back(name);
+    };
+    add("sse4.2", __builtin_cpu_supports("sse4.2"));
+    add("avx", __builtin_cpu_supports("avx"));
+    add("avx2", __builtin_cpu_supports("avx2"));
+    add("fma", __builtin_cpu_supports("fma"));
+    add("bmi", __builtin_cpu_supports("bmi"));
+    add("bmi2", __builtin_cpu_supports("bmi2"));
+    add("popcnt", __builtin_cpu_supports("popcnt"));
+    add("aes", __builtin_cpu_supports("aes"));
+    add("pclmul", __builtin_cpu_supports("pclmul"));
+    add("f16c", __builtin_cpu_supports("f16c"));
+    add("adx", __builtin_cpu_supports("adx"));
+    add("sha", __builtin_cpu_supports("sha"));
+    add("gfni", __builtin_cpu_supports("gfni"));
+    add("avx512f", __builtin_cpu_supports("avx512f"));
+    add("avx512vl", __builtin_cpu_supports("avx512vl"));
+    add("avx512bw", __builtin_cpu_supports("avx512bw"));
+    add("avx512dq", __builtin_cpu_supports("avx512dq"));
+    add("avx512vnni", __builtin_cpu_supports("avx512vnni"));
+    add("avx512bf16", __builtin_cpu_supports("avx512bf16"));
+    add("avxvnni", __builtin_cpu_supports("avxvnni"));
+#endif
+    return features;
 }
 
 ApiVerdict api_verdict(const ApiVersion& built_against, const ApiVersion& host, bool inside_surface) {
@@ -410,8 +567,12 @@ std::vector<u8> CodeTable::serialize() const {
         requires_text += requirement.id;
         if (!requirement.version.empty()) requires_text += "@" + requirement.version;
     }
-    const std::string meta_text = std::format("id={}\nname={}\nversion={}\nrequires={}\n", id, name, version,
-                                              requires_text);
+    std::string meta_text = std::format("id={}\nname={}\nversion={}\nrequires={}\n", id, name, version,
+                                        requires_text);
+    // What the module was built as travels in the same key=value block as what it is called. A reader
+    // that does not know the keys ignores them, so this needs no format version of its own: the
+    // metadata is the table's record of itself (docs/ABI.md).
+    meta_text += abi.text();
     append_bytes(meta, meta_text.data(), meta_text.size());
 
     const u64 strings_offset = kHeaderSize;
@@ -568,7 +729,9 @@ std::optional<CodeTable> CodeTable::parse(ConstSpan<const u8> bytes, std::string
 
     // The metadata, as the lines it was written as. An unknown key is kept out of the table rather
     // than refused: the metadata is what the toolchain said about the module, not part of the code.
-    std::string_view meta(reinterpret_cast<const char*>(bytes.data() + meta_offset), static_cast<usize>(meta_size));
+    const std::string_view meta_all(reinterpret_cast<const char*>(bytes.data() + meta_offset),
+                                    static_cast<usize>(meta_size));
+    std::string_view meta = meta_all;
     while (!meta.empty()) {
         const usize end = meta.find('\n');
         const std::string_view line = meta.substr(0, end);
@@ -600,6 +763,9 @@ std::optional<CodeTable> CodeTable::parse(ConstSpan<const u8> bytes, std::string
         if (end == std::string_view::npos) break;
         meta.remove_prefix(end + 1);
     }
+    // The ABI record is read by its own reader, the same one the engine's record file goes through:
+    // the metadata block *is* that format, so there is nothing to keep in step.
+    table.abi = CodeAbi::parse(meta_all);
     return table;
 }
 
@@ -645,6 +811,11 @@ std::string CodeTable::describe() const {
     std::string text = std::format("code table '{}'{}: {} section(s), {} symbol(s), {} relocation(s)\n", id,
                                    version.empty() ? "" : std::format(" version {}", version), sections.size(),
                                    symbols.size(), relocations.size());
+    text += abi.recorded()
+                ? std::format("  built as: {} ({} fact(s) that must agree, {} that may differ, {} header(s), "
+                              "{} cpu feature(s))\n",
+                              abi.id, abi.required.size(), abi.allowed.size(), abi.headers.size(), abi.cpu.size())
+                : std::string("  built as: not recorded\n");
     if (!requirements.empty()) {
         std::string list;
         for (const CodeRequirement& requirement : requirements) {
@@ -685,6 +856,8 @@ void CodeImage::declare_host(std::string id, std::string version) {
     host_id_ = std::move(id);
     host_version_ = std::move(version);
 }
+
+void CodeImage::declare_host_abi(CodeAbi abi) { host_abi_ = std::move(abi); }
 
 bool CodeImage::requirements_met(const CodeTable& table, std::string* error) const {
     for (const CodeRequirement& requirement : table.requirements) {
@@ -733,6 +906,15 @@ void CodeImage::add(CodeTable table) {
 
 void CodeImage::release() {
 #if !defined(_WIN32)
+    // What a shared library does when it is unloaded, and for the same reason: the C++ runtime
+    // registered this module's static destructors against the address it was told __dso_handle is, and
+    // their code lives in memory that is about to go away. Running them *now* is the only correct
+    // order - a process that runs them later runs them into an unmapped page (measured: SIGSEGV at
+    // exit, docs/ABI.md H13). All of them first, then the unmapping: one module's destructor may call
+    // into another's code.
+    for (Module& module : modules_) {
+        if (module.base != nullptr) __cxa_finalize(module.base);
+    }
     for (Module& module : modules_) {
         if (module.base != nullptr) munmap(module.base, module.region_size);
         module.base = nullptr;
@@ -1036,11 +1218,22 @@ void CodeImage::prune_failed() {
 const CodeImageReport& CodeImage::load() {
     if (loaded_) return report_;
     loaded_ = true;
-    for (Module& module : modules_) {
+    // Whether anybody said what they were built as. Nothing did in a build from before the record
+    // existed, and a load that cannot check should say that once rather than per module.
+    bool any_recorded = host_abi_.has_value();
+    for (const Module& module : modules_) any_recorded = any_recorded || module.table.abi.recorded();
+    if (!any_recorded && !modules_.empty()) {
+        report_.warnings.push_back("no table says what ABI it was built as: this load cannot check that "
+                                   "they agree (docs/ABI.md; codetab records it)");
+    }
+    const std::vector<std::string> machine = machine_cpu_features();
+    for (usize index = 0; index < modules_.size(); ++index) {
+        Module& module = modules_[index];
         CodeModuleInfo info;
         info.id = module.table.id;
         info.name = module.table.name;
         info.version = module.table.version;
+        info.abi = module.table.abi.id;
         info.sections = module.table.sections.size();
         info.symbols = module.table.symbols.size();
         info.relocations = module.table.relocations.size();
@@ -1054,6 +1247,71 @@ const CodeImageReport& CodeImage::load() {
             module.failed = true;
             report_.errors.push_back(std::format("module '{}': {}", module.table.id, unmet));
             continue;
+        }
+        // A module that carries exception machinery can throw, and a table has no frame descriptions:
+        // the throw ends the process rather than finding its handler. Said out loud - the module may
+        // never throw, and refusing it for being able to would be refusing working code.
+        for (const CodeTableSection& section : module.table.sections) {
+            if (!section.name.starts_with(".gcc_except_table")) continue;
+            report_.warnings.push_back(std::format(
+                "module '{}' carries '{}': a throw inside it would end the process rather than find its "
+                "handler (docs/ABI.md H1)", module.table.id, section.name));
+            break;
+        }
+        // What it was built as comes next, and it is not a warning: a module whose types are not this
+        // program's types cannot call it correctly, and a module loaded with "fewer rights" instead
+        // would be a trap rather than a limitation (docs/ABI.md).
+        for (const std::string& feature : module.table.abi.cpu) {
+            if (std::find(machine.begin(), machine.end(), feature) == machine.end()) {
+                module.failed = true;
+                report_.errors.push_back(std::format(
+                    "module '{}': it was compiled for '{}' and this machine does not have it",
+                    module.table.id, feature));
+                break;
+            }
+        }
+        if (module.failed) continue;
+        {
+            // What a module is measured against is everything it will be loaded into: the engine's own
+            // record (the code it calls) and the first table's (the game's headers, which the engine's
+            // own record does not carry - it was written without compiling anything).
+            std::vector<const CodeAbi*> references;
+            if (host_abi_.has_value()) references.push_back(&*host_abi_);
+            if (index > 0 && modules_[0].table.abi.recorded()) references.push_back(&modules_[0].table.abi);
+            std::vector<std::string> differences;
+            bool refused = false;
+            for (const CodeAbi* reference : references) {
+                std::vector<std::string> found;
+                if (abi_verdict(module.table.abi, *reference, &found) == AbiVerdict::Refuse) refused = true;
+                for (std::string& difference : found) differences.push_back(std::move(difference));
+            }
+            if (!module.table.abi.recorded()) {
+                if (any_recorded) {
+                    report_.warnings.push_back(std::format("module '{}' does not say what ABI it was built as",
+                                                           module.table.id));
+                }
+            } else if (references.empty()) {
+                // The first module that carries a record is what every later one is measured against;
+                // there is nothing before it to measure it against, and saying so would be noise.
+                report_.modules[index].abi_match = true;
+            } else if (refused) {
+                module.failed = true;
+                report_.errors.push_back(std::format(
+                    "module '{}': it was built as a different ABI than the program loading it, so what it "
+                    "calls would mean something else - rebuild it with this engine's toolchain (docs/ABI.md)",
+                    module.table.id));
+                for (const std::string& difference : differences) {
+                    report_.errors.push_back(std::format("  {}", difference));
+                }
+                continue;
+            } else {
+                report_.modules[index].abi_match = true;
+                // The same ABI, built differently: said out loud, because "why is this mod different"
+                // should have an answer that is not a mystery.
+                for (const std::string& difference : differences) {
+                    report_.warnings.push_back(std::format("module '{}': {}", module.table.id, difference));
+                }
+            }
         }
         if (!place(module)) module.failed = true;
     }

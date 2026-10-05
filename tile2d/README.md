@@ -394,7 +394,8 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 986 sections, 3 000 symbols, 9 828 relocations (release)
+        mine.codetab         the game: 772 sections, 2 485 symbols, 7 600 relocations (release)
+        engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
         content/  shaders/  packs/

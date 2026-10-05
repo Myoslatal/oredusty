@@ -43,6 +43,11 @@ target_include_directories(mine_mod_sdk INTERFACE
 # linked into the executable. The flag that matters is -fsemantic-interposition: it keeps a call
 # inside the game a call *through a relocation*, which is what lets a mod table merged after it
 # replace a function of the game and have the game's own calls follow.
+#
+# The table is compiled by **the toolchain**, not by this build system, and that is the point: what the
+# toolchain compiles with *is* the ABI, and a table it builds carries the record of it (docs/ABI.md).
+# The engine's own record is written by the same tool (engine.abi, below), so "was this mod built for
+# this engine" is answered by what the compiler said rather than by a version string.
 set(MINE_TABLE_NAME "mine.codetab")
 set(MINE_TABLE_SOURCES
     src/app.cpp
@@ -65,27 +70,76 @@ set(MINE_TABLE_SOURCES
     src/types/tile_definition.cpp
     src/world.cpp
 )
-add_library(mine_table OBJECT ${MINE_TABLE_SOURCES})
-t2d_apply_settings(mine_table)
-target_include_directories(mine_table PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(mine_table PRIVATE t2d::render ore::ore)   # usage requirements only: nothing links
-target_compile_options(mine_table PRIVATE
-    -fsemantic-interposition -ffunction-sections -fdata-sections -fno-stack-protector)
+# What the toolchain is told about this build. The includes and the defines are the ones the sources
+# need to compile at all; the optimisation follows the build type and is deliberately **not** part of
+# the ABI - a mod built at -O0 and an engine built at -O3 agree on every layout fact and are merged
+# like one program (docs/ABI.md §0).
+set(MINE_TABLE_INCLUDES
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_SOURCE_DIR}/include"
+    "${PROJECT_BINARY_DIR}/generated"
+    "${T2D_ORE_DIR}/include"
+    "${CMAKE_BINARY_DIR}/ore/generated")
+set(MINE_TABLE_DEFINES
+    "T2D_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\""
+    "ORE_SOURCE_DIR=\"${T2D_ORE_DIR}\""
+    "ORE_SOURCE_SHADER_DIR=\"${T2D_ORE_DIR}/shaders\"")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(MINE_TABLE_OPT "-O0")
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(MINE_TABLE_OPT "-O3")
+else()
+    set(MINE_TABLE_OPT "-O2")
+endif()
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    list(APPEND MINE_TABLE_DEFINES "NDEBUG")
+endif()
+set(MINE_TOOLCHAIN_ARGS --opt ${MINE_TABLE_OPT})
+foreach(include ${MINE_TABLE_INCLUDES})
+    list(APPEND MINE_TOOLCHAIN_ARGS --include "${include}")
+endforeach()
+foreach(define ${MINE_TABLE_DEFINES})
+    list(APPEND MINE_TOOLCHAIN_ARGS --define "${define}")
+endforeach()
 
-# The objects are packed by the toolchain, so the flags above are the one place that decides how the
-# game's code is compiled - the build system owns them, not the tool.
+set(MINE_TABLE_SOURCES_ABS "")
+foreach(source ${MINE_TABLE_SOURCES})
+    list(APPEND MINE_TABLE_SOURCES_ABS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+endforeach()
 set(MINE_TABLE_PATH "${CMAKE_CURRENT_BINARY_DIR}/${MINE_TABLE_NAME}")
 add_custom_command(
     OUTPUT "${MINE_TABLE_PATH}"
-    COMMAND $<TARGET_FILE:codetab> pack $<TARGET_OBJECTS:mine_table>
+    COMMAND $<TARGET_FILE:codetab> build ${MINE_TABLE_SOURCES_ABS}
             -o "${MINE_TABLE_PATH}" --id mine --name "Mine" --version 1.0 --requires engine@1.0
-            --api "${CMAKE_SOURCE_DIR}/engine.api"
-    DEPENDS mine_table $<TARGET_OBJECTS:mine_table> codetab
-    # The object list is a list, not one long argument: without this the shell sees the semicolons.
+            --api "${CMAKE_SOURCE_DIR}/engine.api" ${MINE_TOOLCHAIN_ARGS}
+    DEPENDS codetab ${MINE_TABLE_SOURCES_ABS}
+    # The source list is a list, not one long argument: without this the shell sees the semicolons.
     COMMAND_EXPAND_LISTS
-    COMMENT "Packing the game into ${MINE_TABLE_NAME}")
+    # A define like T2D_SOURCE_DIR="/path" carries quotes the shell must not eat.
+    VERBATIM
+    COMMENT "Building the game into ${MINE_TABLE_NAME} (and recording what it was built as)")
 add_custom_target(mine_game_table ALL DEPENDS "${MINE_TABLE_PATH}")
-add_dependencies(mine_game_table mine_table)
+
+# The one source the toolchain compiles that nothing else here does, compiled here too so that -Werror
+# covers it. Nothing links these objects: the table is what runs.
+add_library(mine_entry_check OBJECT src/game_main.cpp)
+t2d_apply_settings(mine_entry_check)
+target_include_directories(mine_entry_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(mine_entry_check PRIVATE t2d::render ore::ore)
+
+# What the **launcher** itself was compiled as, written by the same tool that records a table. It
+# travels with the executable the way engine.api does, and it is the reference every module is
+# measured against: a table built against other headers, or against another C++ library ABI, is
+# refused with the fact that differs named - never loaded "with fewer rights" (docs/ABI.md).
+set(MINE_ABI_PATH "${CMAKE_CURRENT_BINARY_DIR}/engine.abi")
+add_custom_command(
+    OUTPUT "${MINE_ABI_PATH}"
+    COMMAND $<TARGET_FILE:codetab> abi --record "${MINE_ABI_PATH}" ${MINE_TOOLCHAIN_ARGS}
+    DEPENDS codetab
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+    COMMENT "Writing the engine's own ABI record (${MINE_ABI_PATH})")
+add_custom_target(mine_engine_abi ALL DEPENDS "${MINE_ABI_PATH}")
 
 # The published surface travels with the executable: the launcher reads it to decide what a module may
 # ask the engine for, and which versions it may be from.
@@ -95,16 +149,13 @@ add_custom_command(TARGET mine_game_table POST_BUILD
     COMMENT "Copying engine.api beside the game")
 
 # A demo mod: one table that replaces a function of the game's own table. It is built, not installed:
-# the game only loads it when it is asked to (--table), so a plain run stays a plain run.
+# the game only loads it when it is asked to (--table), so a plain run stays a plain run. The toolchain
+# builds it, so it carries its own ABI record and is measured against the engine's like any other mod.
 set(MINE_DEMO_MOD "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod.codetab")
 add_custom_command(
     OUTPUT "${MINE_DEMO_MOD}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod"
-    COMMAND ${CMAKE_CXX_COMPILER} -std=c++20 -O2 -fPIC -fsemantic-interposition -ffunction-sections
-            -fdata-sections -fno-stack-protector -fno-exceptions
-            -c "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tables/mod_banner.cpp"
-            -o "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod_banner.o"
-    COMMAND $<TARGET_FILE:codetab> pack "${CMAKE_CURRENT_BINARY_DIR}/mods/demo_mod/mod_banner.o"
+    COMMAND $<TARGET_FILE:codetab> build "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tables/mod_banner.cpp"
             -o "${MINE_DEMO_MOD}" --id demo_mod --version 1.0 --requires mine@1.0
             --api "${CMAKE_SOURCE_DIR}/engine.api"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/tables/mod_banner.cpp" codetab
@@ -131,7 +182,7 @@ t2d_apply_settings(mine_game)
 target_link_libraries(mine_game PRIVATE
     -Wl,--whole-archive t2d::render t2d::sim t2d::text t2d::net t2d::core ore::ore -Wl,--no-whole-archive)
 set_target_properties(mine_game PROPERTIES ENABLE_EXPORTS ON)
-add_dependencies(mine_game mine_game_table)
+add_dependencies(mine_game mine_game_table mine_engine_abi)
 ore_add_shaders(mine_game SHADERS
     "${CMAKE_SOURCE_DIR}/shaders/sprite.vert"
     "${CMAKE_SOURCE_DIR}/shaders/sprite.frag")
@@ -171,6 +222,8 @@ add_custom_target(mine_package
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:mine_game> "${MINE_PACKAGE_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy "${MINE_TABLE_PATH}" "${MINE_PACKAGE_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/engine.api" "${MINE_PACKAGE_DIR}/"
+    # What the launcher was built as: the reference a mod's own record is measured against.
+    COMMAND ${CMAKE_COMMAND} -E copy "${MINE_ABI_PATH}" "${MINE_PACKAGE_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/games/mine/content" "${MINE_PACKAGE_DIR}/content"
     # The interface strings, where the game looks for them beside its executable. Without them a
@@ -185,7 +238,7 @@ add_custom_target(mine_package
     COMMAND ${CMAKE_COMMAND} -E remove "${MINE_PACKAGE_ZIP}"
     COMMAND ${CMAKE_COMMAND} -E tar cf "${MINE_PACKAGE_ZIP}" --format=zip -- "${MINE_PACKAGE_NAME}"
     WORKING_DIRECTORY "${MINE_PACKAGE_ROOT}"
-    DEPENDS mine_game mine_game_table
+    DEPENDS mine_game mine_game_table mine_engine_abi
     COMMENT "Packaging ${MINE_PACKAGE_NAME} into ${MINE_PACKAGE_ZIP}")
 
 # A package for the people who write mods, which is a different thing from a package for the people
@@ -211,6 +264,8 @@ add_custom_target(builddev
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/ore/generated/ore"
             "${MINE_DEV_DIR}/include/ore"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/engine.api" "${MINE_DEV_DIR}/engine.api"
+    # The engine's own record, so a mod author can diff what they built against what they build for.
+    COMMAND ${CMAKE_COMMAND} -E copy "${MINE_ABI_PATH}" "${MINE_DEV_DIR}/engine.abi"
     COMMAND ${CMAKE_COMMAND} -E copy "${MINE_TABLE_PATH}" "${MINE_DEV_DIR}/mine.codetab"
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:codetab> "${MINE_DEV_DIR}/codetab"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/packs" "${MINE_DEV_DIR}/packs"
