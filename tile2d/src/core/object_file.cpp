@@ -209,6 +209,7 @@ std::optional<ObjectFile> ObjectFile::parse(ConstSpan<const u8> bytes, std::stri
             symbol.binding = symbol_binding(static_cast<u8>(info >> 4));
             symbol.value = read_u64(at + 8);
             symbol.size = read_u64(at + 16);
+            symbol.visibility = static_cast<u8>(*(at + 5) & 0x3);
             // An absolute symbol is a number, not an address, and a common one is a tentative
             // definition the linker would place: neither is a section here.
             symbol.section = (where == kShnUndef || where == kShnAbs || where == kShnCommon ||
@@ -216,8 +217,12 @@ std::optional<ObjectFile> ObjectFile::parse(ConstSpan<const u8> bytes, std::stri
                                  ? kInvalidId
                                  : where;
             // An absolute symbol is a number rather than something to place - except a file symbol,
-            // whose whole job is to carry the name of the source it came from.
-            if (where == kShnAbs && symbol.kind != ObjectSymbolKind::File) symbol.kind = ObjectSymbolKind::None;
+            // whose whole job is to carry the name of the source it came from. The number is kept: a
+            // relocation that only needs a value can be filled with it (docs/ABI.md H11).
+            if (where == kShnAbs && symbol.kind != ObjectSymbolKind::File) {
+                symbol.kind = ObjectSymbolKind::None;
+                symbol.absolute = true;
+            }
             object.symbols.push_back(std::move(symbol));
         }
     }

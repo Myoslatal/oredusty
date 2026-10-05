@@ -18,6 +18,15 @@
 // Declared here rather than included: it is the ABI's own name, and the header that carries it is not
 // the same everywhere.
 extern "C" void __cxa_finalize(void* dso_handle);
+
+// The unwinder's own registration, one frame description at a time - what a JIT does with the code it
+// emits, and a table is placed by hand the same way. Without it the unwinder has no idea how to walk a
+// table's frames, and a throw inside one ends the process (docs/ABI.md H1).
+// One frame description at a time, which is the shape this registration takes: the "table" entry point
+// next to it wants an array of *pointers* to descriptions, not a compiler's section, and handing it the
+// section is a segfault inside libgcc (measured).
+extern "C" void __register_frame(void* frame);
+extern "C" void __deregister_frame(void* frame);
 #endif
 
 namespace t2d {
@@ -94,6 +103,20 @@ void write_trampoline(u8* stub, u64 target) {
         case kRelocationRexGotPcRelX: return 4;
         default: return std::nullopt;
     }
+}
+
+/// The priority a constructor section asks for: the number a linker sorts by, and 65535 - what a
+/// plain ".init_array" means - when the name carries none.
+[[nodiscard]] int init_priority(const std::string& name) {
+    const std::size_t dot = name.rfind('.');
+    if (dot == std::string::npos || dot + 1 >= name.size()) return 65535;
+    int value = 0;
+    for (std::size_t index = dot + 1; index < name.size(); ++index) {
+        if (name[index] < '0' || name[index] > '9') return 65535;   // ".init_array", not ".init_array.101"
+        value = value * 10 + (name[index] - '0');
+        if (value > 65535) return 65535;
+    }
+    return value;
 }
 
 [[nodiscard]] bool is_got_relocation(u32 type) {
@@ -395,9 +418,9 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
                                         "place: keep per-module state in the module's own data instead",
                                         label, section.name));
             }
-            // A frame description is only useful to an unwinder that was told about it, and nothing
-            // registers a table's - it would sit in memory describing code nobody can unwind through.
-            if (section.name == ".eh_frame" || section.name == ".gcc_except_table") continue;
+            // A frame description travels with the module that needs it: the runtime registers what it
+            // places (register_frames), which is what makes a throw inside a table find its handler
+            // (docs/ABI.md H1). It is data, so it lands in the writable half and never in the code.
             CodeTableSection packed;
             packed.name = section.name;
             packed.type = section.type;
@@ -407,6 +430,12 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             // A section that takes up room but has no bytes in the file (.bss) is zeros: that is
             // exactly what the linker would give it.
             if (packed.data.size() < section.size) packed.data.resize(section.size, 0);
+            // A frame description table ends with a zero-length entry, and in an object file that
+            // terminator is not there: the linker appends it when it merges the .eh_frame sections of a
+            // program. The runtime merges them too, so it appends it too - without it the unwinder walks
+            // off the end of the section into whatever is placed next (measured: a segfault inside
+            // libgcc, docs/ABI.md H1).
+            if (packed.name == ".eh_frame") packed.data.resize(packed.data.size() + 4, 0);
             // A group that is already in the table: this object's copy is the same definition, so it is
             // not carried again - everything in this object that referred to it refers to that one.
             const u32 group = group_of[index];
@@ -463,6 +492,8 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
             packed.name = symbol.name;
             packed.kind = symbol.kind;
             packed.binding = symbol.binding;
+            packed.visibility = symbol.visibility;
+            packed.absolute = symbol.absolute;
             packed.value = symbol.value;
             packed.size = symbol.size;
             packed.section = symbol.defined() && symbol.section < section_map.size() ? section_map[symbol.section]
@@ -612,7 +643,12 @@ std::vector<u8> CodeTable::serialize() const {
         append_u32(out, symbol_names[index]);
         append_u32(out, symbols[index].section);
         append_u32(out, static_cast<u32>(symbols[index].kind));
-        append_u32(out, static_cast<u32>(symbols[index].binding));
+        // The binding is one of three values, so the word has room for two facts that were added later:
+        // a reader that only knows the binding reads the low byte and ignores the rest, which is what
+        // keeps the entry 32 bytes and the format version where it is.
+        append_u32(out, static_cast<u32>(symbols[index].binding) |
+                            (static_cast<u32>(symbols[index].visibility) << 8) |
+                            (symbols[index].absolute ? (1u << 16) : 0u));
         append_u64(out, symbols[index].value);
         append_u64(out, symbols[index].size);
     }
@@ -702,7 +738,10 @@ std::optional<CodeTable> CodeTable::parse(ConstSpan<const u8> bytes, std::string
         symbol.name = text_at(read_u32(at));
         symbol.section = read_u32(at + 4);
         symbol.kind = static_cast<ObjectSymbolKind>(read_u32(at + 8));
-        symbol.binding = static_cast<ObjectSymbolBinding>(read_u32(at + 12));
+        const u32 binding_word = read_u32(at + 12);
+        symbol.binding = static_cast<ObjectSymbolBinding>(binding_word & 0xFFu);
+        symbol.visibility = static_cast<u8>((binding_word >> 8) & 0xFFu);
+        symbol.absolute = (binding_word & (1u << 16)) != 0;
         symbol.value = read_u64(at + 16);
         symbol.size = read_u64(at + 24);
         if (symbol.defined() && symbol.section >= table.sections.size()) {
@@ -913,7 +952,10 @@ void CodeImage::release() {
     // exit, docs/ABI.md H13). All of them first, then the unmapping: one module's destructor may call
     // into another's code.
     for (Module& module : modules_) {
-        if (module.base != nullptr) __cxa_finalize(module.base);
+        if (module.base == nullptr) continue;
+        for (void* frame : module.frames) __deregister_frame(frame);
+        module.frames.clear();
+        __cxa_finalize(module.base);
     }
     for (Module& module : modules_) {
         if (module.base != nullptr) munmap(module.base, module.region_size);
@@ -937,6 +979,16 @@ bool CodeImage::place(Module& module) {
     u64 data_size = 0;
     for (const CodeTableSection& section : module.table.sections) {
         const u64 align = std::max<u64>(section.align, 1);
+        // The halves of a module start on a page and the sections are aligned inside them, so an
+        // alignment larger than a page cannot be honoured - and placing it anyway would be a section
+        // that is not where it asked to be (docs/ABI.md H10).
+        if (align > page) {
+            report_.errors.push_back(std::format(
+                "module '{}': '{}' asks for {} byte alignment and a module's halves start on a {} byte "
+                "page, so it cannot be placed where it asked to be",
+                module.table.id, section.name, align, page));
+            return false;
+        }
         if ((section.flags & kSectionExec) != 0) {
             text_size = align_up(text_size, align) + section.data.size();
         } else {
@@ -998,31 +1050,165 @@ bool CodeImage::place(Module& module) {
 #endif
 }
 
+
+/// Which function each slot of a vtable names. A virtual call is an index into this, so two vtables
+/// that disagree about an index call different functions - which is a crash, not a difference of
+/// opinion (docs/ABI.md H2). The entries are relocations, so the names are what the merge can compare:
+/// the addresses are meant to differ.
+[[nodiscard]] std::vector<std::string> vtable_slots(const CodeTable& table, const CodeTableSymbol& symbol) {
+    std::vector<std::string> slots(static_cast<usize>(symbol.size / 8));
+    for (const CodeTableRelocation& relocation : table.relocations) {
+        if (relocation.section != symbol.section || relocation.offset < symbol.value) continue;
+        const u64 at = relocation.offset - symbol.value;
+        if (at % 8 != 0 || at / 8 >= slots.size()) continue;
+        if (relocation.symbol < table.symbols.size()) {
+            slots[static_cast<usize>(at / 8)] = table.symbols[relocation.symbol].name;
+        }
+    }
+    return slots;
+}
+
+/// The bytes one definition covers, so two of them can be compared.
+[[nodiscard]] std::string_view definition_bytes(const CodeTable& table, const CodeTableSymbol& symbol) {
+    if (symbol.section >= table.sections.size()) return {};
+    const CodeTableSection& section = table.sections[symbol.section];
+    if (symbol.value > section.data.size()) return {};
+    // A compiler does not always record a size for a vague linkage symbol; with -ffunction-sections the
+    // section is that one definition, so the section is what there is to compare.
+    const u64 recorded = symbol.size != 0 ? symbol.size : section.data.size() - symbol.value;
+    const usize size = static_cast<usize>(std::min<u64>(recorded, section.data.size() - symbol.value));
+    return std::string_view(reinterpret_cast<const char*>(section.data.data()) + symbol.value, size);
+}
+
+[[nodiscard]] bool is_vtable_name(std::string_view name) { return name.starts_with("_ZTV"); }
+
 void CodeImage::resolve_symbols() {
+    /// Names a module defines that the running program also exports.
+    std::vector<std::string> replaced_host_symbols;
+    /// Two definitions of one name with different bodies, gathered per pair of modules.
+    std::map<std::string, std::string> differing_bodies;
+    std::map<std::string, usize> differing_body_count;
     // First pass: who defines what. A strong definition replaces whatever was there - that is the
     // merge, and it is why the game's own call to a function can end up in a mod.
     for (usize index = 0; index < modules_.size(); ++index) {
         Module& module = modules_[index];
         if (module.failed) continue;
-        for (const CodeTableSymbol& symbol : module.table.symbols) {
+        for (usize s = 0; s < module.table.symbols.size(); ++s) {
+            const CodeTableSymbol& symbol = module.table.symbols[s];
             if (!symbol.defined() || symbol.section >= module.section_address.size()) continue;
             if (!symbol.shared() || symbol.name.empty()) continue;
             u8* address = module.section_address[symbol.section] + symbol.value;
+#if !defined(_WIN32)
+            // What the *running program* also provides. Every table's call to it goes to the module, but
+            // the program's own calls were bound when it was linked - the engine's, and the platform's -
+            // and they do not follow (docs/ABI.md H6). A strong definition is the deliberate case; a weak
+            // one is a libstdc++ inline copy every module has, and saying that would be noise.
+            if (symbol.binding == ObjectSymbolBinding::Global &&
+                dlsym(RTLD_DEFAULT, symbol.name.c_str()) != nullptr) {
+                replaced_host_symbols.push_back(symbol.name);
+            }
+#endif
             std::vector<Definition>& chain = definitions_[symbol.name];
             if (chain.empty() || symbol.binding == ObjectSymbolBinding::Weak) {
                 // A weak definition never displaces anything: it is the copy an inline function, a
-                // template instance or a vtable is emitted as, and one program has one of each.
-                chain.push_back(Definition{index, address, symbol.binding});
+                // template instance or a vtable is emitted as, and one program has one of each. But
+                // "one" is a choice the compiler left open: it may emit different machine code for a
+                // vague linkage body per translation unit (docs/ABI.md H3), and a vtable whose entries
+                // are not the same entries is a call to the wrong function (H2). Both are compared here
+                // and said out loud - the first definition still wins, because that is what a linker
+                // does with two copies of one thing.
+                // Two definitions of one name in one module (two translation units packed into one
+                // table) are the same question as two modules carrying it, and are answered the same.
+                const bool same_symbol = !chain.empty() && chain.front().module == index &&
+                                         chain.front().symbol == s;
+                if (!chain.empty() && !same_symbol) {
+                    const Module& first = modules_[chain.front().module];
+                    const std::string first_where = chain.front().module == index
+                                                        ? module.table.id
+                                                        : std::format("'{}' and '{}'", module.table.id,
+                                                                      first.table.id);
+                    const CodeTableSymbol* other = chain.front().symbol < first.table.symbols.size()
+                                                       ? &first.table.symbols[chain.front().symbol]
+                                                       : nullptr;
+                    if (other != nullptr && is_vtable_name(symbol.name)) {
+                        if (symbol.size != other->size) {
+                            module.failed = true;
+                            report_.errors.push_back(std::format(
+                                "module '{}': the vtable for '{}' has {} entries here and {} in {}: the "
+                                "class is not the same class in the two builds, and a virtual call would "
+                                "go to the wrong function (docs/ABI.md H2)",
+                                module.table.id, symbol.name, symbol.size / 8, other->size / 8, first_where));
+                            continue;
+                        }
+                        const std::vector<std::string> mine = vtable_slots(module.table, symbol);
+                        const std::vector<std::string> theirs = vtable_slots(first.table, *other);
+                        if (mine != theirs) {
+                            std::string where;
+                            for (usize slot = 0; slot < mine.size(); ++slot) {
+                                if (mine[slot] == theirs[slot]) continue;
+                                if (!where.empty()) where += ", ";
+                                where += std::format("slot {} is '{}' here and '{}' there", slot,
+                                                     mine[slot].empty() ? "(data)" : mine[slot],
+                                                     theirs[slot].empty() ? "(data)" : theirs[slot]);
+                            }
+                            module.failed = true;
+                            report_.errors.push_back(std::format(
+                                "module '{}': the vtable for '{}' is not the one {} has: {} - a virtual "
+                                "call would go to the wrong function (docs/ABI.md H2)",
+                                module.table.id, symbol.name, first_where, where));
+                            continue;
+                        }
+                    } else if (other != nullptr && definition_bytes(module.table, symbol) !=
+                                                      definition_bytes(first.table, *other)) {
+                        // One line per pair rather than one per symbol: the C++ library's own format
+                        // sinks are emitted differently by different translation units of one build,
+                        // and a page of the same sentence is not a report (docs/ABI.md H3).
+                        std::string& line = differing_bodies[first_where];
+                        if (line.empty()) {
+                            line = std::format("{} both define these and the two bodies differ: one of "
+                                               "them wins, so the other's calls do not do what it was "
+                                               "compiled to do (docs/ABI.md H3):", first_where);
+                        }
+                        if (std::count(line.begin(), line.end(), ',') < 3) line += " " + symbol.name + ",";
+                        ++differing_body_count[first_where];
+                    }
+                }
+                chain.push_back(Definition{index, s, address, symbol.binding});
                 continue;
             }
             const Definition previous = chain.front();
-            chain.insert(chain.begin(), Definition{index, address, symbol.binding});
+            chain.insert(chain.begin(), Definition{index, s, address, symbol.binding});
             if (previous.binding == ObjectSymbolBinding::Global) {
                 report_.overrides.push_back(CodeOverride{symbol.name, module.table.id,
                                                          modules_[previous.module].table.id});
                 override_sources_.push_back(index);
             }
+            // A protected definition is one the compiler was allowed to bind calls to directly: the
+            // merge redirects what goes through a relocation, and a call that does not may not follow
+            // (measured: docs/ABI.md H8). Said when it wins, which is when it matters.
+            if (symbol.visibility == 3) {
+                report_.warnings.push_back(std::format(
+                    "'{}' in '{}' has protected visibility: calls the compiler bound directly to it do "
+                    "not go through the merge, so this override may not reach every caller (docs/ABI.md H8)",
+                    symbol.name, module.table.id));
+            }
+#if !defined(_WIN32)
+#endif
         }
+    }
+
+    std::sort(replaced_host_symbols.begin(), replaced_host_symbols.end());
+    replaced_host_symbols.erase(std::unique(replaced_host_symbols.begin(), replaced_host_symbols.end()),
+                                replaced_host_symbols.end());
+    for (const auto& [where, line] : differing_bodies) {
+        report_.warnings.push_back(std::format("{} ({} definition(s) with a different body)", line,
+                                               differing_body_count[where]));
+    }
+    for (const std::string& name : replaced_host_symbols) {
+        report_.warnings.push_back(std::format(
+            "a module defines '{}', which the running program provides too: every table's call to it "
+            "goes to the module, but the program's own calls were bound when it was linked and do not "
+            "follow (docs/ABI.md H6)", name));
     }
 
     // Second pass: what every symbol resolves to *now*. A module's own definition is looked up by
@@ -1042,6 +1228,12 @@ void CodeImage::resolve_symbols() {
                     }
                 }
                 module.symbol_address[s] = module.section_address[symbol.section] + symbol.value;
+                continue;
+            }
+            // An absolute symbol is a number the object carried, not something to look for: a linker
+            // folds it in, and so does this (docs/ABI.md H11).
+            if (symbol.absolute) {
+                module.symbol_address[s] = reinterpret_cast<u8*>(static_cast<std::uintptr_t>(symbol.value));
                 continue;
             }
             // Undefined here: somebody else's, or the running program's.
@@ -1106,9 +1298,18 @@ void CodeImage::relocate(Module& module) {
                 ? std::format("symbol {}", relocation.symbol)
                 : module.table.symbols[relocation.symbol].name;
         u8* at = module.section_address[relocation.section] + relocation.offset;
+        const CodeTableSymbol& target_symbol = module.table.symbols[relocation.symbol];
         const u8* symbol = module.symbol_address[relocation.symbol];
         if (symbol == nullptr) {
             fail(std::format("'{}' is not defined by any module or by the running program", name));
+            return;
+        }
+        // An absolute symbol is a value, so only a relocation that writes a value can use it: one that
+        // needs an address (a call, a global offset table entry) would be filled with a number.
+        if (target_symbol.absolute && relocation.type != kRelocationAbsolute64 &&
+            relocation.type != kRelocationAbsolute32 && relocation.type != kRelocationAbsolute32Signed) {
+            fail(std::format("'{}' is an absolute symbol ({}), and the relocation in '{}' needs an address",
+                             name, target_symbol.value, section.name));
             return;
         }
         const auto room = [&](u64 width) { return relocation.offset + width <= section.data.size(); };
@@ -1124,9 +1325,18 @@ void CodeImage::relocate(Module& module) {
             case kRelocationAbsolute32Signed: {
                 if (!room(4)) return fail(std::format("a relocation in '{}' runs past the section", section.name));
                 const i64 value = static_cast<i64>(target) + relocation.addend;
-                if (relocation.type == kRelocationAbsolute32Signed &&
-                    (value < std::numeric_limits<i32>::min() || value > std::numeric_limits<i32>::max())) {
-                    return fail(std::format("'{}' does not fit the 32 bit field it is written into", name));
+                // Both forms are checked. The unsigned one is the one that was missing, and a table is
+                // placed by mmap - which never hands back an address below 4 GiB - so an unchecked
+                // write here is a silently wrong pointer rather than a corner case (docs/ABI.md H5).
+                const bool signed_field = relocation.type == kRelocationAbsolute32Signed;
+                const bool fits = signed_field
+                                      ? value >= std::numeric_limits<i32>::min() &&
+                                            value <= std::numeric_limits<i32>::max()
+                                      : value >= 0 && value <= std::numeric_limits<u32>::max();
+                if (!fits) {
+                    return fail(std::format("'{}' is {:#x}, which does not fit the 32 bit field it is "
+                                            "written into",
+                                            name, static_cast<u64>(value)));
                 }
                 write_u32(at, static_cast<u32>(value));
                 break;
@@ -1183,12 +1393,46 @@ void CodeImage::relocate(Module& module) {
     }
 }
 
+void CodeImage::register_frames(Module& module) {
+#if !defined(_WIN32)
+    // One call per FDE: that is the shape the unwinder's registration takes, and the CIE an FDE needs
+    // sits in front of it in the same section, where its own pointer arithmetic finds it.
+    for (usize index = 0; index < module.table.sections.size(); ++index) {
+        const CodeTableSection& section = module.table.sections[index];
+        if (section.name != ".eh_frame" || module.section_address[index] == nullptr) continue;
+        // The section, once - which is what the compiler's own start-up code does with a program's
+        // .eh_frame. The registration walks the table from there, CIEs and all, and stopping at a
+        // terminator is its job rather than ours: handing it one entry instead makes it read the next
+        // entry's bytes as a CIE (measured: a segfault inside libgcc, docs/ABI.md H1).
+        if (section.data.size() < 8) continue;
+        __register_frame(module.section_address[index]);
+        module.frames.push_back(module.section_address[index]);
+    }
+#else
+    (void)module;
+#endif
+}
+
 void CodeImage::run_initialisers() {
     for (Module& module : modules_) {
         if (module.failed) continue;
+        // What a linker does with .init_array sections: the lowest priority number first, the plain
+        // section (65535) last. The compiler emits one section per priority, and the order the sections
+        // happen to sit in is not that order - two objects, one default and one 101, ran 101 last
+        // before this (measured, docs/ABI.md H7).
+        std::vector<std::pair<int, usize>> order;
         for (usize index = 0; index < module.table.sections.size(); ++index) {
             const CodeTableSection& section = module.table.sections[index];
             if (section.type != kSectionInitArray || module.section_address[index] == nullptr) continue;
+            order.emplace_back(init_priority(section.name), index);
+        }
+        std::stable_sort(order.begin(), order.end(),
+                         [](const std::pair<int, usize>& left, const std::pair<int, usize>& right) {
+                             return left.first < right.first;
+                         });
+        for (const auto& [priority, index] : order) {
+            (void)priority;
+            const CodeTableSection& section = module.table.sections[index];
             for (usize entry = 0; entry + 8 <= section.data.size(); entry += 8) {
                 u64 address = 0;
                 std::memcpy(&address, module.section_address[index] + entry, sizeof(address));
@@ -1247,16 +1491,6 @@ const CodeImageReport& CodeImage::load() {
             module.failed = true;
             report_.errors.push_back(std::format("module '{}': {}", module.table.id, unmet));
             continue;
-        }
-        // A module that carries exception machinery can throw, and a table has no frame descriptions:
-        // the throw ends the process rather than finding its handler. Said out loud - the module may
-        // never throw, and refusing it for being able to would be refusing working code.
-        for (const CodeTableSection& section : module.table.sections) {
-            if (!section.name.starts_with(".gcc_except_table")) continue;
-            report_.warnings.push_back(std::format(
-                "module '{}' carries '{}': a throw inside it would end the process rather than find its "
-                "handler (docs/ABI.md H1)", module.table.id, section.name));
-            break;
         }
         // What it was built as comes next, and it is not a warning: a module whose types are not this
         // program's types cannot call it correctly, and a module loaded with "fewer rights" instead
@@ -1335,6 +1569,11 @@ const CodeImageReport& CodeImage::load() {
     prune_failed();
     for (usize index = 0; index < report_.modules.size() && index < modules_.size(); ++index) {
         report_.modules[index].ok = !modules_[index].failed;
+    }
+    // After the relocations - a frame description points at code and at the exception table, and both
+    // of those are relocations - and before the constructors, which are allowed to throw.
+    for (Module& module : modules_) {
+        if (!module.failed) register_frames(module);
     }
     run_initialisers();
     return report_;

@@ -128,10 +128,14 @@ exit 134。触发路径完全在模组作者手里：`mod_int` 是公开的模�
 值来自模组自己的 `mod.ecfg`（`mod_package.cpp:602` 的 `mod_value_of`）——**写一个字符串给一个整数键，
 游戏就 abort**。
 
-**这一轮修掉了两端**：本体那处 `std::stoll` 换成 `std::from_chars`（不抛），本体表改由工具链编（`-fno-exceptions`），
-于是 Release 表里 `.gcc_except_table*` **0 节**、`__cxa_begin_catch` / `_Unwind_Resume` **0 条**；
-`codetab build|pack` 也**拒绝**带异常机制的表（`--exceptions` 是作者说"我知道"，那时只提示一行），
-加载期对这样的表同样只提示。真正的展开支持仍是 §3 的 P2-1。
+**已修，而且展开现在真的能用**。三件事：本体那处 `std::stoll` 换成 `std::from_chars`（不抛）、本体表改由工具链编
+（`-fno-exceptions`）——Release 表里 `.gcc_except_table*` 与 `__cxa_begin_catch` / `_Unwind_Resume` 都是 **0**；
+表开始**带着自己的帧描述走**（`.eh_frame` 不再被丢），运行时在重定位之后、跑构造函数之前注册给 unwinder。
+
+注册这一步有两个坑，都是实测踩出来的：`.eh_frame` 是**一张以零长度项结尾的表**，而目标文件里没有这个结尾——
+链接器合并时补，运行时不补就会让 unwinder 走过节尾读下一节（实测：libgcc 里段错误）；注册要交**整节**，
+交单个 FDE 一样越界。补上 4 个零字节之后，夹具里 `throw 7` 被表自己的 `catch` 接住（返回 7），
+也被**加载它的程序**接住（unwind 穿过表的帧）——正是修复前 exit 134 的那个用例。
 
 根因：`code_table.cpp:243` 丢掉 `.eh_frame`，而且是**精确名匹配**——`-ffunction-sections` 下编译器产的是
 `.gcc_except_table.<函数>`，于是异常**表**留下来了、**帧描述**没留下。Release 表实测：
@@ -151,6 +155,10 @@ personality 都找不到，handler 自然永远找不到。
 槽位号是编译期常量：模组认为 `kind` 在第 3 槽，宿主的 vtable 只有 3 个槽，读到表尾之外就调过去了。
 合并只按符号名对齐（`code_table.cpp:849-862`），**vtable 的形状从来没被比较过**。
 
+**已修（两边都带 vtable 时）**：合并现在比较同名 vtable 的**槽位数**与**每一槽指向的符号名**，不一致就拒绝整个模块并指名
+（`the vtable for '_ZTV…' has N entries here and M in …` / `slot 3 is 'x' here and 'y' there`）。夹具实测两条都被拒。
+挡不住的那一半——模组只通过 vptr 调用、自己不实例化（表里没有 vtable）——由**头文件哈希**兜住：那种情形必然是头文件不同。
+
 数据在哪：有 out-of-line key function 的类，vtable 是 weak 符号、`st_size` 就在表里
 （`CodeTableSymbol::size`，`code_table.h:75`；`TABLES.md` §7 的 machine 夹具正是这种）。但**只通过 vptr 调用、
 自己不实例化的模组，表里根本没有 vtable**（实测 `shape_mod.codetab`：`_ZTV`/`_ZTI` 命中 0 处），
@@ -164,6 +172,9 @@ personality 都找不到，handler 自然永远找不到。
   同一个函数在一个进程里两个行为，**0 error**。
 * **强制不内联时**（`__attribute__((noinline))`）：两张表各带一份 8 字节 `.text._Z5pick2i`，
   合并后**两个模块都得 17**——模组那份成了死代码，同样没人报。
+
+**已修（说出来了）**：同名弱定义被合并时，运行时会比较两份的**字节**（大小没记录时用整节），不同就报告一句
+`… both define 'x' and the two bodies differ …`——跨模块、同一模块内的两个翻译单元都算。夹具 `twin_small`/`twin_big` 实测报警。
 
 根因：弱符号先到先得（`code_table.cpp:830-834`），而 `from_objects` 只在**同一张表内**去重时比较字节
 （`code_table.cpp:257-272`），**跨表从不比较**。模组作者无法从任何输出里看出自己改的那份有没有生效。
@@ -182,6 +193,9 @@ personality 都找不到，handler 自然永远找不到。
 
 ### H5 `R_X86_64_32` 不做范围检查
 
+**已修**：两种形式都做范围检查（无符号的那种原来没有，而表由 mmap 放置、地址永远放不进 32 位，所以那是静默写坏指针）。
+夹具 `abs32.cpp`（一行内联汇编）实测：加载报 `does not fit the 32 bit field`，模块被拒。
+
 `.long abi_target` 产生 type 10 重定位；加载后"存进去的 32 位值 == 真实地址"返回 **0**（不等），**0 error**。
 `code_table.cpp:941-951` 里 type 10 与 11 共用一段，但范围检查只在 `Absolute32Signed`（11）时做。
 本仓库的 C++ 不产这种重定位——实测 12 个 Release 表对象 + 10 个夹具 + 演示模组，可分配节里只有
@@ -196,6 +210,10 @@ personality 都找不到，handler 自然永远找不到。
 根因：表内定义优先于 `dlsym`（`code_table.cpp:882-895`），而平台库内部的调用永远走它自己的那一份。
 对 `operator new`、`std::cout`、`typeinfo` 这类带状态的符号，这不是"行为差异"而是"坏掉"。
 
+**已修（说出来了）**：模块的**强定义**顶掉一个宿主进程也导出的名字时，加载报告一句
+`a module defines 'x', which the running program provides too…`（弱定义不算：那是每个模块都有的 libstdc++ 内联副本）。
+夹具 `host_name.cpp` 实测：表里的调用得 7，宿主自己的调用仍是 1。
+
 ### H7 `.init_array.NNNNN` 的优先级被忽略
 
 对象 A 里一个默认优先级的全局构造，对象 B 里一个 `__attribute__((constructor(101)))`：
@@ -203,19 +221,23 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 按表的节顺序跑，不看节名后缀的数字。同一个对象内 GCC 恰好按 101→200→默认的顺序吐节，所以这条
 平时看不出来（实测 124 = "A,B,D" 正确），**跨对象就错**。
 
+**已修**：`run_initialisers()` 按节名后缀的数字排序（没有后缀的算 65535，即最后），stable，跨对象也对。
+夹具 `ctor_default.cpp` + `ctor_priority.cpp`（默认优先级的对象排在前面）实测：**41（"D,A"）→ 14（"A,D"）**。
+
 顺带一个事实：本体自己的表今天**一个 `.init_array` 都没有**（Release/Debug 都是 0），
 所以这条对本体是潜伏的，对模组是活的。
 
 ### H8 可见性没读
 
-`object_file.cpp:202-222` 只读 type 与 binding，不读 `st_other`。两面后果：
+**已修（读进来了，也说了）**：`st_other` 现在读进表（打包在 binding 那个字的空位上，格式版本不用动），
+**protected** 的强定义赢下合并时会报告一句"直接绑定到它的调用不经过合并，这次覆盖可能到不了每个调用点"。
+夹具 `protected_mod.cpp` 实测报警。
 
-* `-fvisibility=hidden` 的定义照样参与覆盖（对模组作者是好消息）——实测 `_ZTI3Box` 是 `WEAK HIDDEN`
-  而不是 local，所以按名字合并照旧。
-* `protected` 可见性下**覆盖会报告成功、调用不跟过去**——实测：一个
-  `__attribute__((visibility("protected")))` 的函数，同一个翻译单元里对它的调用是一条指向**节符号**的
-  `PC32`（`.text._Z19hidden_from_outsidei + 0`），不是指向符号的 `PLT32`；节符号是 local，
-  合并时不会被解析成赢家。
+**更正一处早先的实测**：`__attribute__((visibility("protected")))` 写在定义前面，GCC 在这里**忽略它**
+（`-Wattributes`：attributes are not permitted in this position），符号出来仍是 DEFAULT；要用
+`#pragma GCC visibility push(protected)`。用 pragma 之后实测：符号是 `GLOBAL PROTECTED`，而对它的调用
+**连一条重定位都没有**（`.text.caller` 里只剩对另一个函数的 `PLT32`）——所以合并确实改不了它，
+这条警告说的是真事。`-fvisibility=hidden` 的定义照样参与覆盖（`_ZTI3Box` 是 `WEAK HIDDEN` 而不是 local）。
 
 ### H9 跨模块 RTTI 靠字符串比较
 
@@ -241,12 +263,13 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 
 ### H10 ~ H12（低）
 
-* **对齐**：数据区从页边界开始（`code_table.cpp:773`），节内 `align_up`（797-812）——
-  `align ≤ 4096` 一定对，`alignas(8192)` 会错位。实测 Release 表 772 节的 align 分布
+* **对齐（已修）**：一个模块的两半从页边界开始，所以 `align > page` 的对齐**做不到**：现在直接报错拒绝
+  （夹具 `aligned.cpp`：`alignas(8192)` 实测被拒），而不是默默放在别处。`align ≤ 4096` 一定对。实测 Release 表 772 节的 align 分布
   `{1:174, 2:55, 4:8, 8:88, 16:388, 32:32, 64:27}`，没有超过 4096 的。
-* **`SHN_ABS`**：`object_file.cpp:214-220` 把绝对符号的值丢掉，当"未定义"处理 → 走 `dlsym` → 找不到 →
-  **模块被拒**（响亮，不是静默）。留着值更好。
-* **CET**：本机 GCC 不产 `endbr64`（`-fcf-protection` 默认关），但每个对象都带 48 字节
+* **`SHN_ABS`（已修）**：绝对符号的**值**现在留在表里，写值类的重定位直接填它（夹具 `abs_sym.cpp`：`abs_probe()` 得 `0x1234`）；
+  而需要**地址**的重定位（调用、GOT）对着它会报错拒绝——把数字当地址写下去就是跳到不知道哪里。
+* **CET（已修一半）**：`__CET__` 进了探针，是**必须一致**的事实（`_FORTIFY_SOURCE` 则归"可以不同"）——
+  两边开关不一致时指纹就不同、直接拒绝。本机 GCC 不产 `endbr64`（`-fcf-protection` 默认关），但每个对象都带 48 字节
   `.note.gnu.property`，而且它**进了表**（Release 表 17 节，alloc）。宿主开、模组不开时，
   在强制 IBT 的机器上间接调用表内函数会 #CP。今天不是问题，发行版默认一改就是。
 
@@ -254,28 +277,28 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 
 | 项 | 内容 | 状态 |
 |---|---|---|
-| **P0-1** | 异常：构建期拒绝带异常机制的表；本体那处 `std::stoll` 换成 `std::from_chars`；本体表改由工具链编 | **已落地**（Release 表 0 节 `.gcc_except_table`、0 条 `__cxa_begin_catch`/`_Unwind_Resume`） |
-| **P0-2** | `R_X86_64_32` 范围检查（`code_table.cpp:941-951`） | 未做 |
-| **P0-3** | 模块定义了宿主也导出的符号 → 警告 | 未做 |
-| **P0-4** | `.init_array.NNNNN` 按后缀数字排序 | 未做 |
-| **P0-5** | 同名 vtable 符号 `st_size` 不一致 → 拒绝 | 未做 |
-| **P1-1** | **构建时统一 ABI**：探针 + 头文件哈希 + 表的记录 + 加载期比较（§1.5） | **已落地** |
-| **P1-3** | 编译开关指纹（探针事实 + 构建传的 `-D`） | **已落地** |
-| **P1-2** | 跨表同名定义的字节比较（内联函数"一个进程两种行为"，H3） | 未做 |
-| **P2-1** | 真正支持展开：保留 `.eh_frame` 与 `.gcc_except_table*` + `__register_frame` | 未做（做完 H1 的构建期拒绝可以放宽成警告） |
-| **P2-2** | 类型探针清单（`--abi-type`，把"某个头变了"细化成"某个类型变了"） | 未做（头哈希已覆盖漂移本身） |
-| **P2-3** | vtable 槽位指纹（H2 的完整答案） | 未做 |
-| **P3** | 读 `st_other`、`align > page` 报错、`SHN_ABS` 保留常量、CET 位进指纹 | 未做 |
-| **新增** | H13：销毁映像前先跑模块注册的析构（`__cxa_finalize`） | **已落地** |
+| **P0-1** | 异常：本体那处 `std::stoll` → `std::from_chars`；本体表由工具链编；**帧描述随表走并注册**（H1） | **已落地**（表里 `throw` 能被自己与宿主接住；Release 表 0 节 `.gcc_except_table`） |
+| **P0-2** | `R_X86_64_32` 范围检查（H5） | **已落地**（夹具被拒） |
+| **P0-3** | 模块定义了宿主也导出的符号 → 警告（H6） | **已落地** |
+| **P0-4** | `.init_array.NNNNN` 按后缀数字排序（H7） | **已落地**（41 → 14） |
+| **P0-5 / P2-3** | 同名 vtable 的**槽位数**与**每槽符号**不一致 → 拒绝（H2） | **已落地**（两边都带 vtable 时；另一半由头哈希兜住） |
+| **P1-1** | 构建时统一 ABI：探针 + 头文件哈希 + 表的记录 + 加载期比较（§1.5） | **已落地** |
+| **P1-2** | 同名弱定义的**字节**比较 → 报告（H3） | **已落地**（`twin_small`/`twin_big` 报警） |
+| **P1-3** | 编译开关指纹（探针事实 + 构建传的 `-D` + `__CET__`/`_FORTIFY_SOURCE`） | **已落地** |
+| **P3-1** | 读 `st_other`；protected 的强定义 → 警告（H8） | **已落地**（打包在 binding 字的空位，版本不动） |
+| **P3-2** | `align > page` → 拒绝（H10） | **已落地** |
+| **P3-3** | `SHN_ABS` 保留常量；需要地址的重定位 → 拒绝（H11） | **已落地** |
+| **P3-4** | CET 位进指纹（H12） | **已落地**（`__CET__` 必须一致） |
+| **P2-2** | 类型探针清单（`--abi-type`：把"某个头变了"细化成"某个类型变了"） | **未做**——头文件哈希已经覆盖漂移本身，这一条只是把诊断说得更细，留作下一步 |
+| **H13** | 销毁映像前先跑模块注册的析构（`__cxa_finalize`） | **已落地** |
 
-验收方式写在每一项里（命令 + 期望输出）。已经落地的那几项，回归测试在
-`tile2d/tests/test_code_table.cpp`：`two_tables_that_differ_only_in_what_may_differ_are_one_program`、
-`a_table_built_for_another_abi_is_refused_and_the_fact_is_named`、
-`a_header_that_differs_is_refused_even_when_the_fingerprint_agrees`、
-`a_table_that_does_not_say_what_it_was_built_as_is_loaded_and_said_out_loud`、
-`the_engines_own_record_is_what_a_module_is_measured_against`、
-`the_toolchain_records_what_a_build_is_and_two_of_them_agree`、
-`a_destroyed_image_runs_the_destructors_it_registered`。
+回归测试都在 `tile2d/tests/test_code_table.cpp`（**31 用例 / 323 断言**）：`a_32_bit_absolute_address_that_does_not_fit_is_refused`、
+`an_absolute_symbol_is_its_value`、`an_absolute_symbol_where_an_address_is_wanted_is_refused`、
+`constructors_run_in_priority_order_not_section_order`、`two_bodies_of_one_definition_are_reported`、
+`a_module_that_defines_what_the_program_provides_is_reported`、`a_vtable_that_disagrees_about_its_slots_is_refused`、
+`a_protected_definition_says_its_override_may_not_reach_every_caller`、
+`a_section_that_asks_for_more_alignment_than_a_page_is_refused`、`a_throw_inside_a_table_finds_its_handler`、
+以及 ABI 那一组（§1.5）与 `a_destroyed_image_runs_the_destructors_it_registered`。
 
 ## 3.9 原来的分步计划（留档）
 

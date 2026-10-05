@@ -43,7 +43,8 @@ set(T2D_TABLE_FIXTURE_FLAGS
     -fno-stack-protector -fno-exceptions
     -I${T2D_TABLE_FIXTURE_SOURCES})
 set(T2D_TABLE_FIXTURE_OBJECTS "")
-foreach(fixture base caller mod missing machine factory mod_machine twin_small twin_big twin_caller dtor)
+foreach(fixture base caller mod missing machine factory mod_machine twin_small twin_big twin_caller dtor
+               abs32 ctor_default ctor_priority host_name abs_sym protected_mod aligned)
     add_custom_command(
         OUTPUT "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${T2D_TABLE_FIXTURE_DIR}"
@@ -54,6 +55,17 @@ foreach(fixture base caller mod missing machine factory mod_machine twin_small t
         COMMENT "Compiling the code table fixture ${fixture}.cpp")
     list(APPEND T2D_TABLE_FIXTURE_OBJECTS "${T2D_TABLE_FIXTURE_DIR}/${fixture}.o")
 endforeach()
+# One fixture is compiled *with* exceptions: a table's frame descriptions are registered by the
+# runtime, so a throw inside one is walked back out like any other (docs/ABI.md H1).
+add_custom_command(
+    OUTPUT "${T2D_TABLE_FIXTURE_DIR}/exc.o"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${T2D_TABLE_FIXTURE_DIR}"
+    COMMAND ${CMAKE_CXX_COMPILER} ${T2D_TABLE_FIXTURE_FLAGS} -fexceptions
+            -c "${T2D_TABLE_FIXTURE_SOURCES}/exc.cpp" -o "${T2D_TABLE_FIXTURE_DIR}/exc.o"
+    DEPENDS "${T2D_TABLE_FIXTURE_SOURCES}/exc.cpp"
+    COMMENT "Compiling the code table fixture exc.cpp (with exceptions)")
+list(APPEND T2D_TABLE_FIXTURE_OBJECTS "${T2D_TABLE_FIXTURE_DIR}/exc.o")
+
 add_custom_target(t2d_table_fixtures DEPENDS ${T2D_TABLE_FIXTURE_OBJECTS})
 
 # The object reader, the table format, and the merge that lets one table replace another's symbols.

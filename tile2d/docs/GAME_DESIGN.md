@@ -691,7 +691,7 @@
   实跑过（`0 error(s)`）。⑤ **修 bug**：同一份 vague linkage 定义被 GCC 吐成两份不同机器码（253 / 744 字节）时，
   旧的按"组内位置"去重会把一份的重定位写进另一份——Release 包启动即报 "a relocation runs past the section"；
   现在按**组签名 + 节名 + 字节**认同一份定义，被丢掉的拷贝连同重定位一起丢，越界重定位直接让**构建失败**。
-  ⑥ **界面文本跟着包走**：`assets/text/ui.ecfg` 优先从可执行文件旁边读。单测 `test_code_table` 10 → **13 → 21 用例 /
+  ⑥ **界面文本跟着包走**：`assets/text/ui.ecfg` 优先从可执行文件旁边读。单测 `test_code_table` 10 → **13 → 31 用例 /
   269 断言**、`test_mine_table`（3 用例 / 17 断言）；Tile2D 套件 23 → **25 个测试**全绿（debug/release/asan/tsan
   25/25、no-renderer 11/11、Ore 13/13）；演示模组 `mods/demo_mod/mod.codetab` 顶掉本体一个函数，输出从
   `Mine, unmodified` 变成 `Mine, modded` |

@@ -655,6 +655,233 @@ T2D_TEST(a_destroyed_image_runs_the_destructors_it_registered) {
     T2D_CHECK_EQ(dtor_host_flag, 1);
 }
 
+
+extern "C" {
+/// A name this test program exports and one of the fixtures defines as well: what "the program already
+/// provides this" looks like (docs/ABI.md H6).
+int host_owned() { return 1; }
+}
+
+T2D_TEST(a_32_bit_absolute_address_that_does_not_fit_is_refused) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("abs32")}, "abs32", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    // A table is placed by mmap, so the address never fits 32 bits: writing it anyway is a silently
+    // wrong pointer, and the module is refused instead (docs/ABI.md H5).
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK(says(report.errors, "does not fit the 32 bit field"));
+    T2D_CHECK(image.find("abs32_probe") == nullptr);
+}
+
+T2D_TEST(constructors_run_in_priority_order_not_section_order) {
+    std::string error;
+    // The object with the *plain* .init_array comes first, the one with .init_array.00101 second - which
+    // is the order that used to run the priority-101 constructor last (docs/ABI.md H7).
+    std::optional<CodeTable> table = pack({object_of("ctor_default"), object_of("ctor_priority")}, "ctors", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK_EQ(report.init_calls, 2u);
+    const auto probe = image.function<int()>("ctor_probe");
+    T2D_REQUIRE(probe != nullptr);
+    // 14 = "A,D": the priority the section name asks for is what decides, as in a link.
+    T2D_CHECK_EQ(probe(), 14);
+}
+
+T2D_TEST(two_bodies_of_one_definition_are_reported) {
+    std::string error;
+    std::optional<CodeTable> table =
+        pack({object_of("twin_small"), object_of("twin_big"), object_of("twin_caller")}, "twins", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    // The two copies are not the same machine code, which a compiler is allowed to do with a vague
+    // linkage function: one of them wins, so the other module's calls do not do what it was compiled to
+    // do. Said out loud rather than left as a mystery (docs/ABI.md H3).
+    // One line for the pair, with the names in it: the same sentence per symbol would be a page of it.
+    T2D_CHECK(says(report.warnings, "both define these and the two bodies differ"));
+    T2D_CHECK(says(report.warnings, "_Z10twin_widthi"));
+    T2D_CHECK(says(report.warnings, "definition(s) with a different body"));
+}
+
+T2D_TEST(a_module_that_defines_what_the_program_provides_is_reported) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("host_name")}, "host_name", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK(says(report.warnings, "which the running program provides too"));
+    // The table's own call goes to the module, and that is the part that works.
+    const auto owned = image.function<int()>("host_owned");
+    T2D_REQUIRE(owned != nullptr);
+    T2D_CHECK_EQ(owned(), 7);
+    // The program's own call was bound before the merge and still answers with its own definition.
+    T2D_CHECK_EQ(host_owned(), 1);
+}
+
+T2D_TEST(a_vtable_that_disagrees_about_its_slots_is_refused) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("machine"), object_of("factory")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("machine"), object_of("factory")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+
+    const std::string vtable = "_ZTVN4shop7MachineE";
+    const auto index_of = [](const CodeTable& table, std::string_view name) -> std::optional<usize> {
+        for (usize index = 0; index < table.symbols.size(); ++index) {
+            if (table.symbols[index].defined() && table.symbols[index].name == name) return index;
+        }
+        return std::nullopt;
+    };
+    // One slot of the mod's vtable names another function than the game's does. A virtual call is an
+    // index into that table, so the mod would call something else than it thinks it calls (H2).
+    const std::optional<usize> slot_symbol = index_of(*mod, vtable);
+    const std::optional<usize> other_symbol = index_of(*mod, "_ZN4shop11speed_bonusEv");
+    T2D_REQUIRE(slot_symbol.has_value());
+    T2D_REQUIRE(other_symbol.has_value());
+    const u32 vtable_section = mod->symbols[*slot_symbol].section;
+    const u64 vtable_value = mod->symbols[*slot_symbol].value;
+    usize changed = 0;
+    for (CodeTableRelocation& relocation : mod->relocations) {
+        if (relocation.section != vtable_section || relocation.offset < vtable_value) continue;
+        if (relocation.symbol == *other_symbol) continue;
+        relocation.symbol = static_cast<u32>(*other_symbol);
+        ++changed;
+        break;
+    }
+    T2D_CHECK_EQ(changed, 1u);
+
+    CodeImage image;
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK(says(report.errors, "the vtable for '_ZTVN4shop7MachineE'"));
+    T2D_CHECK_FALSE(report.modules[1].ok);
+
+    // And a vtable with a different number of entries: the class is not the same class in the two
+    // builds, which no amount of slot comparison can repair.
+    std::optional<CodeTable> game2 = pack({object_of("machine"), object_of("factory")}, "game", &error);
+    std::optional<CodeTable> mod2 = pack({object_of("machine"), object_of("factory")}, "mod", &error);
+    T2D_REQUIRE(game2.has_value());
+    T2D_REQUIRE(mod2.has_value());
+    const std::optional<usize> grown = index_of(*mod2, vtable);
+    T2D_REQUIRE(grown.has_value());
+    mod2->symbols[*grown].size += 8;
+    CodeImage image2;
+    image2.add(std::move(*game2));
+    image2.add(std::move(*mod2));
+    const CodeImageReport& report2 = image2.load();
+    T2D_CHECK_FALSE(report2.clean());
+    T2D_CHECK(says(report2.errors, "the vtable for '_ZTVN4shop7MachineE' has"));
+    T2D_CHECK(says(report2.errors, "the class is not the same class in the two builds"));
+}
+
+T2D_TEST(a_throw_inside_a_table_finds_its_handler) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("exc")}, "exc", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    // Caught inside the table: the frame descriptions the module brought were registered, so the
+    // unwinder can walk the frame that raised it (docs/ABI.md H1 - this used to be terminate).
+    const auto catcher = image.function<int()>("exc_catcher");
+    T2D_REQUIRE(catcher != nullptr);
+    T2D_CHECK_EQ(catcher(), 7);
+
+    // And caught by the program that loaded it: the unwind walks out through the table's frames.
+    int caught = 0;
+    const auto thrower = image.function<void()>("exc_thrower");
+    T2D_REQUIRE(thrower != nullptr);
+    try {
+        thrower();
+    } catch (int value) {
+        caught = value;
+    }
+    T2D_CHECK_EQ(caught, 7);
+}
+
+T2D_TEST(an_absolute_symbol_is_its_value) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("abs_sym")}, "abs_sym", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    // The object carried the number; a linker would fold it in, and the runtime does the same
+    // instead of reporting a symbol nobody defines (docs/ABI.md H11).
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    const auto probe = image.function<unsigned long long()>("abs_probe");
+    T2D_REQUIRE(probe != nullptr);
+    T2D_CHECK_EQ(probe(), 0x1234ull);
+}
+
+T2D_TEST(an_absolute_symbol_where_an_address_is_wanted_is_refused) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("abs_sym")}, "abs_sym", &error);
+    T2D_REQUIRE(table.has_value());
+    // The fixture's own relocation writes the value, which is what an absolute symbol is for. Asking it
+    // for an *address* is the case a linker would refuse, and so does the runtime: a number written
+    // where an address belongs is a call into nowhere.
+    std::optional<usize> constant;
+    for (usize index = 0; index < table->symbols.size(); ++index) {
+        if (table->symbols[index].absolute && table->symbols[index].name == "abs_constant") constant = index;
+    }
+    T2D_REQUIRE(constant.has_value());
+    usize changed = 0;
+    for (CodeTableRelocation& relocation : table->relocations) {
+        relocation.symbol = static_cast<u32>(*constant);
+        relocation.type = kRelocationPc32;
+        ++changed;
+        break;
+    }
+    T2D_CHECK_EQ(changed, 1u);
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK(says(report.errors, "is an absolute symbol"));
+    T2D_CHECK(image.find("abs_probe") == nullptr);
+}
+
+T2D_TEST(a_protected_definition_says_its_override_may_not_reach_every_caller) {
+    std::string error;
+    std::optional<CodeTable> game = pack({object_of("base"), object_of("caller")}, "game", &error);
+    std::optional<CodeTable> mod = pack({object_of("protected_mod")}, "mod", &error);
+    T2D_REQUIRE(game.has_value());
+    T2D_REQUIRE(mod.has_value());
+    CodeImage image;
+    image.add(std::move(*game));
+    image.add(std::move(*mod));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_REQUIRE(report.overrides.size() == 1u);
+    T2D_CHECK(says(report.warnings, "has protected visibility"));
+}
+
+T2D_TEST(a_section_that_asks_for_more_alignment_than_a_page_is_refused) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("aligned")}, "aligned", &error);
+    T2D_REQUIRE(table.has_value());
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK(says(report.errors, "byte alignment"));
+    T2D_CHECK(image.find("aligned_probe") == nullptr);
+}
+
 T2D_TEST(a_mod_replaces_a_virtual_method_and_the_vtable_follows_it) {
     std::string error;
     // The game's own half: the class, the object and the call that goes through the vtable.

@@ -61,6 +61,11 @@ struct ObjectSymbol {
     std::string name;
     ObjectSymbolKind kind = ObjectSymbolKind::None;
     ObjectSymbolBinding binding = ObjectSymbolBinding::Local;
+    /// 0 default, 1 internal, 2 hidden, 3 protected - the object format's own numbers.
+    u8 visibility = 0;
+    /// An absolute symbol is a number rather than an address: the linker would fold it in, so a table
+    /// keeps its value instead of looking for something to place (docs/ABI.md H11).
+    bool absolute = false;
     /// Index into ObjectFile::sections, or kInvalidId when the symbol is undefined here (it is
     /// something the object expects to find elsewhere).
     u32 section = kInvalidId;

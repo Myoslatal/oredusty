@@ -71,6 +71,10 @@ struct CodeTableSymbol {
     u32 section = kInvalidId;   ///< kInvalidId: defined elsewhere, or not at all
     ObjectSymbolKind kind = ObjectSymbolKind::None;
     ObjectSymbolBinding binding = ObjectSymbolBinding::Local;
+    /// See ObjectSymbol: 0 default, 1 internal, 2 hidden, 3 protected.
+    u8 visibility = 0;
+    /// A number rather than an address; its value is what a relocation against it is filled with.
+    bool absolute = false;
     u64 value = 0;              ///< offset inside its section
     u64 size = 0;
 
@@ -329,6 +333,7 @@ public:
 private:
     struct Definition {
         usize module = 0;
+        usize symbol = 0;   ///< which symbol of that module, so two definitions can be compared
         void* address = nullptr;
         ObjectSymbolBinding binding = ObjectSymbolBinding::Global;
     };
@@ -351,6 +356,9 @@ private:
         u8* got = nullptr;
         std::vector<u8*> section_address;
         std::vector<u8*> symbol_address;
+        /// The frame descriptions this module registered, in the order they were registered, so that
+        /// destroying the image takes them back out before the memory they describe goes away.
+        std::vector<void*> frames;
         usize got_count = 0;   ///< how many relocations need a slot in the global offset table
         usize got_used = 0;
         bool failed = false;
@@ -361,6 +369,9 @@ private:
     [[nodiscard]] bool requirements_met(const CodeTable& table, std::string* error) const;
     void resolve_symbols();
     void relocate(Module& module);
+    /// Registers every frame description the module brought, so that a throw inside it can be walked
+    /// back out: a table is placed by hand, and an unwinder is not told about code by itself.
+    void register_frames(Module& module);
     void run_initialisers();
     /// Drops what a module that failed had defined: a symbol table that still offers it would be
     /// offering code that cannot run.

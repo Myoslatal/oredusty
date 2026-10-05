@@ -363,6 +363,18 @@ int main() {
 #else
     T2D_ABI_ABSENT("__SANITIZE_THREAD__");
 #endif
+#ifdef _FORTIFY_SOURCE
+    std::printf("_FORTIFY_SOURCE=%s\n", T2D_ABI_TEXT(_FORTIFY_SOURCE));
+#else
+    std::printf("_FORTIFY_SOURCE=0\n");
+#endif
+    // Control-flow enforcement: code built for it starts every function with an instruction a machine
+    // that enforces it requires, so two builds that disagree are not interchangeable (docs/ABI.md H12).
+#ifdef __CET__
+    std::printf("__CET__=%s\n", T2D_ABI_TEXT(__CET__));
+#else
+    std::printf("__CET__=0\n");
+#endif
 
     // What the code needs of the machine. Absent means "not required", so this list only grows.
 #ifdef __SSE4_2__
@@ -455,7 +467,7 @@ int main() {
 [[nodiscard]] bool fact_may_differ(std::string_view name) {
     for (const char* allowed : {"NDEBUG", "__EXCEPTIONS", "__GXX_RTTI", "__OPTIMIZE__", "__OPTIMIZE_SIZE__",
                                 "_GLIBCXX_ASSERTIONS", "__SANITIZE_ADDRESS__", "__SANITIZE_THREAD__",
-                                "_GLIBCXX_SANITIZE_VECTOR"}) {
+                                "_GLIBCXX_SANITIZE_VECTOR", "_FORTIFY_SOURCE"}) {
         if (name == allowed) return true;
     }
     return false;
@@ -823,26 +835,10 @@ struct SurfaceCheck;
 /// published surface is refused here, where its author can do something about it, rather than when
 /// somebody tries to run it.
 [[nodiscard]] bool check_before_writing(const CodeTable& table, const Options& options, std::string& error) {
-    // A table's code has no frame descriptions, so an exception raised inside one never finds its
-    // handler: the process ends. Measured - even a try/catch inside a single function of a single
-    // module terminates (docs/ABI.md H1) - so a build that produced exception machinery is stopped
-    // here, where the author can still do something about it. --exceptions is the author saying they
-    // know, and then it is said once rather than refused.
-    for (const CodeTableSection& section : table.sections) {
-        if (!section.name.starts_with(".gcc_except_table")) continue;
-        if (options.exceptions) {
-            std::cerr << std::format("codetab: '{}' carries '{}': a throw inside this table ends the "
-                                     "process instead of finding its handler (docs/ABI.md H1)\n",
-                                     table.id, section.name);
-            break;
-        }
-        error = std::format("'{}' carries '{}': it can throw or catch, and a code table has no frame "
-                            "descriptions, so a throw inside it ends the process instead of finding its "
-                            "handler. Compile it without exceptions (the toolchain's default), or pass "
-                            "--exceptions to record that you know (docs/ABI.md H1).",
-                            table.id, section.name);
-        return false;
-    }
+    // A table that carries exception machinery is fine: the runtime registers the frame descriptions a
+    // table brings, so a throw inside one is walked back out to its handler (docs/ABI.md H1). What is
+    // *not* fine is a table that can throw when it was built without them - and that cannot happen,
+    // because the compiler refuses to compile a try block without -fexceptions.
     if (options.api_surface.empty()) return true;
     std::optional<ApiSurface> surface = ApiSurface::load(options.api_surface, &error);
     if (!surface.has_value()) return false;
