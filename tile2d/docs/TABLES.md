@@ -201,7 +201,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 * `engine.api`：公开面清单（82 个符号：A 层 38 / B 层 44），随可执行文件走。
 * `games/mine/src/main.cpp`：**启动器**——收集表（`mine.codetab`、`--table`、`packs/*.codetab`）、合并、
   校验公开面与版本、调用入口符号 `mine_game_main`。
-* 测试 `t2d/tests/test_code_table.cpp`：**21 用例 / 274 断言**，fixture 由构建过程用真实编译器编出目标文件；
+* 测试 `t2d/tests/test_code_table.cpp`：**21 用例 / 275 断言**，fixture 由构建过程用真实编译器编出目标文件；
   其中 7 个用例是 ABI 的（指纹相同即合并、指纹不同即拒绝并指名、头文件改动、CPU 特性、没有记录、工具链端到端、
   销毁映像跑析构）。
 * 测试 `games/mine/tests/test_mine_table.cpp`：**3 用例 / 17 断言**——**游戏自己的代码进表**：
@@ -212,7 +212,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 | 证明了什么 | 数字 |
 |---|---|
-| 表能被读回、字节一致 | 往返用例 120 断言（整个 `test_code_table` 274 断言） |
+| 表能被读回、字节一致 | 往返用例 120 断言（整个 `test_code_table` 275 断言） |
 | 合并后能跑 | `use_base()` = 11 |
 | **模组覆盖本体函数，本体的调用改道** | 合并模组后 `use_base()` = **101**；报告 1 条覆盖（`base_value`，my_mod ← vanilla） |
 | 覆盖后还能调用原件（包装） | `find_previous("base_value")` = 10 |

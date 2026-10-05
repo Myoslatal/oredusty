@@ -7,6 +7,7 @@
 
 #include <support/test_support.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -568,6 +569,12 @@ T2D_TEST(a_module_is_measured_against_the_games_headers_too) {
     T2D_CHECK_MSG(report2.clean(), "{}", report2.first_error());
     T2D_REQUIRE(report2.modules.size() == 2u);
     T2D_CHECK(report2.modules[1].abi_match);
+    // Two references can find the same difference (the engine's record and the game's table were built
+    // the same way); it is reported once.
+    std::vector<std::string> warnings = report2.warnings;
+    std::sort(warnings.begin(), warnings.end());
+    T2D_CHECK_EQ(std::unique(warnings.begin(), warnings.end()) - warnings.begin(),
+                 static_cast<std::ptrdiff_t>(report2.warnings.size()));
 }
 
 T2D_TEST(the_toolchain_records_what_a_build_is_and_two_of_them_agree) {

@@ -1307,7 +1307,11 @@ const CodeImageReport& CodeImage::load() {
             } else {
                 report_.modules[index].abi_match = true;
                 // The same ABI, built differently: said out loud, because "why is this mod different"
-                // should have an answer that is not a mystery.
+                // should have an answer that is not a mystery. Both references can report the same
+                // difference - the engine's record and the game's table were built the same way - and
+                // saying it twice would be noise.
+                std::sort(differences.begin(), differences.end());
+                differences.erase(std::unique(differences.begin(), differences.end()), differences.end());
                 for (const std::string& difference : differences) {
                     report_.warnings.push_back(std::format("module '{}': {}", module.table.id, difference));
                 }
