@@ -155,6 +155,20 @@ private:
 [[nodiscard]] std::optional<LayerRule> read_layer_rule(std::string_view name, const t2d::EcfgValue& entry,
                                                        std::string* error = nullptr);
 
+/// How deep into a mine something is, as a player counts it: which layer (the first is 1, not 0 - a player
+/// counts from one) and how many layers there are, or 0 for "nothing says".
+struct LayerDepth {
+    u32 number = 1;   ///< the layer, counted from 1
+    /// How many layers the story has, or 0 when nothing says how many: an endless mine has no end, and a
+    /// layer the story does not describe is not one it can count to. A HUD that shows "3/7" shows "3"
+    /// alone in those cases rather than inventing a total.
+    u32 total = 0;
+};
+
+/// The depth of layer \p index in \p rules, for a HUD (app.cpp). A negative index is the first layer:
+/// nothing can be entered before it.
+[[nodiscard]] LayerDepth layer_depth(const LayerRules& rules, i32 index);
+
 /// Reads one "scatter::" entry, the way read_layer_rule reads a "layer::" one. \p layer_name is the
 /// layer it belongs to, for messages. The checks that need the layer's other tables - a tile layer this
 /// map does not have, a floor restriction under a layer with no floor creator - are made by

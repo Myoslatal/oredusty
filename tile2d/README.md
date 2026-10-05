@@ -52,7 +52,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                9 cases / 339 checks  UTF-8, language tables, the line box, the shipped interface strings
+    tests/test_text                9 cases / 343 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_code_table         31 cases / 324 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
@@ -65,7 +65,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     14 cases / 187 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
-    games/mine/tests/test_layer_rules    22 cases / 712 checks  the story's layers in data: the size, the floor creator, the scatter generator, and the layer a world enters
+    games/mine/tests/test_layer_rules    23 cases / 725 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
     games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   13 cases / 198 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -522,6 +522,12 @@ floor first, the scatters after it.
   out loud (`LayerSpec::problems` → the build report → the screen). Where they land comes from the
   layer's own dice, so the same seed scatters the same way and another seed moves the ore without
   changing how much of it there is.
+
+The world view says which layer the player is on, top left, as `LAYER 1/2` (`层1/2` in Chinese):
+counted **from one**, the way a player counts, with the story's own layer count after the slash — and
+only the layer alone when nothing says how many there are (an endless mine, or a layer past the end of
+the story). The line at the bottom is the engine's numbering, from zero, which is what `--mine-layer`
+and a bug report use.
 
 Ore is its own kind of thing: `ContentKind::Ore` (appended, so an older save table still reads) and
 `mine::types::SingleOre`, a scene plot whose one addition is `is_ore()` — one cell per ore, which is

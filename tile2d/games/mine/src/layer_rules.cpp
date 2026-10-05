@@ -97,6 +97,17 @@ ConstSpan<LayerRule> LayerRules::rules() const {
     return ConstSpan<LayerRule>(rules_.data(), rules_.size());
 }
 
+LayerDepth layer_depth(const LayerRules& rules, i32 index) {
+    LayerDepth depth;
+    depth.number = static_cast<u32>(index < 0 ? 0 : index) + 1u;
+    // The total is only a total when the layer being looked at is one the story describes: past the end
+    // of the story there is nothing to count to, and a HUD that said "6/3" would be reading a bug.
+    if (index >= 0 && rules.at(static_cast<usize>(index)) != nullptr) {
+        depth.total = static_cast<u32>(rules.size());
+    }
+    return depth;
+}
+
 std::optional<LayerRule> read_layer_rule(std::string_view name, const t2d::EcfgValue& entry, std::string* error) {
     const auto fail = [&](std::string message) -> std::optional<LayerRule> {
         if (error != nullptr) *error = std::move(message);

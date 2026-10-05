@@ -1852,11 +1852,36 @@ void MineApp::draw_world_screen() {
 }
 
 void MineApp::draw_world_overlay() {
+    if (!world_.has_layer()) return;
     const t2d::Aabb2 area = world_area();
     const f32 padding = 8.0f * unit_;
     const f32 line = line_for(body_px_);
     const f32 inset = 4.0f * unit_;
     const f32 cell = world_camera_.zoom();
+
+    // How deep the player is, in the top left corner: the one piece of game state this interface has so
+    // far, and the only thing on it a player reads (the rest of the game's own interface is the
+    // designer's, docs/GAME_DESIGN.md section 7). **Counted from one**, the way a player counts, and with
+    // the story's own layer count when it has one - an endless mine has no end to count to, so it shows
+    // the layer alone (layer_rules.h). It sits on its own panel, over the layer, because a map must not
+    // be able to paint the player's own state out.
+    //
+    // The line at the bottom is the engine's: it names the layer the way the code and --mine-layer do
+    // (from zero), which is what a bug report needs. Two numberings on purpose, one per reader.
+    const LayerDepth depth = layer_depth(content_.report().layers, world_.layer_index());
+    const std::string where =
+        depth.total > 0 ? format_localized(locale_.text("world.depth"), depth.number, depth.total)
+                        : format_localized(locale_.text("world.depth.endless"), depth.number);
+    t2d::TextStyle depth_style;
+    depth_style.size_px = body_px_;
+    const f32 where_width = text_->measure(where, fonts_, depth_style).width;
+    const t2d::Aabb2 badge{t2d::Vec2{area.min.x + padding, area.min.y + padding},
+                           t2d::Vec2{area.min.x + padding + where_width + padding * 2.0f,
+                                     area.min.y + padding + line + inset}};
+    batch_->draw_rect(badge, kPalette.panel_fill);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{badge.min.x, badge.min.y}, t2d::Vec2{badge.max.x, badge.min.y + 2.0f}},
+                      kPalette.panel_edge);
+    draw_line(badge.min.x + padding, badge.min.y + inset, body_px_, kPalette.accent, where);
 
     // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
     if (world_pointer_.has_value()) {

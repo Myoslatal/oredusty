@@ -1167,4 +1167,36 @@ T2D_TEST(the_story_fixture_the_documents_show_loads_and_is_two_layers) {
     }
 }
 
+T2D_TEST(the_depth_a_hud_shows_is_counted_the_way_a_player_counts) {
+    LayerRules rules;
+    for (const std::string_view name : {"entrance", "shaft", "deep"}) {
+        LayerRule rule;
+        rule.name = std::string(name);
+        rules.add(std::move(rule));
+    }
+
+    // From one, not from zero: the first layer a player stands on is layer 1, and the count is how many
+    // layers the story has.
+    T2D_CHECK_EQ(layer_depth(rules, 0).number, 1u);
+    T2D_CHECK_EQ(layer_depth(rules, 0).total, 3u);
+    T2D_CHECK_EQ(layer_depth(rules, 1).number, 2u);
+    T2D_CHECK_EQ(layer_depth(rules, 1).total, 3u);
+    T2D_CHECK_EQ(layer_depth(rules, 2).number, 3u);
+    T2D_CHECK_EQ(layer_depth(rules, 2).total, 3u);
+    // Nothing can be entered before the first layer, so a negative index reads as the first one.
+    T2D_CHECK_EQ(layer_depth(rules, -1).number, 1u);
+
+    // Past the end of the story there is no total to show: a HUD that said "4/3" would be reading a bug,
+    // and the story cannot say how many layers there are below the last one it describes.
+    T2D_CHECK_EQ(layer_depth(rules, 3).number, 4u);
+    T2D_CHECK_EQ(layer_depth(rules, 3).total, 0u);
+
+    // An endless mine has no end: nothing describes its layers, so there is nothing to count to.
+    const LayerRules endless;
+    T2D_CHECK_EQ(layer_depth(endless, 0).number, 1u);
+    T2D_CHECK_EQ(layer_depth(endless, 0).total, 0u);
+    T2D_CHECK_EQ(layer_depth(endless, 7).number, 8u);
+    T2D_CHECK_EQ(layer_depth(endless, 7).total, 0u);
+}
+
 T2D_TEST_MAIN
