@@ -90,9 +90,11 @@ void write_trampoline(u8* stub, u64 target) {
 }
 
 /// How many bytes a relocation writes, or nothing for a type this runtime does not apply - which it
-/// refuses by name when a table that carries one is loaded, so how wide it is never comes up.
+/// refuses by name when a table that carries one is loaded, so how wide it is never comes up. The
+/// object format's own "no relocation" writes no bytes at all, and it is a type the runtime knows.
 [[nodiscard]] std::optional<u64> relocation_width(u32 type) {
     switch (type) {
+        case kRelocationNone: return 0;
         case kRelocationAbsolute64: return 8;
         case kRelocationAbsolute32:
         case kRelocationAbsolute32Signed:
@@ -551,7 +553,9 @@ std::optional<CodeTable> CodeTable::from_objects(const std::vector<ObjectFile>& 
     // that got this wrong is a package that dies at startup - so it is a build that fails instead.
     for (const CodeTableRelocation& relocation : table.relocations) {
         const std::optional<u64> width = relocation_width(relocation.type);
-        if (!width.has_value()) continue;
+        // Nothing to check for a type the runtime does not apply (it refuses the table by name when it
+        // is loaded) or for the one that writes no bytes at all.
+        if (!width.has_value() || *width == 0) continue;
         const CodeTableSection& section = table.sections[relocation.section];
         if (relocation.offset + *width > section.data.size()) {
             return fail(std::format("a relocation in '{}' + {:#x} runs past the {} bytes of that section",
@@ -1284,6 +1288,11 @@ void CodeImage::relocate(Module& module) {
     };
     for (const CodeTableRelocation& relocation : module.table.relocations) {
         if (module.failed) return;
+        // "No relocation" is a relocation: it writes nothing, so there is nothing to resolve and
+        // nothing to refuse. It is what a linker writes where it dropped a patch - the empty symbol at
+        // index zero is the one it names, and nothing defines that, so asking for it here would refuse
+        // a table that is exactly right (docs/TABLES.md §2, docs/ABI.md H3).
+        if (relocation.type == kRelocationNone) continue;
         if (relocation.section >= module.section_address.size() || module.section_address[relocation.section] == nullptr) {
             fail(std::format("a relocation names section {}, which was not placed", relocation.section));
             return;

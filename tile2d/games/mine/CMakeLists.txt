@@ -47,6 +47,8 @@ target_include_directories(mine_mod_sdk INTERFACE
 #
 # The table is compiled by **the toolchain**, not by this build system, and that is the point: what the
 # toolchain compiles with *is* the ABI, and a table it builds carries the record of it (docs/ABI.md).
+# It also links what it compiled - a partial link, `-r` - before packing it: the game is one program,
+# and a program has one copy of an inline function rather than one per translation unit (docs/TABLES.md §2).
 # The engine's own record is written by the same tool (engine.abi, below), so "was this mod built for
 # this engine" is answered by what the compiler said rather than by a version string.
 set(MINE_TABLE_NAME "mine.codetab")

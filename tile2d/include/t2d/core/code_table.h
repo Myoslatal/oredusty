@@ -49,6 +49,12 @@ inline constexpr u32 kCodeTableArchX86_64 = 1;
 
 /// Relocation types the runtime applies. The numbers are the object format's own; one it does not
 /// know is refused with a message naming it rather than written as if it were understood.
+///
+/// The first of them writes nothing, and that is what it is for: it is the object format's own "no
+/// relocation", and it is what a linker leaves behind where it dropped one - a partial link folds the
+/// copies of an inline function and marks the patches that went with them this way. A table that came
+/// through a link carries some, and they are applied by not being applied (docs/TABLES.md).
+inline constexpr u32 kRelocationNone = 0;
 inline constexpr u32 kRelocationAbsolute64 = 1;
 inline constexpr u32 kRelocationPc32 = 2;
 inline constexpr u32 kRelocationPlt32 = 4;

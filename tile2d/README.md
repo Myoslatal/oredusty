@@ -54,7 +54,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
     tests/test_text                9 cases / 343 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
-    tests/test_code_table         31 cases / 324 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
+    tests/test_code_table         33 cases / 333 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases /1265 checks  framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
@@ -382,6 +382,7 @@ definition of a symbol replaces the game's everywhere, including inside the game
 its vtables.
 
     codetab build <source.cpp>... -o <out.codetab> [--id mine --name Mine --version 1.0 --requires engine@1.0]
+                                                   # compiles, links the objects into one program, then packs
     codetab pack  <object.o>...   -o <out.codetab>   # a build system that owns its own flags packs, not builds
     codetab dump  <table.codetab>                    # sections, symbols, relocations, metadata
     codetab api   --surface engine.api <table.codetab>...  # what it asks the engine for, and whether it may
@@ -395,7 +396,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 772 sections, 2 485 symbols, 7 600 relocations (release)
+        mine.codetab         the game: 686 sections, 2 189 symbols, 8 672 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -405,16 +406,18 @@ links the framework with `--whole-archive` and exports its own symbols.
     ./mine_game --table mods/demo_mod/mod.codetab ...          # 'mine_game_banner' from 'demo_mod' replaced 'mine'
                                                                #   tables: 2 module(s), 1 override(s) ... Mine, modded
 
-What that buys, measured on real compiler output (`test_code_table`, 31 cases / 324 checks):
+What that buys, measured on real compiler output (`test_code_table`, 33 cases / 333 checks):
 
 * a mod replacing a function the game defined: the game's own call goes to the mod (`use_base()` 11 → **101**),
   and `find_previous()` still reaches the original, so a mod can wrap rather than only replace;
 * a mod replacing a **virtual method**: the vtable's entry is a relocation, so the game's virtual call goes
   to the mod too (`machine_output()` 25 → **97**) — no patching, no vtable surgery;
 * weak symbols (inline functions, templates, vtables, typeinfo) **coalesce** instead of colliding, which is
-  what keeps one C++ program one program — and when a compiler emits the *same* definition as two different
-  bodies, as it is allowed to, both are kept and the first is what the symbol means, with the dropped copy's
-  relocations going with it;
+  what keeps one C++ program one program. A compiler is allowed to specialize the *same* definition differently
+  in each translation unit (GCC does it to libstdc++'s `std::format` sinks at `-O3`: 253 and 744 bytes for one
+  function), so `codetab build` links its objects before packing them — one program, one copy, which took the
+  game's own table from 845 to 686 sections and left the load with nothing to report. `codetab pack` packs
+  objects it did not compile, keeps what it was given, and the load says when two bodies disagree;
 * a table calling back into the engine: undefined symbols are resolved from the running program — including
   when the call is more than 2 GiB away, which is what the stub beside the call is for;
 * a module that cannot be relocated is reported and skipped, never half loaded;
@@ -615,7 +618,7 @@ separately.
   `text`, `shot`, `quit`), and `ok` means the frame loop has *applied* it, so a screenshot taken after a reply
   is a screenshot of the result. This is how every screenshot below was taken, including the headless ones.
 
-* **Code tables are merged and run for real.** `test_code_table` (31 cases / 324 checks) reads objects the
+* **Code tables are merged and run for real.** `test_code_table` (33 cases / 333 checks) reads objects the
   build compiled from `tests/data/tables/`, packs them into tables, merges two tables in memory and calls
   into the result: a mod's definition of a function the game defined takes over the game's own call (11 → 101),
   a mod's definition of a virtual method takes over the game's virtual call (25 → 97), weak vtable/typeinfo

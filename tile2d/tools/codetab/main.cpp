@@ -121,7 +121,7 @@ struct Options {
 void usage() {
     std::cout << "codetab - pack compiled C++ into a code table, and read one back\n"
                  "\n"
-                 "  codetab build <source.cpp>... -o <out.codetab> [options]   compile, then pack\n"
+                 "  codetab build <source.cpp>... -o <out.codetab> [options]   compile, link, then pack\n"
                  "  codetab pack <object.o>... -o <out.codetab> [options]        pack what is there\n"
                  "  codetab dump <table.codetab>                                 what is in one\n"
                  "  codetab api --surface <engine.api> <table.codetab>...        check it against the engine\n"
@@ -745,6 +745,26 @@ void record_abi(CodeTable& table, const Options& options, const std::vector<std:
 struct SurfaceCheck;
 [[nodiscard]] bool check_before_writing(const CodeTable& table, const Options& options, std::string& error);
 
+/// One object out of many, the way a linker makes one. \c -r is a partial link: nothing is placed and
+/// every relocation is still there to be filled in - which is what a table is made of, and what keeps
+/// a call inside a table a call through a name that a mod merged later can replace (docs/TABLES.md §2).
+/// What it does decide is which copy of a vague linkage definition survives. A build is **one
+/// program**, and a program has one copy of an inline function, not one per translation unit: packing
+/// the objects as they came out of the compiler left 55 copies of 9 functions in the game's own table,
+/// with different machine code in each - the compiler is free to specialize a body per translation unit
+/// - and the load then had to pick one and report that the others differ (docs/ABI.md H3).
+[[nodiscard]] bool link_objects(const Options& options, const std::vector<std::string>& objects,
+                                const std::filesystem::path& output, std::string& error) {
+    std::string command = quote(options.compiler) + " -r -o " + quote(output.string());
+    for (const std::string& object : objects) command += " " + quote(object);
+    if (options.verbose) std::cout << command << "\n";
+    if (std::system(command.c_str()) != 0) {
+        error = std::format("the linker refused the {} object(s) this build made", objects.size());
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] int build(const Options& options) {
     if (options.sources.empty()) {
         std::cerr << "codetab build: no source files were given\n";
@@ -773,7 +793,7 @@ struct SurfaceCheck;
     for (const std::string& include : options.includes) { flags.push_back("-I"); flags.push_back(include); }
     for (const std::string& define : options.defines) { flags.push_back("-D"); flags.push_back(define); }
 
-    std::vector<ObjectFile> objects;
+    std::vector<std::string> object_paths;
     std::vector<std::string> headers;
     for (const std::string& source : options.sources) {
         const std::filesystem::path object = work / (std::filesystem::path(source).stem().string() + ".o");
@@ -790,18 +810,29 @@ struct SurfaceCheck;
             std::cerr << std::format("codetab build: the compiler refused '{}' (exit {})\n", source, status);
             return 1;
         }
-        std::string error;
-        std::optional<ObjectFile> read = ObjectFile::load(object.string(), &error);
-        if (!read.has_value()) {
-            std::cerr << std::format("codetab build: {}\n", error);
-            return 1;
-        }
-        read->source = source;
-        objects.push_back(std::move(*read));
+        object_paths.push_back(object.string());
         for (std::string& header : headers_in_depfile(depfile.string())) headers.push_back(std::move(header));
     }
 
     std::string error;
+    // One program out of the objects, before anything is packed: what a linker decides about which copy
+    // of a definition survives is decided here, at build time, where the author can see it.
+    const std::filesystem::path linked = work / "linked.o";
+    if (!link_objects(options, object_paths, linked, error)) {
+        std::cerr << std::format("codetab build: {}\n", error);
+        return 1;
+    }
+    std::optional<ObjectFile> one = ObjectFile::load(linked.string(), &error);
+    if (!one.has_value()) {
+        std::cerr << std::format("codetab build: {}\n", error);
+        return 1;
+    }
+    // What the objects were compiled from is a list of sources, not one file: what an error about the
+    // linked object can name is the table it is being packed into.
+    one->source = options.output;
+    const std::size_t compiled = object_paths.size();
+    const std::vector<ObjectFile> objects = {std::move(*one)};
+
     std::optional<CodeTable> table = CodeTable::from_objects(objects, &error);
     if (!table.has_value()) {
         std::cerr << std::format("codetab build: {}\n", error);
@@ -821,9 +852,9 @@ struct SurfaceCheck;
         return 1;
     }
     if (!options.keep) std::filesystem::remove_all(work, code);
-    std::cout << std::format("{}: {} object(s) -> {} section(s), {} symbol(s), {} relocation(s), {} overridable "
-                             "name(s){}\n",
-                             options.output, objects.size(), table->sections.size(), table->symbols.size(),
+    std::cout << std::format("{}: {} object(s) linked into one -> {} section(s), {} symbol(s), {} "
+                             "relocation(s), {} overridable name(s){}\n",
+                             options.output, compiled, table->sections.size(), table->symbols.size(),
                              table->relocations.size(), table->overridable_symbols().size(), built_as(*table));
     return 0;
 }

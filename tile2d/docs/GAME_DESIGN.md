@@ -744,7 +744,7 @@
   所有重定位。于是"模组覆盖本体函数"与"模组覆盖虚函数、本体的虚调用改道"都成立（实测 11 → 101、25 → 97）。
   设计、边界与实测数字：`docs/TABLES.md`；公开面与版本规则：`docs/ENGINE_API.md`。
 * `[已实现]` **整块本体进表，可执行文件变启动器（游戏）**：`mine.codetab` 里是**整个游戏**，由工具链编
-  （release 772 节 / 2485 符号 / 7600 重定位 / 1.00 MiB；debug 5211 / 21410 / 12999 / 3.18 MiB），
+  （release 686 节 / 2189 符号 / 8672 重定位 / 1.07 MiB；debug 5223 / 17780 / 23074 / 3.27 MiB），
   `mine_game` 只做启动：收集表
   （本体表 + `--table` + `packs/*.codetab`）、合并、校验公开面与版本、调用入口符号 `mine_game_main`。演示模组
   `mods/demo_mod/mod.codetab` 顶掉本体一个函数：输出从 `Mine, unmodified` 变成 `Mine, modded`。
@@ -876,8 +876,8 @@
 | M2.4 | **代码表：让 C++ 模组能改本体**（`docs/TABLES.md`、`docs/ENGINE_API.md`）：① **表与工具**——
   `t2d/core/object_file.h` 读 ELF64 目标文件（含 COMDAT 组），`t2d/core/code_table.h` 是表格式 + `CodeImage`
   （放置、合并、重定位、跑 `.init_array`），`tools/codetab` 提供 `build` / `pack` / `dump` / `api` / `dumphead`。
-  ② **整块本体进表**：`mine.codetab`（release 772 节 / 2485 符号 / 7600 重定位 / 1.00 MiB；debug 5211 / 21410 /
-  12999 / 3.18 MiB），由 `codetab build` 编、带构建记录；`mine_game` 变成**启动器**——收集本体表 + `--table` + `packs/*.codetab`、合并、调用入口
+  ② **整块本体进表**：`mine.codetab`（release 686 节 / 2189 符号 / 8672 重定位 / 1.07 MiB；debug 5223 / 17780 /
+  23074 / 3.27 MiB），由 `codetab build` 编、带构建记录；`mine_game` 变成**启动器**——收集本体表 + `--table` + `packs/*.codetab`、合并、调用入口
   符号 `mine_game_main`；引擎留在可执行文件里，`--whole-archive` 链接并导出自己的符号。③ **公开面与版本规则**：
   `engine.api`（82 个符号：A 层 38 / B 层 44）是"模组能碰什么"，`api_verdict` 是"差多远还能用"——清单内跨整个
   major、清单外同版本静默 / ±1 minor 警告后加载 / 再远拒绝、major 不同一律拒绝；三处执行：构建期 `--api`、
@@ -886,8 +886,13 @@
   实跑过（`0 error(s)`）。⑤ **修 bug**：同一份 vague linkage 定义被 GCC 吐成两份不同机器码（253 / 744 字节）时，
   旧的按"组内位置"去重会把一份的重定位写进另一份——Release 包启动即报 "a relocation runs past the section"；
   现在按**组签名 + 节名 + 字节**认同一份定义，被丢掉的拷贝连同重定位一起丢，越界重定位直接让**构建失败**。
-  ⑥ **界面文本跟着包走**：`assets/text/ui.ecfg` 优先从可执行文件旁边读。单测 `test_code_table` 10 → **13 → 31 用例 /
-  269 断言**、`test_mine_table`（3 用例 / 17 断言）；Tile2D 套件 23 → **25 个测试**全绿（debug/release/asan/tsan
+  ⑦ **一个程序只有一份（本轮的修复）**：`codetab build` 在打包前先做一次部分链接（`<compiler> -r`）——一次构建
+  是**一个程序**，链接器留下先到的那份。本体表里 9 个函数的 **55 份死拷贝**不再进表（845 → 686 节，
+  2634 → 2189 符号，1.13 → 1.07 MiB），启动日志不再刷一页 "both define … and the two bodies differ"；
+  同一场景新旧两张表渲染**逐像素相同**（`compare -metric AE` = 0）。部分链接留下的 `R_X86_64_NONE`（76 条）
+  是"没有重定位"，运行时跳过它，而不是去解析它指的 0 号空符号。
+  ⑥ **界面文本跟着包走**：`assets/text/ui.ecfg` 优先从可执行文件旁边读。单测 `test_code_table` 10 → **13 → 31 → 33 用例 /
+  333 断言**、`test_mine_table`（3 用例 / 17 断言）；Tile2D 套件 23 → **25 个测试**全绿（debug/release/asan/tsan
   25/25、no-renderer 11/11、Ore 13/13）；演示模组 `mods/demo_mod/mod.codetab` 顶掉本体一个函数，输出从
   `Mine, unmodified` 变成 `Mine, modded` |
 | M2.3 | **内容包是一个目录**（设计者新要求）+ **本体内容按同一条规则加载**：① **一个内容包 = 一个目录**

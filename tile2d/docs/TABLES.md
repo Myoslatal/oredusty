@@ -53,11 +53,24 @@
 
 **同一份定义不一定只有一份字节**：内联函数、模板实例、vtable 是 `weak`，每个用到它的翻译单元都会吐一份
 COMDAT 拷贝——而编译器**允许**这些拷贝长得不一样（它按各自的上下文决定把多少东西内联进这个函数体；实测
-GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节两个版本，指令都不一样）。所以合并按
-**组签名 + 节名 + 字节**认"这是同一份定义"：字节一致才只留一份，不一致就各留各的，符号仍然先到先得。
+GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节两个版本，指令都不一样）。
+
+**所以 `codetab build` 在打包之前先链接一次**（`<compiler> -r`：部分链接，不放置、不绑定，重定位原样留着，
+上面那条 `-fsemantic-interposition` 的性质因此不变）。一次构建就是**一个程序**，而一个程序只有一份：链接器
+留下先到的那份，所有引用都指向它。实测本体表因此从 **845 节 / 2634 符号 / 8748 重定位**降到
+**686 节 / 2189 符号 / 8672 重定位**（1.13 → 1.07 MiB），少掉的是 9 个函数的 **55 份死拷贝**（约 41 KB）；
+同一场景新旧两张表渲染出来**逐像素相同**（`compare -metric AE` = 0），启动日志少掉整整一页
+`… both define … and the two bodies differ …`（[`ABI.md`](ABI.md) H3）。
+
+`codetab pack` 打包的是**别人编好的**目标文件，工具不声称它们是一个程序，所以它不折叠：合并按
+**组签名 + 节名 + 字节**认"这是同一份定义"，字节一致才只留一份，不一致就各留各的，符号仍然先到先得，
+**加载时说出来**（那正是"我改的那份内联函数到底生效没有"的答案）。
 **被丢掉的拷贝，它的重定位跟着一起丢**——重定位只补自己那一节的字节，把别人的偏移写到自己身上就是越界。
 （0.1.0 的 Release 包第一次跑不起来，报的 "a relocation runs past the section" 就是这里：小的那份被留下，
 大的那份的重定位照写不误。）
+
+**部分链接会在它丢掉补丁的地方留下 `R_X86_64_NONE`**（本体表 **76** 条）：那是目标格式自己的"没有重定位"，
+运行时**靠不应用来应用它**——不解析它指的符号（0 号空符号，谁都不定义），不写任何字节。
 
 **为什么这能改类**：vtable 是数据，它的每一项都是**重定位**。合并时那条重定位指向谁，虚调用就去谁那里。
 所以模组重定义一个**非内联的虚函数**，本体的虚调用会自动改道到模组——不需要任何补丁、不需要改 vtable 指针。
@@ -82,7 +95,8 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 ## 4. 工具链：`codetab`
 
     codetab build <源码...> -o <输出.codetab> [--id mine --version 1.0] [--requires engine@1.0 --api engine.api]
-    codetab pack  <目标文件...> -o <输出.codetab>   # 构建系统自己管编译开关时用它
+                                                 # 编译 → 链接成一个目标文件（`-r`）→ 打包：一个构建就是一个程序
+    codetab pack  <目标文件...> -o <输出.codetab>   # 构建系统自己管编译开关时用它；工具没编过它们，所以不折叠
     codetab dump  <表文件>            # 节 / 符号 / 重定位 / 元数据，全列出来
     codetab api   --surface engine.api <表...>   # 它向引擎要什么，以及能不能要
     codetab dumphead <表文件> [-o <名字.h>]      # 它定义了哪些符号，按作用域分组
@@ -174,7 +188,8 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 **本体自己也走同一扇门**：`games/mine/CMakeLists.txt` 用 `codetab build` 编 `mine.codetab`，启动器自己那份记录
 由 `codetab abi --record` 写成 `engine.abi`，与 `engine.api` 一起随可执行文件走。于是模组作者只要用 dev 包里的
 `codetab` 与头文件，指纹天然一致——**这就是"构建时统一 ABI"**。实测：debug 与 release 两个预设的
-`engine.abi` 与 `mine.codetab` 指纹相同（`f3ca0b9119e3c2cb`），演示模组也是。
+`engine.abi` 与 `mine.codetab` 指纹相同（现在是 `bdcb9b070ab30e78`——这个 id 是**头文件内容与 ABI 事实的函数**，
+引擎头文件一动它就动：它回答的是「这两份是不是同一次构建」，不是版本号），演示模组也是。
 
 ## 6. 与现在这套模组系统的关系
 
@@ -196,12 +211,12 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 * `t2d/core/object_file.h`：读 ELF64 目标文件（节、符号、重定位、COMDAT 组）。
 * `t2d/core/code_table.h`：表格式（读写）、`from_objects()`（多目标文件合并成一张表）、`CodeImage`（合并、重定位、运行）、
   `ApiSurface` / `api_verdict`（公开面与版本规则）。
-* `t2d/tools/codetab`：工具链——`build`（驱动编译器再打包）、`pack`（只打包）、`dump`、`api`（查公开面）、
+* `t2d/tools/codetab`：工具链——`build`（驱动编译器、链接、再打包）、`pack`（只打包）、`dump`、`api`（查公开面）、
   `dumphead`（把表定义的东西导成给编辑器看的索引）。
 * `engine.api`：公开面清单（82 个符号：A 层 38 / B 层 44），随可执行文件走。
 * `games/mine/src/main.cpp`：**启动器**——收集表（`mine.codetab`、`--table`、`packs/*.codetab`）、合并、
   校验公开面与版本、调用入口符号 `mine_game_main`。
-* 测试 `t2d/tests/test_code_table.cpp`：**31 用例 / 323 断言**，fixture 由构建过程用真实编译器编出目标文件；
+* 测试 `t2d/tests/test_code_table.cpp`：**33 用例 / 333 断言**，fixture 由构建过程用真实编译器编出目标文件；
   其中 7 个用例是 ABI 的（指纹相同即合并、指纹不同即拒绝并指名、头文件改动、CPU 特性、没有记录、工具链端到端、
   销毁映像跑析构）。
 * 测试 `games/mine/tests/test_mine_table.cpp`：**3 用例 / 17 断言**——**游戏自己的代码进表**：
@@ -212,7 +227,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 
 | 证明了什么 | 数字 |
 |---|---|
-| 表能被读回、字节一致 | 往返用例 120 断言（整个 `test_code_table` 323 断言） |
+| 表能被读回、字节一致 | 往返用例 120 断言（整个 `test_code_table` 333 断言） |
 | 合并后能跑 | `use_base()` = 11 |
 | **模组覆盖本体函数，本体的调用改道** | 合并模组后 `use_base()` = **101**；报告 1 条覆盖（`base_value`，my_mod ← vanilla） |
 | 覆盖后还能调用原件（包装） | `find_previous("base_value")` = 10 |
@@ -221,16 +236,16 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 | **改类：覆盖虚函数，虚调用改道** | `machine_output()` 25 → **97**（9×10+7：虚函数与普通函数都被换掉） |
 | 弱符号合并而非冲突 | vtable `_ZTV…` 与 typeinfo `_ZTI…` 都是 weak，合并后只报 2 条强覆盖 |
 | 静态构造在重定位之后运行 | `.init_array` 跑过，全局值 = 41 |
-| 工具链端到端 | `codetab build` 两个源文件 → 13 节 / 16 符号 / 3 重定位 / 5 个可覆盖名，约 26 ms |
+| 工具链端到端 | `codetab build` 两个源文件 → 先编译、再链接成一个目标文件、再打包：10 节 / 22 符号 / 7 重定位 / 5 个可覆盖名（含两次编译、一次链接与 ABI 探针，实测 1.4 s） |
 | **版本不符就拒绝加载** | 要求 `mine@2.0` 的模组被拒（报告同时写出 2.0 与 1.0），要求 `mine@1.0` 的正常合并；没人提供的依赖同样拒绝 |
 | **本体代码进表并运行** | `mine_core` 的 `registry.cpp` 编成表：注册两个 item（id 1、2）、重复注册 id 不变，`game_probe()` = 110 |
 | **模组覆盖本体表里的函数** | 加一张模组表后 `game_probe()` = **112**，报告 1 条覆盖（`game_bonus`，game_mod ← mine），`find_previous()` = 5 |
 | **表回调宿主** | 表里没定义的 `host_service` 与 `t2d::log_enabled` 由宿主解析（后者超距，走了桩） |
-| **整块本体进表，可执行文件变启动器** | 表由工具链编（`codetab build`）：release **772 节 / 2485 符号 / 7600 重定位 / 1.00 MiB**；debug **5211 / 21410 / 12999 / 3.18 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
-| **构建时统一 ABI** | 本体表与启动器记录同指纹（`f3ca0b9119e3c2cb`）；`-O0`/`-O2`/`-O3 -DNDEBUG` 三种构建指纹相同、完全合并；另一个 `std::string` ABI、头文件改动、CPU 缺特性三种情形**拒绝并指名**（§5.6、[`ABI.md`](ABI.md)） |
-| **一份定义两个函数体不再出错** | GCC 在 `-O3` 下把同一个 vague linkage 函数吐成 253 与 744 字节两份（指令都不同）：两份各自入表、符号先到先得；被丢掉的拷贝连同它的重定位一起丢，越界即构建失败 |
+| **整块本体进表，可执行文件变启动器** | 表由工具链编（`codetab build`）：release **686 节 / 2189 符号 / 8672 重定位 / 1.07 MiB**；debug **5223 / 17780 / 23074 / 3.27 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
+| **构建时统一 ABI** | 本体表与启动器记录同指纹（`bdcb9b070ab30e78`）；`-O0`/`-O2`/`-O3 -DNDEBUG` 三种构建指纹相同、完全合并；另一个 `std::string` ABI、头文件改动、CPU 缺特性三种情形**拒绝并指名**（§5.6、[`ABI.md`](ABI.md)） |
+| **一份定义两个函数体：构建期折叠，加载期报告** | 同一个 vague linkage 函数在 `-O3` 下可以有两份不同机器码（实测 253 / 744 字节）。`codetab build` 先链接，表里只剩一份（9 个函数少掉 55 份死拷贝，渲染逐像素相同）；`codetab pack` 原样打包的仍会在加载时报出来，被丢掉的拷贝连同它的重定位一起丢，越界即构建失败 |
 | **模组表端到端** | `--table mods/demo_mod/mod.codetab`：`mine_game_banner` 被 `demo_mod` 顶掉（报告 1 条覆盖），游戏自己的调用改道，输出从 `Mine, unmodified` 变成 `Mine, modded` |
-| **公开面执行** | 本体表向宿主索取 82 个引擎符号 + 77 个平台符号，越界 0 个；`codetab build --api engine.api` 在构建期就拒绝越界 |
+| **公开面执行** | 本体表向宿主索取 82 个引擎符号（`t2d::` 57 + `ore::` 25）+ 79 个平台符号，越界 0 个；`codetab build --api engine.api` 在构建期就拒绝越界 |
 
 打包（同一个构建出两个 zip）：release 包 = 启动器 + 表 + `engine.api` + 界面文本 + 本体内容包 + 着色器 + `packs/` 模板，
 `--strip-all` 之后约 0.9 MiB；dev 包 = 头文件（含生成的 `config.h`）+ `engine.api` + 本体表 + `codetab` 工具 + 模板 + 文档。

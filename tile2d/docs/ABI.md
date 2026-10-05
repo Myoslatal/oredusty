@@ -47,7 +47,7 @@
 
 | 构建差异 | 判据 | 结果 | 实测 |
 |---|---|---|---|
-| `-O0` / `-O2` / `-O3 -DNDEBUG` | 指纹相同 | **完全合并**，差异写进日志 | 三次构建 id 都是 `f3ca0b9119e3c2cb`；日志 `__OPTIMIZE__: 0 here, 1 there (does not change a layout)` |
+| `-O0` / `-O2` / `-O3 -DNDEBUG` | 指纹相同 | **完全合并**，差异写进日志 | 当时实测三次构建 id 都是 `f3ca0b9119e3c2cb`（id 随头文件内容变，现在是 `bdcb9b070ab30e78`）；日志 `__OPTIMIZE__: 0 here, 1 there (does not change a layout)` |
 | `-fno-exceptions` / `-fno-rtti` | 指纹相同 | **完全合并**（能力差异，报出来） | `__EXCEPTIONS: 1 here, 0 there` |
 | `-DNDEBUG`、别的 `-D` | 指纹相同 | **完全合并** | `NDEBUG: 1 here, 0 there` |
 | 另一个 `std::string` ABI | 指纹**不同** | **拒绝**，指名事实 | `_GLIBCXX_USE_CXX11_ABI: 0 here, 1 there`、`sizeof(std::string): 8 here, 32 there` |
@@ -74,9 +74,10 @@
 * **构建期也拦一次**：`codetab build|pack` 拒绝带异常机制的表（`.gcc_except_table*`），
   `--exceptions` 是作者说"我知道"，那时只提示一行。
 
-实测（本机，debug 与 release 两个预设）：`engine.abi` 与 `mine.codetab` 的指纹都是 `f3ca0b9119e3c2cb`，
+实测（本机，debug 与 release 两个预设）：`engine.abi` 与 `mine.codetab` 的指纹都是 `bdcb9b070ab30e78`，
 演示模组也是；启动日志只有一行 `table: module 'mine': __EXCEPTIONS: 0 here, 1 there (does not change a layout)`，
-随后 `tables: 1 module(s), 21410 symbol(s), 12999 relocation(s), 0 override(s), 0 error(s)`（debug）。
+随后 `tables: 1 module(s), 17780 symbol(s), 23074 relocation(s), 0 override(s), 0 error(s)`（debug）。
+这一行「只有一行」是量出来的：H3 的两函数体报告曾经让这张表每次启动刷 36 行，根因与修法见 §2 H3。
 
 ## 2. 十二处不一致
 
@@ -173,11 +174,24 @@ personality 都找不到，handler 自然永远找不到。
 * **强制不内联时**（`__attribute__((noinline))`）：两张表各带一份 8 字节 `.text._Z5pick2i`，
   合并后**两个模块都得 17**——模组那份成了死代码，同样没人报。
 
-**已修（说出来了）**：同名弱定义被合并时，运行时会比较两份的**字节**（大小没记录时用整节），不同就报告一句
-`… both define 'x' and the two bodies differ …`——跨模块、同一模块内的两个翻译单元都算。夹具 `twin_small`/`twin_big` 实测报警。
+**已修，而且现在在构建期就定了**（三件事）：
 
-根因：弱符号先到先得（`code_table.cpp:830-834`），而 `from_objects` 只在**同一张表内**去重时比较字节
-（`code_table.cpp:257-272`），**跨表从不比较**。模组作者无法从任何输出里看出自己改的那份有没有生效。
+* **构建期折叠**：`codetab build` 在打包之前先做一次**部分链接**（`<compiler> -r`）——一次构建是**一个程序**，
+  链接器留下先到的那份、所有引用都指向它。本体表里 9 个函数的 **55 份死拷贝**因此不再进表（845 → **686 节**，
+  2634 → **2189 符号**，1.13 → 1.07 MiB），启动日志里那一页报告随之消失；同一场景新旧两张表渲染出来
+  **逐像素相同**（`compare -metric AE` = 0）。回归用例 `the_toolchain_links_a_build_before_it_packs_it`：两个
+  故意写得不一样的 `twin_width` 被链接成**一个**函数（两份地址相等），加载 **0 条警告**。
+* **加载期报告**：真正被合并的同名弱定义（`codetab pack` 把别人编好的目标文件放在一起，或者跨模块）仍然比较
+  **字节**（大小没记录时用整节），不同就报告 `… both define these and the two bodies differ …`，按"哪两份"
+  合成一行并数出条数。夹具 `twin_small`/`twin_big` 实测报警——那正是模组作者问「我改的那份生效没有」时
+  唯一的答案。
+* **`R_X86_64_NONE` 是「没有重定位」**：部分链接在它丢掉补丁的地方留下这种条目（本体表 **76** 条），它指的是
+  0 号空符号，谁都不定义。运行时**靠不应用来应用它**（不解析符号、不写字节），而不是把一张完全正确的表拒掉
+  ——回归用例 `a_relocation_that_writes_nothing_is_applied_by_being_skipped`。
+
+根因：弱符号先到先得，而 `from_objects` 只在**同一张表内**按字节去重，**跨表从不比较**——模组作者无法从任何
+输出里看出自己改的那份有没有生效。今天工具链编出来的表里，同名弱定义**只有一份**（构建期就定了），所以加载期
+要比较的只剩"别人编好的那些"。
 
 ### H4 没有 ABI 指纹
 
@@ -200,7 +214,8 @@ personality 都找不到，handler 自然永远找不到。
 `code_table.cpp:941-951` 里 type 10 与 11 共用一段，但范围检查只在 `Absolute32Signed`（11）时做。
 本仓库的 C++ 不产这种重定位——实测 12 个 Release 表对象 + 10 个夹具 + 演示模组，可分配节里只有
 `PLT32 / PC32 / 64 / REX_GOTPCRELX`（10 987 + 68 + 2 条）——但非 PIC 目标文件或手写汇编会产，
-而且**失败是静默的**。
+而且**失败是静默的**。（表里现在还有一种：`R_X86_64_NONE`，部分链接丢掉补丁时留下的，本体表 76 条——
+它不写字节，运行时跳过，见 H3。）
 
 ### H6 平台符号被部分拦截
 
@@ -264,8 +279,8 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 ### H10 ~ H12（低）
 
 * **对齐（已修）**：一个模块的两半从页边界开始，所以 `align > page` 的对齐**做不到**：现在直接报错拒绝
-  （夹具 `aligned.cpp`：`alignas(8192)` 实测被拒），而不是默默放在别处。`align ≤ 4096` 一定对。实测 Release 表 772 节的 align 分布
-  `{1:174, 2:55, 4:8, 8:88, 16:388, 32:32, 64:27}`，没有超过 4096 的。
+  （夹具 `aligned.cpp`：`alignas(8192)` 实测被拒），而不是默默放在别处。`align ≤ 4096` 一定对。实测 Release 表 686 节的 align 分布
+  `{1:115, 2:54, 4:6, 8:71, 16:381, 32:32, 64:27}`，没有超过 4096 的。
 * **`SHN_ABS`（已修）**：绝对符号的**值**现在留在表里，写值类的重定位直接填它（夹具 `abs_sym.cpp`：`abs_probe()` 得 `0x1234`）；
   而需要**地址**的重定位（调用、GOT）对着它会报错拒绝——把数字当地址写下去就是跳到不知道哪里。
 * **CET（已修一半）**：`__CET__` 进了探针，是**必须一致**的事实（`_FORTIFY_SOURCE` 则归"可以不同"）——
@@ -283,7 +298,8 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 | **P0-4** | `.init_array.NNNNN` 按后缀数字排序（H7） | **已落地**（41 → 14） |
 | **P0-5 / P2-3** | 同名 vtable 的**槽位数**与**每槽符号**不一致 → 拒绝（H2） | **已落地**（两边都带 vtable 时；另一半由头哈希兜住） |
 | **P1-1** | 构建时统一 ABI：探针 + 头文件哈希 + 表的记录 + 加载期比较（§1.5） | **已落地** |
-| **P1-2** | 同名弱定义的**字节**比较 → 报告（H3） | **已落地**（`twin_small`/`twin_big` 报警） |
+| **P1-2** | 同名弱定义的**字节**比较 → 报告（H3）；`codetab build` 在打包前先链接，一个程序只有一份，
+加载期只剩"别人编好的那些"要比较 | **已落地**（`twin_small`/`twin_big` 报警；工具链自己那张表 0 条警告） |
 | **P1-3** | 编译开关指纹（探针事实 + 构建传的 `-D` + `__CET__`/`_FORTIFY_SOURCE`） | **已落地** |
 | **P3-1** | 读 `st_other`；protected 的强定义 → 警告（H8） | **已落地**（打包在 binding 字的空位，版本不动） |
 | **P3-2** | `align > page` → 拒绝（H10） | **已落地** |
@@ -292,7 +308,8 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 | **P2-2** | 类型探针清单（`--abi-type`：把"某个头变了"细化成"某个类型变了"） | **未做**——头文件哈希已经覆盖漂移本身，这一条只是把诊断说得更细，留作下一步 |
 | **H13** | 销毁映像前先跑模块注册的析构（`__cxa_finalize`） | **已落地** |
 
-回归测试都在 `tile2d/tests/test_code_table.cpp`（**31 用例 / 323 断言**）：`a_32_bit_absolute_address_that_does_not_fit_is_refused`、
+回归测试都在 `tile2d/tests/test_code_table.cpp`（**33 用例 / 333 断言**）：`a_32_bit_absolute_address_that_does_not_fit_is_refused`、
+`a_relocation_that_writes_nothing_is_applied_by_being_skipped`、`the_toolchain_links_a_build_before_it_packs_it`、
 `an_absolute_symbol_is_its_value`、`an_absolute_symbol_where_an_address_is_wanted_is_refused`、
 `constructors_run_in_priority_order_not_section_order`、`two_bodies_of_one_definition_are_reported`、
 `a_module_that_defines_what_the_program_provides_is_reported`、`a_vtable_that_disagrees_about_its_slots_is_refused`、

@@ -345,6 +345,52 @@ T2D_TEST(the_toolchain_packs_sources_into_a_table) {
     T2D_CHECK_EQ(use_base(), 11);
 }
 
+T2D_TEST(the_toolchain_links_a_build_before_it_packs_it) {
+    // Two translation units that define the same vague linkage function with *different* bodies. A
+    // compiler is allowed to do that - it specializes a body per translation unit, and it does it to
+    // libstdc++'s own std::format sinks at -O3 - and a link keeps one copy and points every reference
+    // at it. A build is one program, so the toolchain links it before packing it: what the load is
+    // handed is one definition, not two that disagree (docs/ABI.md H3).
+    const std::filesystem::path output = std::filesystem::path(T2D_TEST_TABLE_DIR) / "linked.codetab";
+    const std::string command =
+        std::format("\"{}\" build \"{}\" \"{}\" \"{}\" -o \"{}\" --id linked --version 1.0 --compiler \"{}\"",
+                    T2D_TEST_TOOLCHAIN, source_of("twin_small"), source_of("twin_big"), source_of("twin_caller"),
+                    output.string(), T2D_TEST_COMPILER);
+    T2D_CHECK_EQ(std::system(command.c_str()), 0);
+
+    std::string error;
+    std::optional<CodeTable> table = CodeTable::load(output.string(), &error);
+    T2D_REQUIRE(table.has_value());
+    usize definitions = 0;
+    for (const CodeTableSymbol& symbol : table->symbols) {
+        if (symbol.defined() && symbol.shared() && symbol.name == "_Z10twin_widthi") ++definitions;
+    }
+    T2D_CHECK_EQ(definitions, 1u);
+
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    // Nothing at all to report, which is the point: the disagreement the two objects had is the
+    // compiler's business, and what the load is handed is one definition.
+    T2D_CHECK_MSG(report.warnings.empty(), "warnings: {}", names_of(report.warnings));
+    // The call goes through the symbol, so it gets the copy the link kept - the first object's.
+    const auto answer = image.function<int()>("twin_answer");
+    T2D_REQUIRE(answer != nullptr);
+    T2D_CHECK_EQ(answer(), 42);
+    // Each translation unit took the address of its own copy of the function. After the link there is
+    // one function, so the two addresses are the same address - which is what "one program, one copy"
+    // means, and what the load would otherwise have had to choose between.
+    using Twin = int (*)(int);
+    const auto small_copy = image.function<Twin()>("_Z15twin_small_copyv");
+    const auto big_copy = image.function<Twin()>("_Z13twin_big_copyv");
+    T2D_REQUIRE(small_copy != nullptr);
+    T2D_REQUIRE(big_copy != nullptr);
+    T2D_CHECK_EQ(reinterpret_cast<const void*>(small_copy()), reinterpret_cast<const void*>(big_copy()));
+    // The copy that survived is the first object's, which is the copy a link keeps.
+    T2D_CHECK_EQ(small_copy()(41), 42);
+}
+
 
 // --- what a build was compiled as (docs/ABI.md) ----------------------------------------------------
 //
@@ -709,6 +755,24 @@ T2D_TEST(two_bodies_of_one_definition_are_reported) {
     T2D_CHECK(says(report.warnings, "both define these and the two bodies differ"));
     T2D_CHECK(says(report.warnings, "_Z10twin_widthi"));
     T2D_CHECK(says(report.warnings, "definition(s) with a different body"));
+}
+
+T2D_TEST(a_relocation_that_writes_nothing_is_applied_by_being_skipped) {
+    std::string error;
+    std::optional<CodeTable> table = pack({object_of("base")}, "no_relocation", &error);
+    T2D_REQUIRE(table.has_value());
+    // What a linker writes where it dropped a patch: the object format's own "no relocation", against
+    // the empty symbol at index zero, which nothing defines because it is not a thing - it is the
+    // absence of one. It patches no bytes, so a table that carries one is a table that is right, and a
+    // runtime that asks for the symbol refuses a table a link produced (docs/TABLES.md §2).
+    table->relocations.push_back(CodeTableRelocation{0, kRelocationNone, 0, 0, 0});
+    CodeImage image;
+    image.add(std::move(*table));
+    const CodeImageReport& report = image.load();
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    const auto value = image.function<int()>("base_value");
+    T2D_REQUIRE(value != nullptr);
+    T2D_CHECK_EQ(value(), 10);
 }
 
 T2D_TEST(a_module_that_defines_what_the_program_provides_is_reported) {
