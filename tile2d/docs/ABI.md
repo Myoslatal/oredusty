@@ -162,15 +162,21 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 ### H8 可见性没读
 
 `object_file.cpp:202-222` 只读 type 与 binding，不读 `st_other`。两面后果：
-`-fvisibility=hidden` 的定义照样参与覆盖（对模组作者是好消息，实测 `_ZTI3Box` 是 `WEAK HIDDEN`
-而不是 local）；而 `protected` 可见性下编译器可以不经过 PLT，**覆盖会报告成功、实际不生效**。
+
+* `-fvisibility=hidden` 的定义照样参与覆盖（对模组作者是好消息）——实测 `_ZTI3Box` 是 `WEAK HIDDEN`
+  而不是 local，所以按名字合并照旧。
+* `protected` 可见性下**覆盖会报告成功、调用不跟过去**——实测：一个
+  `__attribute__((visibility("protected")))` 的函数，同一个翻译单元里对它的调用是一条指向**节符号**的
+  `PC32`（`.text._Z19hidden_from_outsidei + 0`），不是指向符号的 `PLT32`；节符号是 local，
+  合并时不会被解析成赢家。
 
 ### H9 跨模块 RTTI 靠字符串比较
 
 同一次运行里宿主与模组的 `typeid(Box)` 地址不同（`94851159428280` vs `140516889927712`），
-`dynamic_cast<Box*>` 仍然成功——libstdc++ 在指针不等时回退到名字比较。实测 `-fvisibility=hidden`
-**不会**给类型名加 `*` 前缀（本机 GCC 16；前缀是内部链接类型的做法）。结论：今天能用，
-但这是标准库实现细节在兜底；换标准库、换编译器要重新实测。
+`dynamic_cast<Box*>` 仍然成功——libstdc++ 在指针不等时回退到名字比较。本机 GCC 16 实测：
+`-fvisibility=hidden` 的类型是 `WEAK HIDDEN`、名字**没有** `*` 前缀；匿名命名空间里的类型是
+`LOCAL`、名字也没有前缀（但名字本身就带 `(anonymous namespace)`，跨模块本来就对不上）。
+结论：今天能用，但这是标准库实现细节在兜底；换标准库、换编译器要重新实测。
 
 ### H10 ~ H12（低）
 
