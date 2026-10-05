@@ -460,7 +460,10 @@ mod is written against: the headers (`ore/`, `t2d/`, `mine/`, generated `config.
 
 `docs/TABLES.md` is the whole design: the file format, the merge rules, what the runtime does step by step,
 the surface and the version rule, the honest limits (x86-64 ELF only, no TLS, no exception unwinding yet,
-weak definitions cannot be replaced) and what is next.
+weak definitions cannot be replaced) and what is next. [`docs/ABI.md`](docs/ABI.md) is the layer under it: twelve measured
+ways a name can match while the thing behind it does not (a table's `try`/`catch` never runs, a shifted
+vtable slot segfaults, a struct that grew one field reads the wrong element), each with the fix and the
+command that proves it.
 
 ## The game on top of the framework
 
