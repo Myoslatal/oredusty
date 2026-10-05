@@ -12,6 +12,23 @@
 //             floor::                       # the floor creator
 //                 layer:0                   # which tile layer it lays the floor on (default 0)
 //                 full_flash:"dirt"         # every cell of that tile layer becomes this floor
+//             scatter::                     # scatter generators, one entry each
+//                 copper::                  #   what a message about it calls it
+//                     kind:"ore"            #   what it places: a content kind
+//                     content:"copper"      #   and the name the registry knows it by
+//                     layer:1               #   which tile layer it scatters on (default 0)
+//                     density:0.01          #   the average fraction of eligible cells that gets one
+//                     min:8                 #   never fewer, where the map allows (default 0)
+//                     max:20                #   never more (absent: as many as fit)
+//                     floor:"dirt"          #   only cells whose floor is this (absent: any free cell)
+//
+// A layer's **creators run in a fixed order**, whatever order the file writes them in: the floor
+// creator first, then the scatters in file order. That is what lets a scatter ask what the floor of a
+// cell is, and it is why nothing lands on a cell of its own tile layer that the same description
+// already holds - including the floor, when the two are on one tile layer.
+//
+// A scatter **places one plot per cell**: a cell is either ore or not, which is what "single ore" means
+// (types/single_ore.h), and it is why the count is a count of cells.
 //
 // **The order the data declares the layers in is the story's order**: layer 0 is the first entry, layer
 // 1 the second, and so on. That is the same order the registry hands out Layer ids in (registry.h), so
@@ -68,6 +85,34 @@ struct FloorCreator {
     std::vector<FloorRule> rules;
 };
 
+/// One scatter generator: what it puts down, where, how much, and what it may sit on.
+struct ScatterRule {
+    /// The "scatter::" entry's key: what a message about this generator calls it.
+    std::string name;
+    /// What it places: a content kind, and the name the registry knows it by. The kind is data - it is
+    /// what a save stores - so one scatter can put down an ore and another a structure, and neither is
+    /// a special case here.
+    ContentKind kind = ContentKind::Ore;
+    std::string content;
+    /// The tile layer it scatters on. Usually the one above the floor: one cell of one tile layer holds
+    /// one plot, so a scatter on the floor's own tile layer finds every cell taken.
+    i32 layer = 0;
+    /// Never fewer than this **where the map allows**: a floor restriction that leaves three eligible
+    /// cells wins over a min of eight, because a restriction is a rule and a minimum is a wish. What
+    /// that costs is said out loud (LayerSpec::problems), not swallowed.
+    u32 min = 0;
+    /// Never more than this. Not written means "as many as fit".
+    std::optional<u32> max;
+    /// The average fraction of the eligible cells that gets one: every eligible cell is taken with this
+    /// probability, so the count varies around density x cells and min/max bound that. 0 with a min of
+    /// n is "exactly n of them, anywhere".
+    t2d::f64 density = 0.0;
+    /// Only cells whose floor - on the floor creator's tile layer - is this "floor::" entry are
+    /// eligible. Empty means every free cell. A restriction under a layer with no floor creator is
+    /// refused while the file is read: it could never match anything.
+    std::string floor;
+};
+
 /// One layer the story describes.
 struct LayerRule {
     /// The "layer::" entry's name: what the registry knows the layer by, and what a save stores.
@@ -80,6 +125,8 @@ struct LayerRule {
     /// The floor creator. A layer whose data has no floor:: table has no floor - and that is a layer:
     /// an empty one is what a session enters before the rules exist (world.h).
     FloorCreator floor;
+    /// The scatter generators, in the order the file writes them. They run after the floor creator.
+    std::vector<ScatterRule> scatter;
 };
 
 /// Every layer the story data describes, in the order it declares them.
@@ -107,6 +154,14 @@ private:
 /// rather than read as "no size", because the two are different layers.
 [[nodiscard]] std::optional<LayerRule> read_layer_rule(std::string_view name, const t2d::EcfgValue& entry,
                                                        std::string* error = nullptr);
+
+/// Reads one "scatter::" entry, the way read_layer_rule reads a "layer::" one. \p layer_name is the
+/// layer it belongs to, for messages. The checks that need the layer's other tables - a tile layer this
+/// map does not have, a floor restriction under a layer with no floor creator - are made by
+/// read_layer_rule, once everything is read, so the order the file writes the tables in does not matter.
+[[nodiscard]] std::optional<ScatterRule> read_scatter_rule(std::string_view layer_name,
+                                                           const t2d::EcfgValue& entry,
+                                                           std::string* error = nullptr);
 
 /// Every layer \p document describes, in file order. A "layer::" entry the engine cannot read is
 /// reported in \p errors and skipped, so one bad layer does not hide the ones after it.

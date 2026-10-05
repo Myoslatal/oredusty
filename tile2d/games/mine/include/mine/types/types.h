@@ -23,5 +23,6 @@
 #include <mine/types/entity_tile.h>
 #include <mine/types/floor.h>
 #include <mine/types/scene_tile.h>
+#include <mine/types/single_ore.h>
 #include <mine/types/tile.h>
 #include <mine/types/tile_definition.h>

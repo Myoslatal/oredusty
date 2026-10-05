@@ -1812,49 +1812,19 @@ void MineApp::draw_world_screen() {
     const t2d::Aabb2 area = world_area();
     const f32 padding = 8.0f * unit_;
     const f32 line = line_for(body_px_);
-    const f32 inset = 4.0f * unit_;
     const MineLayer& layer = world_.layer();
     const f32 cell = world_camera_.zoom();
 
-    // Where a plot lands on screen: its whole footprint, so a 3x3 is one picture and not nine.
-    const auto rect_of = [&](const types::SceneTile& plot) {
-        const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(plot.anchor().x),
-                                                              static_cast<f32>(plot.anchor().y)});
-        return t2d::Aabb2{at, t2d::Vec2{at.x + static_cast<f32>(plot.width()) * cell,
-                                        at.y + static_cast<f32>(plot.height()) * cell}};
-    };
-
-    // The layer the way the game draws it: every tile layer bottom to top, art edge to edge, and no
-    // grid lines, labels or dimming - those are what the sandbox edits against (docs/SANDBOX.md 9).
+    // What is *under* the layer: the void around the mine, and the map's own bounds marked out from it -
+    // a mine is a bounded place, and an empty layer has to read as "a map with nothing on it" rather
+    // than as a broken screen. The layer itself is draw_world_layer and the chrome over it is
+    // draw_world_overlay; the three are separate passes because that is the order they have to land in.
     batch_->draw_rect(area, kPalette.background);
-    // The layer itself, marked out from the void around it: a mine is a bounded place, and an empty
-    // layer has to read as "a map with nothing on it" rather than as a broken screen.
     const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{0.0f, 0.0f});
     const t2d::Aabb2 bounds{corner, t2d::Vec2{corner.x + static_cast<f32>(layer.width()) * cell,
                                               corner.y + static_cast<f32>(layer.height()) * cell}};
     batch_->draw_rect(bounds, kPalette.grid_background);
     batch_->draw_rect_outline(bounds, 2.0f, kPalette.grid_edge);
-    const t2d::TileRect visible = world_camera_.visible_cells();
-    if (!visible.empty()) {
-        for (i32 tile_layer = 0; tile_layer < layer.layer_count(); ++tile_layer) {
-            layer.for_each_plot_in(visible, [&](const types::SceneTile& plot) {
-                if (plot.layer() != tile_layer) return;
-                // Content with no picture gets the colour its name derives, the same way the sandbox
-                // shows it: the world view is still a developer's view until the game's own interface
-                // is designed (docs/GAME_DESIGN.md section 7).
-                if (texture_of(plot.kind(), plot.name(registry_)) != nullptr) return;
-                batch_->draw_rect(rect_of(plot), dim_color(debug_color_for(plot.name(registry_)), 0.45f));
-            });
-        }
-    }
-
-    // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
-    if (world_pointer_.has_value()) {
-        const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(world_pointer_->x),
-                                                               static_cast<f32>(world_pointer_->y)});
-        batch_->draw_rect_outline(t2d::Aabb2{at, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f, kPalette.accent);
-    }
-
     // An empty layer says so, and says why: content is the designer's, and a screen that shows nothing
     // has to explain itself (the rule the sandbox's empty palette follows too). The reason is one of
     // three, in the order that answers the question the screen raises: what the build refused (the data
@@ -1878,6 +1848,21 @@ void MineApp::draw_world_screen() {
         draw_fitted(area.max.x * 0.5f - text_width * 0.5f, centre_y - line, body_px_, kPalette.warning, text,
                     text_width);
         draw_fitted(area.max.x * 0.5f - hint_width * 0.5f, centre_y, body_px_, kPalette.text_dim, hint, hint_width);
+    }
+}
+
+void MineApp::draw_world_overlay() {
+    const t2d::Aabb2 area = world_area();
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const f32 inset = 4.0f * unit_;
+    const f32 cell = world_camera_.zoom();
+
+    // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
+    if (world_pointer_.has_value()) {
+        const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(world_pointer_->x),
+                                                               static_cast<f32>(world_pointer_->y)});
+        batch_->draw_rect_outline(t2d::Aabb2{at, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f, kPalette.accent);
     }
 
     // Two lines at the bottom: what the layer is and what the two passes did, then what the pointer is
@@ -2013,10 +1998,10 @@ MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
     return cost;
 }
 
-MineApp::ImagePassCost MineApp::draw_layer_images(ore::RenderFrame& frame, const ore::Mat4& view_projection,
-                                                  const MineLayer& layer, const t2d::Camera2D& camera) {
+MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const ore::Mat4& view_projection,
+                                                 const MineLayer& layer, const t2d::Camera2D& camera) {
     ImagePassCost cost;
-    if (content_textures_.empty() || layer.plot_count() == 0) return cost;
+    if (layer.plot_count() == 0) return cost;
     const t2d::TileRect visible = camera.visible_cells();
     if (visible.empty()) return cost;
     const f32 cell = camera.zoom();
@@ -2029,18 +2014,14 @@ MineApp::ImagePassCost MineApp::draw_layer_images(ore::RenderFrame& frame, const
         t2d::Aabb2 rect{};
         t2d::Aabb2 uv{};
     };
-    std::vector<std::pair<std::string, std::vector<Quad>>> groups;
-    std::unordered_map<std::string, usize> group_of;
-    const auto add_quad = [&](Quad quad) {
-        const auto found = group_of.find(quad.key);
-        if (found == group_of.end()) {
-            group_of.emplace(quad.key, groups.size());
-            groups.emplace_back(quad.key, std::vector<Quad>{});
-            groups.back().second.push_back(std::move(quad));
-            return;
-        }
-        groups[found->second].second.push_back(std::move(quad));
+    /// Everything one tile layer draws, in the order it draws it: the plots that have no picture, then
+    /// the pictures, grouped.
+    struct LayerWork {
+        std::vector<std::pair<t2d::Aabb2, u32>> colours;
+        std::vector<std::pair<std::string, std::vector<Quad>>> groups;
+        std::unordered_map<std::string, usize> group_of;
     };
+    std::vector<LayerWork> work(static_cast<usize>(std::max(1, layer.layer_count())));
 
     // Each picture fills its whole texture: there is no atlas, so the uv rectangle is the texture - and
     // a mirrored plot is that same rectangle with its u axis reversed. Which way a plot faces was
@@ -2052,32 +2033,64 @@ MineApp::ImagePassCost MineApp::draw_layer_images(ore::RenderFrame& frame, const
     // layer's own spatial index over the cells the viewport covers: the frame costs what is on screen,
     // not what the layer holds.
     for (i32 tile_layer = 0; tile_layer < layer.layer_count(); ++tile_layer) {
+        LayerWork& here = work[static_cast<usize>(tile_layer)];
+        const auto add_quad = [&](Quad quad) {
+            const auto found = here.group_of.find(quad.key);
+            if (found == here.group_of.end()) {
+                here.group_of.emplace(quad.key, here.groups.size());
+                here.groups.emplace_back(quad.key, std::vector<Quad>{});
+                here.groups.back().second.push_back(std::move(quad));
+                return;
+            }
+            here.groups[found->second].second.push_back(std::move(quad));
+        };
         layer.for_each_plot_in(visible, [&](const types::SceneTile& plot) {
             if (plot.layer() != tile_layer) return;
             const ContentEntry* entry = registry_.find(plot.kind(), plot.id());
             if (entry == nullptr) return;   // the content is gone: there is nothing to draw it with
-            const std::string key = image_key(plot.kind(), entry->name);
-            if (content_textures_.find(key) == content_textures_.end()) return;
             const t2d::Vec2 at = camera.screen_of(
                 t2d::Vec2{static_cast<f32>(plot.anchor().x), static_cast<f32>(plot.anchor().y)});
             // A plot is drawn over its whole footprint: a 3x3 structure is one picture stretched over
             // nine cells, which is what having a footprint rather than nine cells is for.
-            add_quad(Quad{key,
-                          t2d::Aabb2{at, t2d::Vec2{at.x + static_cast<f32>(plot.width()) * cell,
-                                                   at.y + static_cast<f32>(plot.height()) * cell}},
-                          plot.mirrored() ? mirrored_uv : full_uv});
+            const t2d::Aabb2 rect{at, t2d::Vec2{at.x + static_cast<f32>(plot.width()) * cell,
+                                                at.y + static_cast<f32>(plot.height()) * cell}};
+            const std::string key = image_key(plot.kind(), entry->name);
+            if (content_textures_.find(key) == content_textures_.end()) {
+                // Content with no picture gets the colour its name derives, the same way the sandbox
+                // shows it: the world view is still a developer's view until the game's own interface
+                // is designed (docs/GAME_DESIGN.md section 7). It is drawn in its own layer's turn and
+                // not before every picture in the frame: ore on the layer above a floor must not
+                // disappear under the floor's art (measured - it did).
+                here.colours.emplace_back(rect, dim_color(debug_color_for(entry->name), 0.45f));
+                return;
+            }
+            add_quad(Quad{key, rect, plot.mirrored() ? mirrored_uv : full_uv});
         });
     }
 
-    for (const std::pair<std::string, std::vector<Quad>>& group : groups) {
-        const auto texture = content_textures_.find(group.first);
-        if (texture == content_textures_.end()) continue;
-        batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
-        for (const Quad& quad : group.second) batch_->draw_quad(quad.rect, quad.uv, 0xFFFFFFFFu);
-        batch_->end();
-        cost.draw_calls += batch_->draw_calls();
-        cost.quads += batch_->quads();
-        cost.dropped += batch_->dropped_quads();
+    // One batch per picture, and one per tile layer for the plots that have none: a plain rectangle
+    // samples the white texel of the glyph atlas, which is the texture the chrome is drawn with.
+    for (LayerWork& here : work) {
+        if (!here.colours.empty()) {
+            batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+            for (const std::pair<t2d::Aabb2, u32>& colour : here.colours) {
+                batch_->draw_rect(colour.first, colour.second);
+            }
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
+        for (const std::pair<std::string, std::vector<Quad>>& group : here.groups) {
+            const auto texture = content_textures_.find(group.first);
+            if (texture == content_textures_.end()) continue;
+            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+            for (const Quad& quad : group.second) batch_->draw_quad(quad.rect, quad.uv, 0xFFFFFFFFu);
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
     }
     return cost;
 }
@@ -2126,11 +2139,18 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         quads += cost.quads;
         dropped_quads_ += cost.dropped;
     } else if (screen_ == Screen::World) {
-        const ImagePassCost cost =
-            draw_layer_images(frame, view_projection, world_.layer(), world_camera_);
+        const ImagePassCost cost = draw_world_layer(frame, view_projection, world_.layer(), world_camera_);
         draw_calls += cost.draw_calls;
         quads += cost.quads;
         dropped_quads_ += cost.dropped;
+        // The chrome last: the pointer and the status bar are what the player reads, and the layer is
+        // what they are read against (the order the three passes have to land in - app.h).
+        batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+        draw_world_overlay();
+        batch_->end();
+        draw_calls += batch_->draw_calls();
+        quads += batch_->quads();
+        dropped_quads_ += batch_->dropped_quads();
     }
 
     frame.counters.draw_calls = draw_calls;

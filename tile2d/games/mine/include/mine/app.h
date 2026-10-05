@@ -203,11 +203,13 @@ private:
     /// texture, and a batch binds one texture, so this is one batch per distinct picture on screen -
     /// the price of not packing the art into an atlas.
     [[nodiscard]] ImagePassCost draw_sandbox_images(ore::RenderFrame& frame, const ore::Mat4& view_projection);
-    /// Draws the plots of \p layer that \p camera covers, each over its whole footprint and mirrored
-    /// when it is, grouped into one batch per distinct picture on screen (docs/MODS.md section 0).
-    /// The world view and the sandbox's playtest both draw a layer through this.
-    [[nodiscard]] ImagePassCost draw_layer_images(ore::RenderFrame& frame, const ore::Mat4& view_projection,
-                                                  const MineLayer& layer, const t2d::Camera2D& camera);
+    /// Draws everything \p layer holds that \p camera covers, bottom tile layer to top: the picture a
+    /// plot has, or - when it has none - the colour its name derives, each over its whole footprint and
+    /// mirrored when it is. A plot is drawn in its own tile layer's turn either way, so art from below
+    /// never covers it; the pictures are grouped into one batch per distinct one on screen
+    /// (docs/MODS.md section 0).
+    [[nodiscard]] ImagePassCost draw_world_layer(ore::RenderFrame& frame, const ore::Mat4& view_projection,
+                                                 const MineLayer& layer, const t2d::Camera2D& camera);
     void draw_start_screen();
     void draw_session_screen();
     void draw_sandbox_screen();
@@ -216,8 +218,14 @@ private:
     void draw_content_screen();
     /// The layer as the game draws it, plus the pointer and one line saying what it is over.
     void draw_playtest_screen();
-    /// The mine: the layer the session is in, its plots, the pointer, and what the passes did.
+    /// The mine, in three passes that have to land in this order: what is under the layer (the void and
+    /// the map's bounds), the layer itself (draw_world_layer), and the chrome over it
+    /// (draw_world_overlay).
     void draw_world_screen();
+    /// The game's own chrome over the layer: the pointer, and the two lines that say what the layer is,
+    /// what the pointer is over and what the passes did. Drawn after the layer, so a zoomed-in map
+    /// cannot paint over the status bar (measured: it used to).
+    void draw_world_overlay();
 
     /// Where the content screen puts things. The lines of the list, the room left for the selected
     /// source and the room the load's messages take all come from one place, so the pass that draws

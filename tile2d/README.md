@@ -63,9 +63,9 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_registry       10 cases / 128 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
-    games/mine/tests/test_mine_types     13 cases / 167 checks  plots: identity, footprints, the two kinds, the dice, the definer
+    games/mine/tests/test_mine_types     14 cases / 187 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
-    games/mine/tests/test_layer_rules    14 cases / 330 checks  the story's layers in data: the size, the floor creator, the generator, the layer a world enters
+    games/mine/tests/test_layer_rules    22 cases / 712 checks  the story's layers in data: the size, the floor creator, the scatter generator, and the layer a world enters
     games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   13 cases / 198 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -505,16 +505,33 @@ nothing downstream knows which mode it is.
 
 A story's layers **are data** (`mine/layer_rules.h`): one entry per layer under `layer::`, and the
 order they are written in is the mine's order — the same order the registry hands out layer ids in, so
-the nth story layer is content id n+1 and a save keeps pointing at it by name. Two tables are the
-engine's: `size::` (`width` / `height` 1..4096, `tile_layers` 1..32 — anything left out is the
-session's shape) and `floor::`, the floor creator, whose one rule today is
-`full_flash:"<floor name>"`: every cell of that tile layer becomes that floor, one plot per cell, so
-each cell can be replaced on its own and `random_reverse` means something. Everything else under the
-entry belongs to the designer. A field the engine reads and cannot read is refused with the file named
-rather than ignored, and a floor the registry does not have builds the layer anyway and says so on
-screen — once, not once per cell. Endless mode still derives its layers from `(seed, index)` (its
-rules are §7.9, not designed yet), so it enters an empty layer — and an empty layer is a layer: it can
-be entered, walked, queried and drawn.
+the nth story layer is content id n+1 and a save keeps pointing at it by name. Three tables are the
+engine's, and a layer's **creators run in a fixed order** whatever order the file writes them in: the
+floor first, the scatters after it.
+
+* `size::` — `width` / `height` 1..4096, `tile_layers` 1..32; anything left out is the session's shape.
+* `floor::`, the floor creator, whose one rule today is `full_flash:"<floor name>"`: every cell of
+  that tile layer becomes that floor, one plot per cell, so each cell can be replaced on its own and
+  `random_reverse` means something.
+* `scatter::`, one **scatter generator** per entry: it puts a named piece of content (`kind` +
+  `content`) on a tile layer, with the four attributes the designer asked for — `min` / `max` (the
+  count bounds), `density` (the average fraction of eligible cells that gets one) and `floor` (only
+  cells whose floor is that one are eligible). Eligible = inside the map, nothing on that tile layer
+  yet, and the floor restriction met; the count is `density × eligible` worth of coin flips, clamped
+  into `[min, max]` and then to what fits — **the map wins over `min`**, and what that cost is said
+  out loud (`LayerSpec::problems` → the build report → the screen). Where they land comes from the
+  layer's own dice, so the same seed scatters the same way and another seed moves the ore without
+  changing how much of it there is.
+
+Ore is its own kind of thing: `ContentKind::Ore` (appended, so an older save table still reads) and
+`mine::types::SingleOre`, a scene plot whose one addition is `is_ore()` — one cell per ore, which is
+what makes "this cell has ore" and "this plot is that ore" the same question.
+
+Everything else under the entry belongs to the designer. A field the engine reads and cannot read is
+refused with the file named rather than ignored, and content the registry does not have builds the
+layer anyway and says so on screen — once, not once per cell. Endless mode still derives its layers
+from `(seed, index)` (its rules are §7.9, not designed yet), so it enters an empty layer — and an
+empty layer is a layer: it can be entered, walked, queried and drawn.
 
 What a layer holds is **plots** (`mine::types`): fixed things that occupy cells. Both halves are
 needed and they answer different questions — the **grid** says which content sits on every cell in

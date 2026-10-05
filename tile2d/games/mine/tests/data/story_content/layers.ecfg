@@ -1,9 +1,15 @@
 # 故事模式的层 —— **测试替身**，不是游戏内容（docs/GAME_DESIGN.md §7.3/§7.8）。
 #
-# 这里的层名与数字都是夹具的：游戏本体一个层都没写，它只提供格式与引擎。这份文件展示的是**数据的
-# 形状**：size:: 说一层多大，floor:: 是地板创建器，full_flash 把这一层的每个格子都设成给定的地板。
+# 这里的层名、矿物名与数字都是夹具的：游戏本体一个层、一块矿都没写，它只提供格式与引擎。这份文件
+# 展示的是**数据的形状**：size:: 说一层多大，floor:: 是地板创建器（full_flash 把每个格子设成给定的
+# 地板），scatter:: 是散点生成器（在指定的瓦片层上按密度撒指定的东西，min/max 夹住数量，
+# floor: 限制它只落在某种地板上）。
 #
-# 它点的地板 "dirt" 是**本体自己的**（content/floors.ecfg）——内容包给故事加的是层，不是内容。
+# 它点的地板 "dirt" 是**本体自己的**（content/floors.ecfg）——内容包给故事加的是层与矿物，不是内容；
+# 这里的 ore:: copper 没有贴图，所以世界视图用名字派生出的调试颜色画它。
+
+ore::
+    copper::
 
 layer::
     entrance::
@@ -12,10 +18,30 @@ layer::
             height:32
             tile_layers:2
         floor::
+            layer:0
             full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:1
+                density:0.01
+                min:6
+                max:40
+                floor:"dirt"
     shaft::
         size::
             width:24
             height:16
+            tile_layers:2
         floor::
             full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:1
+                density:0.02
+                min:4
+                max:20
+                floor:"dirt"

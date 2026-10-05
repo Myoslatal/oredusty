@@ -54,6 +54,11 @@ public:
     /// this question - a machine about the cell under it, pathing about the cell it is walking into -
     /// without knowing the name of a single floor.
     [[nodiscard]] virtual bool is_floor() const { return false; }
+    /// True for content that is ore: something that can be dug out of the cell it sits in. The same
+    /// shape of question as is_floor() - it is about what the thing is, so a caller asks it instead of
+    /// comparing content names (types/single_ore.h). A cell can be both, on two tile layers: a floor
+    /// with ore in it is a floor and an ore.
+    [[nodiscard]] virtual bool is_ore() const { return false; }
 
     /// The content behind the plot is not in the registry any more (a reload can take it away).
     [[nodiscard]] bool missing() const { return missing_; }

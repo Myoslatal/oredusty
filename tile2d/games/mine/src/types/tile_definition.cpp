@@ -3,28 +3,19 @@
 #include <mine/types/entity_tile.h>
 #include <mine/types/floor.h>
 #include <mine/types/scene_tile.h>
+#include <mine/types/single_ore.h>
 
 #include <format>
 
 namespace mine::types {
-namespace {
-
-/// The name of a table as a content kind, or ContentKind::Count when it is not one.
-[[nodiscard]] ContentKind kind_of_table(std::string_view table) {
-    for (usize index = 0; index < kContentKindCount; ++index) {
-        const auto candidate = static_cast<ContentKind>(index);
-        if (table == content_kind_name(candidate)) return candidate;
-    }
-    return ContentKind::Count;
-}
-
-} // namespace
 
 bool kind_is_a_tile(ContentKind kind) {
-    // What occupies cells. A floor is one (it is the thing the others are placed on), a structure and a
-    // machine are; an item, a recipe, a layer and a channel are not on the map at all.
+    // What occupies cells. A floor is one (it is the thing the others are placed on), an ore is one (it
+    // is dug out of the cell it sits in), a structure and a machine are; an item, a recipe, a layer and
+    // a channel are not on the map at all.
     switch (kind) {
         case ContentKind::Floor:
+        case ContentKind::Ore:
         case ContentKind::Structure:
         case ContentKind::Machine: return true;
         default: return false;
@@ -65,7 +56,7 @@ std::vector<TileDefinition> tile_definitions(const t2d::EcfgDocument& document,
                                              std::vector<std::string>* errors) {
     std::vector<TileDefinition> definitions;
     for (const t2d::EcfgValue& table : document.root().children()) {
-        const ContentKind kind = kind_of_table(table.key());
+        const ContentKind kind = content_kind_from_name(table.key());
         if (kind == ContentKind::Count || !kind_is_a_tile(kind)) continue;
         if (!table.is_table()) continue;
         for (const t2d::EcfgValue& entry : table.children()) {
@@ -88,6 +79,11 @@ std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId
     switch (definition.kind) {
         case ContentKind::Floor:
             tile = std::make_unique<Floor>(definition.kind, id, layer, anchor, width, height);
+            break;
+        case ContentKind::Ore:
+            // One cell of ore is one plot: what it yields is its content, and a scatter places one per
+            // cell, so "which cell is ore" and "which plot is that ore" are the same question.
+            tile = std::make_unique<SingleOre>(definition.kind, id, layer, anchor, width, height);
             break;
         case ContentKind::Machine:
             // A machine is scenery that also runs, so it is an entity plot.

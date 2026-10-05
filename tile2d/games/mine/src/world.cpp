@@ -292,6 +292,9 @@ const MineLayer& MineWorld::enter(i32 index, const ContentRegistry& registry,
     if (shape.height == 0) shape.height = shape_.height;
     if (shape.tile_layers <= 0) shape.tile_layers = shape_.tile_layers;
     layer_.emplace(index, shape, layer_seed(seed_, index));
+    // What the description itself could not do comes first: it is about the data, and everything the
+    // build says after it is about what that cost.
+    for (const std::string& problem : spec.problems) build_report_.refuse(problem);
     layer_->build(spec, registry, definitions, &build_report_);
     return *layer_;
 }

@@ -30,9 +30,18 @@ const char* content_kind_name(ContentKind kind) {
         case ContentKind::Layer: return "layer";
         case ContentKind::Channel: return "channel";
         case ContentKind::Floor: return "floor";
+        case ContentKind::Ore: return "ore";
         case ContentKind::Count: break;
     }
     return "?";
+}
+
+ContentKind content_kind_from_name(std::string_view name) {
+    for (usize index = 0; index < kContentKindCount; ++index) {
+        const auto kind = static_cast<ContentKind>(index);
+        if (name == content_kind_name(kind)) return kind;
+    }
+    return ContentKind::Count;
 }
 
 ContentId ContentRegistry::register_content(ContentKind kind, std::string_view name) {
@@ -160,8 +169,11 @@ bool ContentTable::deserialize(ConstSpan<const u8> data, ContentTable& out) {
     ByteReader reader(data);
     if (reader.read_u32() != kMagic) return false;
     if (reader.read_u8() != kVersion) return false;
+    // Fewer kinds than this build knows is a table written before one of them existed: the kinds it
+    // does not have are kinds with no entries, which is not a guess. More than this build knows is a
+    // table whose remaining sections cannot be read at all, so it is refused.
     const u32 kind_count = reader.read_varint();
-    if (!reader.ok() || kind_count != kContentKindCount) return false;
+    if (!reader.ok() || kind_count > kContentKindCount) return false;
 
     ContentTable parsed;
     for (u32 kind_index = 0; kind_index < kind_count; ++kind_index) {

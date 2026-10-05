@@ -75,6 +75,11 @@ struct LayerSpec {
     i32 index = 0;
     LayerShape shape{};
     std::vector<PlacedContent> content;
+    /// What the description could not do, in the generator's own words: a rule that names a tile layer
+    /// this map does not have, a scatter whose floor restriction leaves fewer cells than it asked for.
+    /// The build report carries them, so a layer that is not the layer the data asked for says so
+    /// instead of just being small - the rule everything else in this file follows.
+    std::vector<std::string> problems;
 };
 
 /// The generator interface, fixed by docs/GAME_DESIGN.md section 4: a seed and a layer index in, a

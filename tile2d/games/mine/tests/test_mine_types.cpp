@@ -385,9 +385,53 @@ T2D_TEST(a_floor_is_scenery_that_says_it_is_a_floor) {
     T2D_CHECK_EQ(floors, 1u);
 }
 
+T2D_TEST(an_ore_is_scenery_that_says_it_is_ore) {
+    static_assert(std::is_base_of_v<SceneTile, SingleOre>);
+    static_assert(std::is_base_of_v<Tile, SingleOre>);
+
+    const ContentRegistry registry = registry_with("copper", ContentKind::Ore);
+    SingleOre copper(ContentKind::Ore, 1, 1, GridPos{2, 3});
+    T2D_CHECK(copper.is_ore());
+    T2D_CHECK_FALSE(copper.is_floor());
+    T2D_CHECK(copper.kind() == ContentKind::Ore);
+    T2D_CHECK_EQ(copper.cell_count(), 1);
+    T2D_CHECK_EQ(copper.name(registry), std::string("copper"));
+
+    // Being ore is a kind of thing, not a property every plot has - the same rule the floor follows.
+    CountingFloor wall(ContentKind::Structure, 2, 0, GridPos{0, 0});
+    CountingMachine drill(ContentKind::Machine, 3, 0, GridPos{0, 0});
+    Floor dirt(ContentKind::Floor, 4, 0, GridPos{0, 0});
+    T2D_CHECK_FALSE(wall.is_ore());
+    T2D_CHECK_FALSE(drill.is_ore());
+    T2D_CHECK_FALSE(dirt.is_ore());
+
+    // An ore is scenery: it is never ticked, and it is brought up to date only when something asks.
+    T2D_CHECK(copper.dirty());
+    T2D_CHECK(copper.refresh());
+    T2D_CHECK_FALSE(copper.refresh());
+    const SceneTile& as_scenery = copper;
+    T2D_CHECK(dynamic_cast<const EntityTile*>(&as_scenery) == nullptr);
+
+    // What the marker is for: a question anything can ask without knowing a single ore by name. A cell
+    // can answer yes to both - a floor with ore in it is two plots on two tile layers.
+    const std::vector<std::unique_ptr<Tile>> plots = [&] {
+        std::vector<std::unique_ptr<Tile>> made;
+        made.push_back(std::make_unique<SingleOre>(ContentKind::Ore, 1, 1, GridPos{0, 0}));
+        made.push_back(std::make_unique<Floor>(ContentKind::Floor, 2, 0, GridPos{0, 0}));
+        made.push_back(std::make_unique<SceneTile>(ContentKind::Structure, 3, 1, GridPos{1, 0}));
+        return made;
+    }();
+    usize ores = 0;
+    for (const std::unique_ptr<Tile>& plot : plots) {
+        if (plot->is_ore()) ++ores;
+    }
+    T2D_CHECK_EQ(ores, 1u);
+}
+
 T2D_TEST(the_data_says_what_a_plot_is_and_the_definer_builds_it) {
     // Which tables describe a plot at all.
     T2D_CHECK(kind_is_a_tile(ContentKind::Floor));
+    T2D_CHECK(kind_is_a_tile(ContentKind::Ore));
     T2D_CHECK(kind_is_a_tile(ContentKind::Structure));
     T2D_CHECK(kind_is_a_tile(ContentKind::Machine));
     T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Item));
@@ -405,6 +449,9 @@ floor::
 machine::
     drill::
         random_reverse:false
+ore::
+    copper::
+        image:"art/ore_copper.png"
 item::
     ore::
         image:"art/ore.png"
@@ -438,16 +485,19 @@ floor::
     T2D_CHECK_FALSE(read_tile_definition(ContentKind::Floor, "sand", *sand, &error).has_value());
     T2D_CHECK(error.find("random_reverse") != std::string::npos);
 
-    // Every plot a document declares, and nothing else: the item table is not a plot.
+    // Every plot a document declares, and nothing else: the item table is not a plot, and an item
+    // *named* "ore" is still an item - a name is not a kind.
     std::vector<std::string> errors;
     const std::vector<TileDefinition> definitions = tile_definitions(*document, &errors);
-    T2D_REQUIRE(definitions.size() == 2u);
+    T2D_REQUIRE(definitions.size() == 3u);
     T2D_CHECK(errors.empty());
     T2D_CHECK_EQ(definitions[0].kind, ContentKind::Floor);
     T2D_CHECK_EQ(definitions[0].name, std::string("dirt"));
     T2D_CHECK_EQ(definitions[1].kind, ContentKind::Machine);
     T2D_CHECK_EQ(definitions[1].name, std::string("drill"));
     T2D_CHECK_FALSE(definitions[1].random_reverse);
+    T2D_CHECK_EQ(definitions[2].kind, ContentKind::Ore);
+    T2D_CHECK_EQ(definitions[2].name, std::string("copper"));
 
     // The definer turns a definition into the plot it describes: the kind decides the class, and the
     // data decides the rest.
@@ -465,6 +515,14 @@ floor::
     T2D_REQUIRE(machine_plot != nullptr);
     T2D_CHECK(dynamic_cast<EntityTile*>(machine_plot.get()) != nullptr);
     T2D_CHECK_FALSE(machine_plot->is_floor());
+
+    // The kind decides the class, so an "ore::" entry becomes an ore and not scenery with a flag.
+    const std::unique_ptr<SceneTile> ore_plot = make_tile(definitions[2], 11, 1, GridPos{6, 7});
+    T2D_REQUIRE(ore_plot != nullptr);
+    T2D_CHECK(dynamic_cast<SingleOre*>(ore_plot.get()) != nullptr);
+    T2D_CHECK(ore_plot->is_ore());
+    T2D_CHECK_FALSE(ore_plot->is_floor());
+    T2D_CHECK_FALSE(dynamic_cast<EntityTile*>(ore_plot.get()) != nullptr);
 
     TileDefinition structure;
     structure.kind = ContentKind::Structure;

@@ -76,16 +76,36 @@ recipe::
 #     floor::                         地板创建器
 #         layer:0                     地板铺在哪一个瓦片层（默认 0）
 #         full_flash:"example_floor"  把这一层的每个格子都设成这个地板
+#     scatter::                       散点生成器，一个条目一个（可以有好几个）
+#         example_ore_vein::          给它起个名字，报告里就用这个名字
+#             kind:"ore"              撒什么：内容类别（ore / structure / machine / floor）
+#             content:"example_ore"   注册表里的名字
+#             layer:1                 撒在哪个瓦片层（默认 0；通常是地板上面那一层）
+#             density:0.01            平均密度：每个可用格子按这个概率被选中
+#             min:6                   最少几个（地图放得下的话；默认 0）
+#             max:40                  最多几个（不写就是不限）
+#             floor:"example_floor"   地板限制：只落在这种地板上（不写就是任何空格子）
 #
-# 引擎不认识的规则名、注册表里没有的地板名都会被**指名报告**（不猜）：层照建，画面上会说明原因。
+# 引擎不认识的规则名、注册表里没有的名字都会被**指名报告**（不猜）：层照建，画面上会说明原因。
+# 地板先铺、散点后撒：散点不会落在同一瓦片层已经有东西的格子上，所以矿石通常放在地板上面那一层。
 layer::
     ## example_layer_1::
     ##     name:"第一层"
     ##     size::
     ##         width:40
     ##         height:24
+    ##         tile_layers:2
     ##     floor::
     ##         full_flash:"example_floor"
+    ##     scatter::
+    ##         example_ore_vein::
+    ##             kind:"ore"
+    ##             content:"example_ore"
+    ##             layer:1
+    ##             density:0.01
+    ##             min:6
+    ##             max:40
+    ##             floor:"example_floor"
     ##     # resources / structures / demands 都按你的设计写在这里
 
 # ---------------------------------------------------------------- 提交渠道 --
@@ -102,3 +122,12 @@ floor::
     ## example_floor::
     ##     image:"art/example_floor.png"
     ##     random_reverse:true     # 地图初始化时把其中一半左右翻转渲染
+
+# ---------------------------------------------------------------------- 矿物 --
+#
+# 矿物是**一格一块**、可以挖出来的东西（layer:: 的 scatter:: 会点它的名字）。它也是场景地块：不跑
+# 逻辑、不挡路（除非你的结构/机器挡），只有"这是矿"这一个标记（mine::types::SingleOre）。
+ore::
+    ## example_ore::
+    ##     image:"art/example_ore.png"
+    ##     yield:3                 # 其余字段随你定义，引擎不解释

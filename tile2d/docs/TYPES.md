@@ -100,24 +100,38 @@ drill.set_period_seconds(0.5f);          // 每半秒一次
 if (drill.advance(delta_seconds)) { }    // 到点了才 true
 ```
 
-## 4. 地板（`Floor`）：一个标记
+## 4. 两个标记：地板（`Floor`）与矿物（`SingleOre`）
 
-地板是"其他东西站上去的那一层"：它继承场景地块（放一次、只在需要时刷新），**只多加一件事**——
-`is_floor()` 答"是"。就这一个标记，让所有别的东西能问出自己真正想问的问题——"这里有没有东西可以站"
-——而**不需要知道任何一块地板的名字**：机器在放下之前问脚下的格子，寻路在迈进去之前问前面的格子。
+**地板**是"其他东西站上去的那一层"，**矿物**是"一格一块、可以挖出来的东西"：两者都继承场景地块
+（放一次、只在需要时刷新），**只多加一件事**——`is_floor()` / `is_ore()` 答"是"。就这一个标记，
+让所有别的东西能问出自己真正想问的问题——"这里有没有东西可以站"、"这里有没有东西可以挖"——
+而**不需要知道任何一块地板或矿物的名字**：机器在放下之前问脚下的格子，钻机在开工之前问它要挖的那一格。
 
 ```cpp
 class Floor : public SceneTile {
     bool is_floor() const override { return true; }
 };
 
+class SingleOre : public SceneTile {
+    bool is_ore() const override { return true; }
+};
+
 Floor dirt(ContentKind::Floor, id, 0, GridPos{4, 4});
+SingleOre copper(ContentKind::Ore, id, 1, GridPos{4, 4});
 dirt.is_floor();              // true
-machine_plot->is_floor();     // false：机器不是地板
+dirt.is_ore();                // false
+copper.is_ore();              // true
+machine_plot->is_ore();       // false：机器不是矿物
 ```
 
-**为什么是方法而不是数据里的一个开关**：是不是地板是**东西的种类**，不是一份文件能发给谁的性质——
-是地板的内容就是 `floor::` 表里的（`types/floor.h`），不是的不会因为在文件里写一句就变成地板。
+**矿物是"单"的**：一格一块——散点生成器一格放一个（`docs/MODS.md` §0），所以"哪一格有矿"和
+"哪一块地块是那个矿"是同一个问题。它产出的东西是它背后的**内容**（注册表发出去的 id），
+不是这个类自己编的数字；跨好几格的矿脉以后是另一种东西。
+
+**为什么是方法而不是数据里的一个开关**：是不是地板、是不是矿物，是**东西的种类**，不是一份文件能发给
+谁的性质——是地板的内容就是 `floor::` 表里的（`types/floor.h`），是矿物的内容就是 `ore::` 表里的
+（`types/single_ore.h`），不是的不会因为在文件里写一句就变成矿物。一格可以两个都答"是"：
+地板在下一层、矿在上一层，就是两个地块。
 
 ## 5. 渲染朝向：`random_reverse`
 
@@ -152,10 +166,10 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
 
 * `read_tile_definition(kind, name, entry)` 读**引擎会读的那两个字段**（`image`、`random_reverse`），
   其余字段原样不动；读不懂的字段**拒绝并说明**（`random_reverse:1` 不会悄悄当成假）。
-* `tile_definitions(document)` 走一份 `.ecfg`，只收"占格子"的类别（floor / structure / machine），
-  其它表跳过。
+* `tile_definitions(document)` 走一份 `.ecfg`，只收"占格子"的类别（floor / ore / structure /
+  machine），其它表跳过。**名字不是类别**：`item:: ore::` 是一条叫 ore 的**物品**，不是矿物。
 * `make_tile(definition, id, layer, anchor, 宽, 高)` 按**类别**决定类：
-  `floor` → `Floor`，`machine` → `EntityTile`（机器是"还会跑的"场景地块），
+  `floor` → `Floor`，`ore` → `SingleOre`，`machine` → `EntityTile`（机器是"还会跑的"场景地块），
   `structure` → `SceneTile`；不是地块的类别返回空。**这份对应关系是工程**（东西是什么），
   不是内容（有什么东西）。
 * 加载时管线也会读一遍这两个字段：**数据里写错了当场报告**，而不是等到建层的时候才发现。
@@ -181,7 +195,9 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
 * 世界视图（`Enter` / `--world-view 1`）就是它们的屏幕：地块按占地画、`mirrored` 翻 u 轴。
 * 一层**从哪来**也是数据：故事模式下是 `layer::` 里的层规则（`mine/layer_rules.h`，
   `docs/GAME_DESIGN.md` §4），它产出的仍是同一个 `LayerSpec`——世界因此不需要知道自己在故事里还是
-  无尽里。层规则点名的地板不存在时，`place()` 的拒绝就是唯一的答案（层照建，原因写进报告与画面）。
+  无尽里。层规则点名的地板/矿物不存在时，`place()` 的拒绝就是唯一的答案（层照建，原因写进报告与画面）。
+* **散点生成器**（`layer::` 的 `scatter::`）把矿物一格一块撒在指定的瓦片层上：可用格子、数量与地板
+  限制都在规则里（`docs/MODS.md` §0）。它撒下去的就是普通的矿物地块——世界这一侧没有第二种东西。
 
 单测 `test_world`（12 用例 / 130 断言）覆盖上面每一条，包括**同一 `(seed, 层号)` 两次生成逐字节相同**。
 

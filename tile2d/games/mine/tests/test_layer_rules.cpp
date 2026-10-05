@@ -73,21 +73,34 @@ struct Parsed {
     return false;
 }
 
-/// A registry with one floor, and the definitions that go with it: what a test's content file would
-/// have produced.
+/// A registry with the content a test's files would have produced.
 struct Fixture {
     ContentRegistry registry;
     ContentDefinitions definitions;
 
-    void add_floor(std::string_view name, bool random_reverse = false) {
-        registry.register_content(ContentKind::Floor, name);
+    void add(ContentKind kind, std::string_view name, bool random_reverse = false) {
+        registry.register_content(kind, name);
         TileDefinition definition;
-        definition.kind = ContentKind::Floor;
+        definition.kind = kind;
         definition.name = std::string(name);
         definition.random_reverse = random_reverse;
         definitions.add(std::move(definition));
     }
+    void add_floor(std::string_view name, bool random_reverse = false) {
+        add(ContentKind::Floor, name, random_reverse);
+    }
+    void add_ore(std::string_view name) { add(ContentKind::Ore, name); }
 };
+
+/// Where the ore of \p layer sits, in the order the layer holds it: what "the same seed scatters the
+/// same way" compares.
+[[nodiscard]] std::vector<GridPos> ore_cells(const MineLayer& layer) {
+    std::vector<GridPos> cells;
+    for (const std::unique_ptr<SceneTile>& plot : layer.plots()) {
+        if (plot->is_ore()) cells.push_back(plot->anchor());
+    }
+    return cells;
+}
 
 } // namespace
 
@@ -651,6 +664,464 @@ layer::
     T2D_CHECK_FALSE(other_pipeline.packs()[0].error.empty());
 }
 
+T2D_TEST(a_scatter_is_read_from_the_data) {
+    const Parsed parsed = parse(R"(
+layer::
+    entrance::
+        size::
+            tile_layers:2
+        floor::
+            full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:1
+                density:0.02
+                min:8
+                max:20
+                floor:"dirt"
+            loose::
+                kind:"structure"
+                content:"rubble"
+                density:0
+)");
+    T2D_CHECK(parsed.errors.empty());
+    T2D_REQUIRE(parsed.rules.size() == 1u);
+    const LayerRule& rule = parsed.rules[0];
+    T2D_REQUIRE(rule.scatter.size() == 2u);
+
+    const ScatterRule& copper = rule.scatter[0];
+    T2D_CHECK_EQ(copper.name, std::string("copper"));
+    T2D_CHECK_EQ(copper.kind, ContentKind::Ore);
+    T2D_CHECK_EQ(copper.content, std::string("copper"));
+    T2D_CHECK_EQ(copper.layer, 1);
+    T2D_CHECK_EQ(copper.min, 8u);
+    T2D_REQUIRE(copper.max.has_value());
+    T2D_CHECK_EQ(*copper.max, 20u);
+    T2D_CHECK_NEAR(copper.density, 0.02, 1e-9);
+    T2D_CHECK_EQ(copper.floor, std::string("dirt"));
+
+    // What is not written has a meaning rather than a default that hides: no layer is tile layer 0, no
+    // min is no floor on the count, no max is "as many as fit", no floor is "any free cell".
+    const ScatterRule& loose = rule.scatter[1];
+    T2D_CHECK_EQ(loose.kind, ContentKind::Structure);
+    T2D_CHECK_EQ(loose.layer, 0);
+    T2D_CHECK_EQ(loose.min, 0u);
+    T2D_CHECK_FALSE(loose.max.has_value());
+    T2D_CHECK_EQ(loose.density, 0.0);
+    T2D_CHECK(loose.floor.empty());
+}
+
+T2D_TEST(a_scatter_that_cannot_be_read_is_refused) {
+    const auto one = [](std::string_view body) {
+        return parse(std::format("layer::\n    entrance::\n        scatter::\n            copper::\n{}\n", body));
+    };
+
+    const Parsed no_content = one("                kind:\"ore\"\n                density:0.1");
+    T2D_CHECK(no_content.rules.empty());
+    T2D_CHECK(mentions(no_content.errors, "does not say what it places"));
+
+    const Parsed no_kind = one("                content:\"copper\"\n                density:0.1");
+    T2D_CHECK(no_kind.rules.empty());
+    T2D_CHECK(mentions(no_kind.errors, "does not say which kind of content"));
+
+    // A density is what makes a scatter a scatter: without one it would place nothing, which is a typo
+    // rather than a rule.
+    const Parsed no_density = one("                kind:\"ore\"\n                content:\"copper\"");
+    T2D_CHECK(no_density.rules.empty());
+    T2D_CHECK(mentions(no_density.errors, "does not say how dense it is"));
+
+    const Parsed not_a_kind = one("                kind:\"ores\"\n                content:\"copper\"\n"
+                                  "                density:0.1");
+    T2D_CHECK(not_a_kind.rules.empty());
+    T2D_CHECK(mentions(not_a_kind.errors, "'ores', which is not a content kind"));
+
+    // A scatter places plots: an item or a recipe is not something that occupies a cell.
+    const Parsed not_a_tile = one("                kind:\"item\"\n                content:\"copper\"\n"
+                                  "                density:0.1");
+    T2D_CHECK(not_a_tile.rules.empty());
+    T2D_CHECK(mentions(not_a_tile.errors, "only floors, ores, structures and machines occupy cells"));
+
+    const Parsed bad_density = one("                kind:\"ore\"\n                content:\"copper\"\n"
+                                   "                density:5");
+    T2D_CHECK(bad_density.rules.empty());
+    T2D_CHECK(mentions(bad_density.errors, "a density is the fraction of the eligible cells"));
+
+    const Parsed text_density = one("                kind:\"ore\"\n                content:\"copper\"\n"
+                                    "                density:\"a lot\"");
+    T2D_CHECK(text_density.rules.empty());
+    T2D_CHECK(mentions(text_density.errors, "takes a number for density"));
+
+    const Parsed backwards = one("                kind:\"ore\"\n                content:\"copper\"\n"
+                                 "                density:0.1\n                min:20\n                max:8");
+    T2D_CHECK(backwards.rules.empty());
+    T2D_CHECK(mentions(backwards.errors, "wants at least 20 and at most 8"));
+
+    const Parsed negative = one("                kind:\"ore\"\n                content:\"copper\"\n"
+                                "                density:0.1\n                min:-1");
+    T2D_CHECK(negative.rules.empty());
+    T2D_CHECK(mentions(negative.errors, "a count is not negative"));
+
+    const Parsed typo = one("                kind:\"ore\"\n                content:\"copper\"\n"
+                            "                density:0.1\n                densitiy:0.2");
+    T2D_CHECK(typo.rules.empty());
+    T2D_CHECK(mentions(typo.errors, "has no attribute 'densitiy'"));
+
+    const Parsed not_a_table = parse(R"(
+layer::
+    entrance::
+        scatter::
+            copper:"ore"
+)");
+    T2D_CHECK(not_a_table.rules.empty());
+    T2D_CHECK(mentions(not_a_table.errors, "is a table of what it places"));
+
+    // A tile layer this map does not have, and a floor restriction under a layer that lays no floor:
+    // both are about more than one table, so both are checked once everything is read.
+    const Parsed beyond = parse(R"(
+layer::
+    entrance::
+        size::
+            tile_layers:1
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                density:0.1
+                layer:1
+)");
+    T2D_CHECK(beyond.rules.empty());
+    T2D_CHECK(mentions(beyond.errors, "the scatter 'copper' works on tile layer 1, and this layer has 1"));
+
+    const Parsed no_floor = parse(R"(
+layer::
+    entrance::
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                density:0.1
+                floor:"dirt"
+)");
+    T2D_CHECK(no_floor.rules.empty());
+    T2D_CHECK(mentions(no_floor.errors, "this layer has no floor creator"));
+}
+
+T2D_TEST(a_scatter_places_one_plot_per_cell_on_its_own_tile_layer) {
+    const Parsed parsed = parse(R"(
+layer::
+    entrance::
+        size::
+            width:8
+            height:6
+            tile_layers:2
+        floor::
+            layer:0
+            full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:1
+                density:1
+                floor:"dirt"
+)");
+    T2D_CHECK(parsed.errors.empty());
+    LayerRules rules;
+    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+
+    Fixture content;
+    content.add_floor("dirt");
+    content.add_ore("copper");
+    MineWorld world(4, LayerShape{8, 6, 1});
+    world.set_generator(story_layer_generator(rules, world.shape()));
+    const MineLayer& layer = world.enter(0, content.registry, content.definitions);
+    T2D_CHECK_MSG(world.build_report().clean(), "{}", world.build_report().errors.empty()
+                                                       ? std::string{}
+                                                       : world.build_report().errors.front());
+
+    // Every cell: the floor below, one ore above it. A density of 1 takes every eligible cell, and
+    // every cell is eligible because the whole map is dirt.
+    T2D_CHECK_EQ(layer.plot_count(), 48u + 48u);
+    T2D_CHECK_EQ(layer.filled_cells(0), 48u);
+    T2D_CHECK_EQ(layer.filled_cells(1), 48u);
+    for (i32 y = 0; y < 6; ++y) {
+        for (i32 x = 0; x < 8; ++x) {
+            const SceneTile* floor_plot = layer.plot_at(0, GridPos{x, y});
+            T2D_REQUIRE(floor_plot != nullptr);
+            T2D_CHECK(floor_plot->is_floor());
+            const SceneTile* ore = layer.plot_at(1, GridPos{x, y});
+            T2D_REQUIRE(ore != nullptr);
+            T2D_CHECK(ore->is_ore());
+            T2D_CHECK_EQ(ore->kind(), ContentKind::Ore);
+            T2D_CHECK_EQ(ore->id(), content.registry.find(ContentKind::Ore, "copper"));
+            T2D_CHECK_EQ(ore->cell_count(), 1);
+        }
+    }
+    T2D_CHECK_EQ(ore_cells(layer).size(), 48u);
+}
+
+T2D_TEST(the_density_sets_the_count_and_min_and_max_bound_it) {
+    const auto build = [](std::string_view scatter_body, LayerShape shape = LayerShape{8, 8, 2}) {
+        const Parsed parsed = parse(std::format("layer::\n    entrance::\n        size::\n"
+                                                "            width:{}\n            height:{}\n"
+                                                "            tile_layers:{}\n        floor::\n"
+                                                "            full_flash:\"dirt\"\n        scatter::\n"
+                                                "            copper::\n                kind:\"ore\"\n"
+                                                "                content:\"copper\"\n{}\n",
+                                                shape.width, shape.height, shape.tile_layers, scatter_body));
+        Fixture content;
+        content.add_floor("dirt");
+        content.add_ore("copper");
+        LayerRules rules;
+        for (const LayerRule& rule : parsed.rules) rules.add(rule);
+        MineWorld world(7, shape);
+        world.set_generator(story_layer_generator(rules, world.shape()));
+        const MineLayer& layer = world.enter(0, content.registry, content.definitions);
+        return ore_cells(layer).size();
+    };
+
+    // Every eligible cell, then a bound on top of it.
+    T2D_CHECK_EQ(build("                layer:1\n                density:1"), 64u);
+    T2D_CHECK_EQ(build("                layer:1\n                density:1\n                max:7"), 7u);
+    // No density at all with a minimum is "exactly that many, anywhere" - the dice pick which cells,
+    // not how many.
+    T2D_CHECK_EQ(build("                layer:1\n                density:0\n                min:5"), 5u);
+    T2D_CHECK_EQ(build("                layer:1\n                density:0\n                min:5\n"
+                       "                max:5"),
+                 5u);
+    // A map that cannot hold what the rule asked for wins over both bounds.
+    T2D_CHECK_EQ(build("                layer:1\n                density:1\n                min:10\n"
+                       "                max:200"),
+                 64u);
+    // In between, the density is an average: the count varies around density x cells and stays inside
+    // the bounds. 4096 cells at a quarter is 1024 +- 28, so a band of 4.5 sigma is a wide one.
+    const usize middling = build("                layer:1\n                density:0.25\n                min:900\n"
+                                 "                max:1150",
+                                 LayerShape{64, 64, 2});
+    T2D_CHECK_GT(middling, 900u);
+    T2D_CHECK_LT(middling, 1150u);
+}
+
+T2D_TEST(a_floor_restriction_only_takes_cells_whose_floor_is_that_one) {
+    /// What one run of the rule did: how many ore cells there are, and what the build said.
+    struct Built {
+        usize ore = 0;
+        LayerBuildReport report;
+    };
+    const auto build = [](std::string_view restriction) {
+        const Parsed parsed = parse(std::format("layer::\n    entrance::\n        size::\n"
+                                                "            width:8\n            height:8\n"
+                                                "            tile_layers:2\n        floor::\n"
+                                                "            full_flash:\"dirt\"\n        scatter::\n"
+                                                "            copper::\n                kind:\"ore\"\n"
+                                                "                content:\"copper\"\n"
+                                                "                layer:1\n                density:1\n"
+                                                "                min:1\n{}",
+                                                restriction));
+        Fixture content;
+        content.add_floor("dirt");
+        content.add_ore("copper");
+        LayerRules rules;
+        for (const LayerRule& rule : parsed.rules) rules.add(rule);
+        MineWorld world(7, LayerShape{8, 8, 2});
+        world.set_generator(story_layer_generator(rules, world.shape()));
+        const MineLayer& layer = world.enter(0, content.registry, content.definitions);
+        return Built{ore_cells(layer).size(), world.build_report()};
+    };
+
+    // The floor of the cell decides. Under a floor of dirt every cell is eligible; under a floor of
+    // stone - which is what the layer is made of instead - none of them is.
+    const Built dirt = build("                floor:\"dirt\"\n");
+    T2D_CHECK_MSG(dirt.report.clean(), "{}", dirt.report.errors.empty() ? std::string{}
+                                                                       : dirt.report.errors.front());
+    T2D_CHECK_EQ(dirt.ore, 64u);
+
+    // A restriction nothing satisfies is a rule that places nothing, and it says so rather than being
+    // quietly empty: the minimum is a wish, the restriction is a rule.
+    const Built stone = build("                floor:\"stone\"\n");
+    T2D_CHECK_EQ(stone.ore, 0u);
+    T2D_CHECK_FALSE(stone.report.clean());
+    T2D_REQUIRE(!stone.report.errors.empty());
+    T2D_CHECK(stone.report.errors[0].find("asked for at least 1 and 0 cell(s) were eligible") !=
+              std::string::npos);
+}
+
+T2D_TEST(nothing_lands_where_the_description_already_has_something) {
+    const Parsed parsed = parse(R"(
+layer::
+    entrance::
+        size::
+            width:8
+            height:8
+            tile_layers:2
+        floor::
+            layer:0
+            full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:1
+                density:1
+                max:10
+            coal::
+                kind:"ore"
+                content:"coal"
+                layer:1
+                density:1
+                max:10
+)");
+    T2D_CHECK(parsed.errors.empty());
+    LayerRules rules;
+    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+
+    Fixture content;
+    content.add_floor("dirt");
+    content.add_ore("copper");
+    content.add_ore("coal");
+    MineWorld world(4, LayerShape{8, 8, 2});
+    world.set_generator(story_layer_generator(rules, world.shape()));
+    const MineLayer& layer = world.enter(0, content.registry, content.definitions);
+    T2D_CHECK_MSG(world.build_report().clean(), "{}", world.build_report().errors.empty()
+                                                       ? std::string{}
+                                                       : world.build_report().errors.front());
+
+    // Ten of each, and no cell carries two: a scatter never lands on a cell of its own tile layer that
+    // the same description already holds.
+    T2D_CHECK_EQ(layer.plot_count(), 64u + 20u);
+    T2D_CHECK_EQ(layer.filled_cells(1), 20u);
+    std::vector<GridPos> cells = ore_cells(layer);
+    T2D_REQUIRE(cells.size() == 20u);
+    std::sort(cells.begin(), cells.end(), [](GridPos a, GridPos b) {
+        return a.y != b.y ? a.y < b.y : a.x < b.x;
+    });
+    for (usize index = 1; index < cells.size(); ++index) {
+        T2D_CHECK_FALSE(cells[index] == cells[index - 1]);
+    }
+
+    // A scatter on the floor's own tile layer finds every cell taken, so a rule that asks for three of
+    // them gets none and says so.
+    const Parsed on_the_floor = parse(R"(
+layer::
+    entrance::
+        size::
+            width:4
+            height:4
+        floor::
+            layer:0
+            full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:0
+                density:1
+                min:3
+)");
+    T2D_CHECK(on_the_floor.errors.empty());
+    LayerRules on_floor_rules;
+    for (const LayerRule& rule : on_the_floor.rules) on_floor_rules.add(rule);
+    MineWorld other(4, LayerShape{4, 4, 1});
+    other.set_generator(story_layer_generator(on_floor_rules, other.shape()));
+    const MineLayer& floored = other.enter(0, content.registry, content.definitions);
+    T2D_CHECK_EQ(floored.plot_count(), 16u);
+    T2D_CHECK_EQ(floored.filled_cells(0), 16u);
+    T2D_REQUIRE(!other.build_report().errors.empty());
+    T2D_CHECK(other.build_report().errors[0].find("asked for at least 3 and 0 cell(s) were eligible") !=
+              std::string::npos);
+}
+
+T2D_TEST(the_same_seed_scatters_the_same_way_and_another_seed_moves_it) {
+    const Parsed parsed = parse(R"(
+layer::
+    entrance::
+        size::
+            width:16
+            height:16
+            tile_layers:2
+        floor::
+            full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:1
+                density:0.1
+                min:4
+                max:40
+)");
+    T2D_CHECK(parsed.errors.empty());
+    LayerRules rules;
+    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+
+    Fixture content;
+    content.add_floor("dirt");
+    content.add_ore("copper");
+    const auto scatter_of = [&](u64 seed) {
+        MineWorld world(seed, LayerShape{16, 16, 2});
+        world.set_generator(story_layer_generator(rules, world.shape()));
+        const MineLayer& layer = world.enter(0, content.registry, content.definitions);
+        T2D_CHECK_MSG(world.build_report().clean(), "{}", world.build_report().errors.empty()
+                                                           ? std::string{}
+                                                           : world.build_report().errors.front());
+        return ore_cells(layer);
+    };
+
+    const std::vector<GridPos> first = scatter_of(99);
+    T2D_CHECK_GT(first.size(), 3u);
+    T2D_CHECK_LT(first.size(), 41u);
+    // The same seed gives the same cells, in the same order: a mine is reproducible.
+    T2D_CHECK(scatter_of(99) == first);
+    // Another seed gives the same kind of layer and puts the ore somewhere else: the rules are the
+    // designer's, the dice are the layer's (world.h).
+    const std::vector<GridPos> other = scatter_of(1234);
+    T2D_CHECK_NE(other, first);
+    T2D_CHECK_GT(other.size(), 3u);
+    T2D_CHECK_LT(other.size(), 41u);
+}
+
+T2D_TEST(a_scatter_on_a_tile_layer_the_map_does_not_have_says_so) {
+    // The data does not state how many tile layers the map has, so the world's shape decides - and a
+    // rule that names a tile layer the map does not have is about the description, not about a
+    // placement: it is reported once, by the generator, and nothing is placed on it.
+    const Parsed parsed = parse(R"(
+layer::
+    entrance::
+        size::
+            width:6
+            height:6
+        floor::
+            layer:1
+            full_flash:"dirt"
+        scatter::
+            copper::
+                kind:"ore"
+                content:"copper"
+                layer:2
+                density:1
+)");
+    T2D_CHECK(parsed.errors.empty());
+    LayerRules rules;
+    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+
+    Fixture content;
+    content.add_floor("dirt");
+    content.add_ore("copper");
+    MineWorld world(1, LayerShape{6, 6, 1});
+    world.set_generator(story_layer_generator(rules, world.shape()));
+    const MineLayer& layer = world.enter(0, content.registry, content.definitions);
+    const LayerBuildReport& report = world.build_report();
+    T2D_CHECK_EQ(layer.plot_count(), 0u);
+    T2D_CHECK_EQ(report.refused, 2u);
+    T2D_REQUIRE(report.errors.size() == 2u);
+    T2D_CHECK(report.errors[0].find("the floor creator works on tile layer 1, and this layer has 1") !=
+              std::string::npos);
+    T2D_CHECK(report.errors[1].find("the scatter 'copper' works on tile layer 2, and this layer has 1") !=
+              std::string::npos);
+}
+
 T2D_TEST(the_story_fixture_the_documents_show_loads_and_is_two_layers) {
     // The one story pack that lives in the repository, and the one the documents tell a designer to run
     // (docs/MODS.md section 0): it is a **test double** - the game's own content ships no layers at all
@@ -675,8 +1146,25 @@ T2D_TEST(the_story_fixture_the_documents_show_loads_and_is_two_layers) {
     const MineLayer& layer = world.enter(0, registry, report.definitions);
     T2D_CHECK_MSG(world.build_report().clean(), "the build refused {} placement(s)",
                   world.build_report().refused);
-    T2D_CHECK_EQ(layer.plot_count(), 1536u);
     T2D_CHECK_EQ(layer.mirrored_count(), 769u);
+
+    // The floor it filled, and the ore the scatter put on the tile layer above it: a density of 0.01
+    // over 1536 cells is around fifteen of them, bounded by the rule's own min and max.
+    const std::vector<GridPos> ore = ore_cells(layer);
+    T2D_CHECK_EQ(layer.plot_count(), 1536u + ore.size());
+    T2D_CHECK_GT(ore.size(), 5u);
+    T2D_CHECK_LT(ore.size(), 41u);
+    for (const GridPos cell : ore) {
+        const SceneTile* plot = layer.plot_at(1, cell);
+        T2D_REQUIRE(plot != nullptr);
+        T2D_CHECK(plot->is_ore());
+        T2D_CHECK_EQ(plot->id(), registry.find(ContentKind::Ore, "copper"));
+        // What the restriction is for: every ore sits on the game's own dirt, because that is the only
+        // floor the layer has.
+        const SceneTile* below = layer.plot_at(0, cell);
+        T2D_REQUIRE(below != nullptr);
+        T2D_CHECK(below->is_floor());
+    }
 }
 
 T2D_TEST_MAIN

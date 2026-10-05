@@ -33,10 +33,17 @@ using t2d::usize;
 /// a save has to point at and grows when the designer introduces a new kind of data.
 ///
 /// A new kind is **appended**: the value is packed into every map cell and written into every save, so
-/// inserting one in the middle would renumber the content behind it.
-enum class ContentKind : u8 { Item = 0, Structure, Machine, Recipe, Layer, Channel, Floor, Count };
+/// inserting one in the middle would renumber the content behind it. Appending one is what makes an
+/// older save table readable: it has fewer kind sections than this build knows, and a kind it does not
+/// have is a kind with no entries in it (ContentTable::deserialize).
+enum class ContentKind : u8 { Item = 0, Structure, Machine, Recipe, Layer, Channel, Floor, Ore, Count };
 inline constexpr usize kContentKindCount = static_cast<usize>(ContentKind::Count);
 [[nodiscard]] const char* content_kind_name(ContentKind kind);
+
+/// The kind a table's name is ("item", "structure", ...), or ContentKind::Count when the name is not a
+/// kind. What a reader of data uses to turn a name in a file into a kind, without keeping a second list
+/// of the names that would go stale the moment a kind is appended.
+[[nodiscard]] ContentKind content_kind_from_name(std::string_view name);
 
 /// Numeric id of one piece of content inside one registry. Ids are per kind, start at 1 and are handed
 /// out in registration order, so they stay compact enough for a varint.
@@ -83,6 +90,8 @@ private:
 /// The name -> id table of one save.
 struct ContentTable {
     /// Bumped when the encoding changes; a save written by another version is refused, never guessed.
+    /// Adding a content kind is not an encoding change: a table written before the kind existed has
+    /// fewer kind sections, and the reader reads it with that kind empty (deserialize).
     static constexpr u8 kVersion = 1;
     /// "MCT1"
     static constexpr u32 kMagic = 0x3154434Du;
