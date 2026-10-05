@@ -1,0 +1,21 @@
+# 故事模式的层 —— **测试替身**，不是游戏内容（docs/GAME_DESIGN.md §7.3/§7.8）。
+#
+# 这里的层名与数字都是夹具的：游戏本体一个层都没写，它只提供格式与引擎。这份文件展示的是**数据的
+# 形状**：size:: 说一层多大，floor:: 是地板创建器，full_flash 把这一层的每个格子都设成给定的地板。
+#
+# 它点的地板 "dirt" 是**本体自己的**（content/floors.ecfg）——内容包给故事加的是层，不是内容。
+
+layer::
+    entrance::
+        size::
+            width:48
+            height:32
+            tile_layers:2
+        floor::
+            full_flash:"dirt"
+    shaft::
+        size::
+            width:24
+            height:16
+        floor::
+            full_flash:"dirt"

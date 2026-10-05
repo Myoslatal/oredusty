@@ -236,7 +236,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 `--strip-all` 之后约 0.9 MiB；dev 包 = 头文件（含生成的 `config.h`）+ `engine.api` + 本体表 + `codetab` 工具 + 模板 + 文档。
 两个包都从"只有一个解压目录"的环境里实跑过：`0 error(s)`，界面文本来自包内的 `assets/text/ui.ecfg`。
 
-预设：tile2d **debug / release / asan / tsan 25/25**、no-renderer **11/11**、Ore **13/13**。
+预设：tile2d **debug / release / asan / tsan / server-only 26/26**、no-renderer **11/11**、Ore **13/13**。
 
 ## 8. 边界（写在明处）
 

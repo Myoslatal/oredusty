@@ -13,6 +13,7 @@ add_library(mine_core STATIC
     src/content_loader.cpp
     src/content_pack.cpp
     src/content_search.cpp
+    src/layer_rules.cpp
     src/menu.cpp
     src/mod_package.cpp
     src/registry.cpp
@@ -59,6 +60,7 @@ set(MINE_TABLE_SOURCES
     src/content_loader.cpp
     src/content_pack.cpp
     src/content_search.cpp
+    src/layer_rules.cpp
     src/menu.cpp
     src/mod_package.cpp
     src/registry.cpp

@@ -100,6 +100,13 @@ LayerGenerator debug_scatter_generator(const ContentRegistry& registry, LayerSha
 
 // ----------------------------------------------------------------------- the layer ---
 
+void LayerBuildReport::refuse(std::string message) {
+    ++refused;
+    if (errors.size() >= kMaxErrors) return;
+    if (std::find(errors.begin(), errors.end(), message) != errors.end()) return;
+    errors.push_back(std::move(message));
+}
+
 MineLayer::MineLayer(i32 index, LayerShape shape, u64 seed)
     : index_(index), shape_(shape), seed_(seed), rng_(seed),
       cells_(shape.width, shape.height, shape.tile_layers) {
@@ -111,7 +118,7 @@ MineLayer::MineLayer(i32 index, LayerShape shape, u64 seed)
 types::SceneTile* MineLayer::place(const ContentRegistry& registry, const ContentDefinitions& definitions,
                                    const PlacedContent& where, LayerBuildReport* report) {
     const auto refuse = [&](std::string message) -> types::SceneTile* {
-        if (report != nullptr) report->errors.push_back(std::move(message));
+        if (report != nullptr) report->refuse(std::move(message));
         return nullptr;
     };
     if (!types::kind_is_a_tile(where.kind)) {
@@ -275,7 +282,7 @@ const MineLayer& MineWorld::enter(i32 index, const ContentRegistry& registry,
     LayerSpec spec;
     if (generator_) spec = generator_(seed_, index);
     if (spec.index != index) {
-        build_report_.errors.push_back(
+        build_report_.refuse(
             std::format("the generator answered for layer {} when layer {} was asked for", spec.index, index));
     }
     // The description's shape is what the layer is; a description that does not say (a generator that

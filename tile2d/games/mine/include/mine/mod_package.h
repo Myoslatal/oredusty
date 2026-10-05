@@ -19,6 +19,7 @@
 #pragma once
 
 #include <mine/content_loader.h>
+#include <mine/layer_rules.h>
 #include <mine/mod_api.h>
 #include <mine/registry.h>
 
@@ -77,6 +78,9 @@ struct LoadedMod {
     /// The plot definitions its content files declare: the fields the engine reads (types/
     /// tile_definition.h), kept so that a layer can be built out of what a mod added.
     std::vector<types::TileDefinition> definitions;
+    /// The layers its content files describe, in file order (layer_rules.h): a mod can add a story
+    /// layer exactly the way the game's own content does.
+    std::vector<LayerRule> layers;
     bool native_loaded = false;
     bool ok = true;                           ///< false: the report says why, the game runs without it
     std::string error;

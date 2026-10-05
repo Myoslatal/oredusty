@@ -436,6 +436,17 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
                 report_.errors.push_back(message);
                 if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
+            // The same for the layers it describes (layer_rules.h): a rule the engine cannot read is a
+            // mod's typo, and it is reported by the mod that made it.
+            std::vector<std::string> layer_errors;
+            for (LayerRule& rule : layer_rules(document, &layer_errors)) {
+                slot.loaded.layers.push_back(std::move(rule));
+            }
+            for (const std::string& layer_error : layer_errors) {
+                const std::string message = std::format("mod '{}': {}", manifest.id, layer_error);
+                report_.errors.push_back(message);
+                if (slot.loaded.error.empty()) slot.loaded.error = message;
+            }
         }
 
         // Then the code, if there is any.

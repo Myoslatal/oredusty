@@ -52,9 +52,9 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                9 cases / 337 checks  UTF-8, language tables, the line box, the shipped interface strings
+    tests/test_text                9 cases / 339 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
-    tests/test_code_table         13 cases / 231 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by
+    tests/test_code_table         31 cases / 324 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases /1265 checks  framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
@@ -65,8 +65,9 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     13 cases / 167 checks  plots: identity, footprints, the two kinds, the dice, the definer
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
+    games/mine/tests/test_layer_rules    14 cases / 330 checks  the story's layers in data: the size, the floor creator, the generator, the layer a world enters
     games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   13 cases / 196 checks  packs: a directory per pack, several files each, headers, order, collisions, art
+    games/mine/tests/test_content_pack   13 cases / 198 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
@@ -404,7 +405,7 @@ links the framework with `--whole-archive` and exports its own symbols.
     ./mine_game --table mods/demo_mod/mod.codetab ...          # 'mine_game_banner' from 'demo_mod' replaced 'mine'
                                                                #   tables: 2 module(s), 1 override(s) ... Mine, modded
 
-What that buys, measured on real compiler output (`test_code_table`, 13 cases / 231 checks):
+What that buys, measured on real compiler output (`test_code_table`, 31 cases / 324 checks):
 
 * a mod replacing a function the game defined: the game's own call goes to the mod (`use_base()` 11 → **101**),
   and `find_previous()` still reaches the original, so a mod can wrap rather than only replace;
@@ -500,8 +501,20 @@ built when it is entered — and only the layer being played is held, so a mine 
 costs one layer. What it is built *from* is a **layer description** (`LayerSpec`): the shape of the
 map and the content that goes in it. That is what a generator produces, the designer's data in story
 mode and a derivation from `(seed, index)` in endless mode, and both produce the same thing — so
-nothing downstream knows which mode it is. Until the layer rules exist the generator in force places
-nothing, and an empty layer is a layer: it can be entered, walked, queried and drawn.
+nothing downstream knows which mode it is.
+
+A story's layers **are data** (`mine/layer_rules.h`): one entry per layer under `layer::`, and the
+order they are written in is the mine's order — the same order the registry hands out layer ids in, so
+the nth story layer is content id n+1 and a save keeps pointing at it by name. Two tables are the
+engine's: `size::` (`width` / `height` 1..4096, `tile_layers` 1..32 — anything left out is the
+session's shape) and `floor::`, the floor creator, whose one rule today is
+`full_flash:"<floor name>"`: every cell of that tile layer becomes that floor, one plot per cell, so
+each cell can be replaced on its own and `random_reverse` means something. Everything else under the
+entry belongs to the designer. A field the engine reads and cannot read is refused with the file named
+rather than ignored, and a floor the registry does not have builds the layer anyway and says so on
+screen — once, not once per cell. Endless mode still derives its layers from `(seed, index)` (its
+rules are §7.9, not designed yet), so it enters an empty layer — and an empty layer is a layer: it can
+be entered, walked, queried and drawn.
 
 What a layer holds is **plots** (`mine::types`): fixed things that occupy cells. Both halves are
 needed and they answer different questions — the **grid** says which content sits on every cell in
@@ -579,7 +592,7 @@ separately.
   `text`, `shot`, `quit`), and `ok` means the frame loop has *applied* it, so a screenshot taken after a reply
   is a screenshot of the result. This is how every screenshot below was taken, including the headless ones.
 
-* **Code tables are merged and run for real.** `test_code_table` (13 cases / 231 checks) reads objects the
+* **Code tables are merged and run for real.** `test_code_table` (31 cases / 324 checks) reads objects the
   build compiled from `tests/data/tables/`, packs them into tables, merges two tables in memory and calls
   into the result: a mod's definition of a function the game defined takes over the game's own call (11 → 101),
   a mod's definition of a virtual method takes over the game's virtual call (25 → 97), weak vtable/typeinfo
@@ -600,11 +613,12 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 25/25 tests green |
-| `release` | 25/25 tests green |
-| `asan` (Address + UB sanitizers) | 25/25 tests green |
-| `tsan` (ThreadSanitizer) | 25/25 tests green |
+| `debug` | 26/26 tests green |
+| `release` | 26/26 tests green |
+| `asan` (Address + UB sanitizers) | 26/26 tests green |
+| `tsan` (ThreadSanitizer) | 26/26 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
+| `server-only` | 26/26 tests green |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

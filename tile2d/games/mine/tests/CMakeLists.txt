@@ -86,6 +86,11 @@ target_link_libraries(test_content_search PRIVATE mine_core)
 t2d_add_test(test_world test_world.cpp)
 target_link_libraries(test_world PRIVATE mine_core)
 
+# The story's layers, described in data: the layer:: reader, the floor creator, and the generator that
+# turns the designer's rules into the layer a world enters.
+t2d_add_test(test_layer_rules test_layer_rules.cpp)
+target_link_libraries(test_layer_rules PRIVATE mine_core)
+
 
 # --- the game's own code in a code table --------------------------------------------------------------
 # mine_core's registry is compiled into a table and *not* linked into the test: what the test loads is

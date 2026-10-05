@@ -1014,14 +1014,23 @@ t2d::Aabb2 MineApp::world_area() const {
 void MineApp::open_world() {
     const LayerShape shape{options_.grid_width, options_.grid_height, options_.tile_layers};
     world_ = MineWorld(session_.seed, shape);
-    // Which content a layer holds is the designer's (docs/GAME_DESIGN.md sections 7.3, 7.4, 7.8, 7.9),
-    // so the generator in force places nothing: an empty layer is what a session enters until those
-    // rules arrive. The debug fills are there to look at content before then, and they name no content
-    // of their own - they lay out whatever the registry holds.
+    // Which content a layer holds is the designer's (docs/GAME_DESIGN.md sections 7.3, 7.4, 7.8, 7.9).
+    // A story reads it from the designer's own data (layer_rules.h); endless mode would derive it from
+    // (seed, index), which is not designed yet, so it enters an empty layer. The debug fills are there to
+    // look at content before the rules exist, and they name no content of their own - they lay out
+    // whatever the registry holds - so a run that asks for one gets one.
+    //
+    // The generator borrows the rules, so they have to outlive the world they are installed in: they live
+    // in the pipeline report, which is a member of this app and outlives the world (world.h says the same
+    // about the registry a debug generator reads).
+    const LayerRules& story = content_.report().layers;
     if (options_.layer_fill == "bands") {
         world_.set_generator(debug_band_generator(registry_, shape));
     } else if (options_.layer_fill == "scatter") {
         world_.set_generator(debug_scatter_generator(registry_, shape));
+    } else if (session_.mode == Mode::Story && !story.empty()) {
+        world_.set_generator(story_layer_generator(story, shape));
+        T2D_INFO("world: the story describes {} layer(s)", story.size());
     } else {
         if (!options_.layer_fill.empty() && options_.layer_fill != "none") {
             set_status(format_localized(locale_.text("world.fill.unknown"), options_.layer_fill), true);
@@ -1053,8 +1062,13 @@ void MineApp::enter_mine_layer(i32 index) {
              layer.index(), layer.width(), layer.height(), layer.layer_count(), layer.plot_count(),
              layer.ticking_count(), layer.mirrored_count(), layer.filled_cells());
     // Everything the generator asked for that could not be placed: a layer that quietly loses a
-    // structure is a bug report nobody can act on (world.h).
+    // structure is a bug report nobody can act on (world.h). A rule that refuses once per cell is one
+    // reason, not a thousand lines, so what is not listed is counted instead.
     for (const std::string& error : report.errors) T2D_WARN("world: {}", error);
+    if (report.truncated()) {
+        T2D_WARN("world: {} placement(s) refused in all, {} reason(s) listed above", report.refused,
+                 report.errors.size());
+    }
     fit_world_view();
 }
 
@@ -1842,17 +1856,28 @@ void MineApp::draw_world_screen() {
     }
 
     // An empty layer says so, and says why: content is the designer's, and a screen that shows nothing
-    // has to explain itself (the rule the sandbox's empty palette follows too).
+    // has to explain itself (the rule the sandbox's empty palette follows too). The reason is one of
+    // three, in the order that answers the question the screen raises: what the build refused (the data
+    // names content that is not there), then the story (it describes no such layer), then how to look at
+    // content before the rules exist.
     if (layer.plot_count() == 0) {
         t2d::TextStyle style;
         style.size_px = body_px_;
         const std::string text{locale_.text("world.empty")};
-        const std::string hint{locale_.text("world.empty.hint")};
-        const f32 text_width = text_->measure(text, fonts_, style).width;
-        const f32 hint_width = text_->measure(hint, fonts_, style).width;
+        std::string hint{locale_.text("world.empty.hint")};
+        if (!world_.build_report().clean()) {
+            hint = world_.build_report().errors.front();
+        } else if (session_.mode == Mode::Story &&
+                   content_.report().layers.at(static_cast<usize>(layer.index())) == nullptr) {
+            hint = format_localized(locale_.text("world.story.none"), layer.index());
+        }
+        const f32 max_width = std::max(16.0f, area.max.x - area.min.x - padding * 2.0f);
+        const f32 text_width = std::min(text_->measure(text, fonts_, style).width, max_width);
+        const f32 hint_width = std::min(text_->measure(hint, fonts_, style).width, max_width);
         const f32 centre_y = area.max.y * 0.5f;
-        draw_line(area.max.x * 0.5f - text_width * 0.5f, centre_y - line, body_px_, kPalette.warning, text);
-        draw_line(area.max.x * 0.5f - hint_width * 0.5f, centre_y, body_px_, kPalette.text_dim, hint);
+        draw_fitted(area.max.x * 0.5f - text_width * 0.5f, centre_y - line, body_px_, kPalette.warning, text,
+                    text_width);
+        draw_fitted(area.max.x * 0.5f - hint_width * 0.5f, centre_y, body_px_, kPalette.text_dim, hint, hint_width);
     }
 
     // Two lines at the bottom: what the layer is and what the two passes did, then what the pointer is

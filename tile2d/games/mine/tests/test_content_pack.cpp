@@ -476,6 +476,12 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_EQ(report.base_images, 1u);
     T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
     T2D_CHECK(registry.find(ContentKind::Floor, "dirt") != kNoContent);
+    // And it ships **no layer rules**: which layers a story has, how big they are and what their floors
+    // are made of is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8, 7.10), so the game's own
+    // content is exactly the one floor above. A story layer that turned up here would be content this
+    // repository invented.
+    T2D_CHECK_EQ(report.layers.size(), 0u);
+    T2D_CHECK_EQ(registry.count(ContentKind::Layer), 0u);
     // The header gives the game's own pack its name, so a content list can say what it is.
     T2D_REQUIRE(report.sources.size() == 1u);
     T2D_CHECK_EQ(report.sources[0].id, std::string("mine"));

@@ -108,13 +108,24 @@ using LayerGenerator = std::function<LayerSpec(u64 seed, i32 index)>;
 /// footprint outside the map, or puts it on top of something already on that tile layer is **refused
 /// with a reason**: a layer that quietly loses a structure is a bug report nobody can act on.
 struct LayerBuildReport {
+    /// How many different refusals are kept. A rule that names content the registry does not have
+    /// refuses once per cell it wanted to place, and a layer of a million cells is not a bug report of a
+    /// million lines: every refusal is counted, the list keeps the first of each kind and stops here.
+    static constexpr usize kMaxErrors = 16;
+
     usize placed = 0;      ///< plots created
     usize cells = 0;       ///< cells they cover between them
     usize ticking = 0;     ///< plots that run on a cadence
     usize mirrored = 0;    ///< plots the dice turned around
+    usize refused = 0;     ///< placements the layer refused, whether or not their reason is kept
     std::vector<std::string> errors;
 
-    [[nodiscard]] bool clean() const { return errors.empty(); }
+    /// Records a refusal: counted always, kept once per distinct reason, up to kMaxErrors of them.
+    void refuse(std::string message);
+
+    [[nodiscard]] bool clean() const { return refused == 0; }
+    /// True when some refusals are not in \c errors because the list was full or the reason repeated.
+    [[nodiscard]] bool truncated() const { return refused > errors.size(); }
 };
 
 /// One layer of the mine: a map grid, the plots its content turned into, and the dice that decided how

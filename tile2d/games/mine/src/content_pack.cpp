@@ -92,6 +92,18 @@ PackFileResult load_pack_files(ContentPack& pack, ContentRegistry& registry, Con
             report.errors.push_back(message);
             if (pack.error.empty()) pack.error = message;
         }
+        // And the layers the file describes (layer_rules.h): the story's own layers, read while the file
+        // loads anyway, so a rule the engine cannot read is reported where the file is. The first
+        // declaration of a layer name keeps it, the way the registry keeps the first owner of a name.
+        std::vector<std::string> layer_errors;
+        for (LayerRule& rule : layer_rules(document, &layer_errors)) {
+            report.layers.add(std::move(rule));
+        }
+        for (const std::string& layer_error : layer_errors) {
+            const std::string message = std::format("{}: {}", label, layer_error);
+            report.errors.push_back(message);
+            if (pack.error.empty()) pack.error = message;
+        }
         std::vector<ContentEntry> added;
         const ContentRegistrationReport registered = register_declared_content(registry, declared, &added);
         result.registered += registered.registered;
@@ -475,15 +487,17 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         // else, so a layer can be built out of what a mod added exactly like out of the game's own
         // content.
         for (const types::TileDefinition& definition : mod.definitions) report_.definitions.add(definition);
+        // And the layers it describes: a mod adds a story layer the way the game's own content does.
+        for (const LayerRule& rule : mod.layers) report_.layers.add(rule);
         report_.sources.push_back(std::move(source));
     }
 
     report_.total_content = registry.total_count();
     T2D_INFO("content: {} base pack(s) with {} and {} image(s), {} pack(s) with {} and {} image(s), "
-             "{} mod(s) with {} -> {} registered, {} plot definition(s), {} error(s)",
+             "{} mod(s) with {} -> {} registered, {} plot definition(s), {} story layer(s), {} error(s)",
              report_.base_packs, report_.base_registered, report_.base_images, report_.packs,
              report_.pack_content, report_.pack_images, report_.mods, report_.mod_content,
-             report_.total_content, report_.definitions.size(), report_.errors.size());
+             report_.total_content, report_.definitions.size(), report_.layers.size(), report_.errors.size());
     for (const std::string& error : report_.errors) T2D_WARN("content: {}", error);
     for (const std::string& warning : report_.warnings) T2D_WARN("content: {}", warning);
     return report_;

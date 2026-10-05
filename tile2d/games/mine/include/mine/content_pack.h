@@ -20,6 +20,7 @@
 
 #include <mine/content_list.h>
 #include <mine/content_loader.h>
+#include <mine/layer_rules.h>
 #include <mine/mod_package.h>
 #include <mine/registry.h>
 
@@ -102,6 +103,10 @@ struct ContentPipelineReport {
     /// definitions are read while a source loads anyway - a "random_reverse" the engine cannot read is
     /// a data error, and it is reported where the file is - so this is that read, kept (content_loader.h).
     ContentDefinitions definitions;
+    /// Every layer the load read, from all three stages, in the order the data declares them: the story
+    /// mode generator's rules (layer_rules.h). A layer entry the engine cannot read is in the report's
+    /// errors and not here, so the story is the layers that are actually there.
+    LayerRules layers;
     usize mods = 0;              ///< mods that loaded
     usize native_mods = 0;
     usize mod_content = 0;
