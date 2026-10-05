@@ -805,6 +805,8 @@
   没有图的矿被下一层地板的贴图盖住（撒了 13 块，一块也看不见）；现在**一层一层画**（每层先颜色后贴图），
   并且把 HUD 与指针移到图层**之后**——放大到 48 像素/格时贴图曾经盖住状态栏（旧截图里就有）。
   三趟：`draw_world_screen`（底）/ `draw_world_layer`（层）/ `draw_world_overlay`（界面）。
+  **世界视图的五张截图都按新顺序重出了**（`world_empty` / `world_scatter` / `world_mirror` /
+  `world_layer1` / `world_zh_hans`）——它们此前拍的正是那个被盖住的状态栏。
   ⑥ **验证**：`test_mine_types` 13 → **14 用例 / 187 断言**、`test_layer_rules` 14 → **22 用例 /
   712 断言**（每一条拒绝、数量公式、地板限制、两层不互相压、同种子同布局、超出瓦片层数说出来）；
   套件仍是 **26 个测试**（debug / release / asan / tsan / server-only 26/26、no-renderer 11/11、
