@@ -22,6 +22,8 @@
 
 #include <mine/types/entity_tile.h>
 #include <mine/types/floor.h>
+#include <mine/types/item.h>
+#include <mine/types/item_definition.h>
 #include <mine/types/scene_tile.h>
 #include <mine/types/single_ore.h>
 #include <mine/types/tile.h>

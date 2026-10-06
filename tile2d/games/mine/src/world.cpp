@@ -146,7 +146,7 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
     types::TileDefinition fallback;
     fallback.kind = where.kind;
     fallback.name = where.name;
-    const types::TileDefinition* definition = definitions.find(where.kind, where.name);
+    const types::TileDefinition* definition = definitions.find_tile(where.kind, where.name);
     if (definition == nullptr) definition = &fallback;
     std::unique_ptr<types::SceneTile> plot =
         types::make_tile(*definition, id, where.layer, where.anchor, cells.width, cells.height);

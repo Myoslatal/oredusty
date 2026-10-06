@@ -5,8 +5,12 @@
 
 #include <support/test_support.h>
 
+#include <format>
 #include <memory>
+#include <optional>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 using namespace mine;
 using namespace mine::types;
@@ -537,6 +541,86 @@ floor::
     item.kind = ContentKind::Item;
     item.name = "ore";
     T2D_CHECK(make_tile(item, 10, 0, GridPos{0, 0}) == nullptr);
+}
+
+T2D_TEST(the_data_says_what_an_item_is_and_the_definer_builds_it) {
+    // An item is not a plot, and a name is not a kind: this document declares a floor named "stone" and
+    // an item named "stone", and they are two pieces of content that happen to share a word.
+    const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(R"(
+floor::
+    stone::
+        image:"art/floor_stone.png"
+item::
+    stone::
+        image:"art/item_stone.png"
+        stack:64
+    dust::
+        note:"an item with no picture at all"
+)");
+    T2D_REQUIRE(document.has_value());
+
+    // The item table is read by the item definer and by nothing else: a plot definer walking the same
+    // document finds the floor, the item definer finds the two items, and neither finds the other's.
+    std::vector<std::string> errors;
+    const std::vector<ItemDefinition> items = item_definitions(*document, &errors);
+    T2D_REQUIRE(items.size() == 2u);
+    T2D_CHECK(errors.empty());
+    T2D_CHECK_EQ(items[0].kind, ContentKind::Item);
+    T2D_CHECK_EQ(items[0].name, std::string("stone"));
+    T2D_CHECK_EQ(items[0].image, std::string("art/item_stone.png"));
+    T2D_CHECK_EQ(items[1].kind, ContentKind::Item);
+    T2D_CHECK_EQ(items[1].name, std::string("dust"));
+    T2D_CHECK(items[1].image.empty());
+    T2D_CHECK_EQ(tile_definitions(*document).size(), 1u);
+
+    // The field the engine reads: "image". A field it reads and cannot read is refused rather than
+    // guessed at - the same rule the plot definer follows, because it is the same field.
+    const std::optional<t2d::EcfgDocument> wrong = t2d::EcfgDocument::parse(R"(
+item::
+    plate::
+        image:7
+)");
+    T2D_REQUIRE(wrong.has_value());
+    const t2d::EcfgValue* plate = wrong->find("item")->find("plate");
+    T2D_REQUIRE(plate != nullptr);
+    std::string error;
+    T2D_CHECK_FALSE(read_item_definition(ContentKind::Item, "plate", *plate, &error).has_value());
+    T2D_CHECK(error.find("image") != std::string::npos);
+
+    // And the table an entry is written in is what it is: reading an item's entry as a mineral is
+    // refused, because a definition that said it came from somewhere else would be one that lies.
+    const t2d::EcfgValue* stone_entry = document->find("item")->find("stone");
+    T2D_REQUIRE(stone_entry != nullptr);
+    error.clear();
+    T2D_CHECK_FALSE(read_item_definition(ContentKind::Ore, "stone", *stone_entry, &error).has_value());
+    T2D_CHECK(error.find("is not an item") != std::string::npos);
+
+    // The definer turns a definition into the item it describes: the id the registry handed out, and
+    // the picture the data named - which is everything an item carries.
+    ContentRegistry registry;
+    const ContentId stone_id = registry.register_content(ContentKind::Item, "stone");
+    const Item stone = make_item(items[0], stone_id);
+    T2D_CHECK_EQ(stone.kind(), ContentKind::Item);
+    T2D_CHECK_EQ(stone.id(), stone_id);
+    T2D_CHECK_EQ(stone.image(), std::string("art/item_stone.png"));
+    T2D_CHECK_EQ(stone.name(registry), std::string("stone"));
+    T2D_CHECK(stone.valid(registry));
+
+    // Content that is gone: the item keeps the id it was given and says so - the same "#<id>" a plot
+    // shows (types/tile.cpp) - instead of quietly becoming whatever now holds that number.
+    const Item gone(kMaxContentId, "art/item_stone.png");
+    T2D_CHECK_EQ(gone.name(registry), std::format("#{}", kMaxContentId));
+    T2D_CHECK_FALSE(gone.valid(registry));
+
+    // The empty slot: an item with no content behind it and no picture.
+    const Item empty;
+    T2D_CHECK_EQ(empty.id(), kNoContent);
+    T2D_CHECK(empty.image().empty());
+    T2D_CHECK_EQ(empty.name(registry), std::string("#0"));
+    T2D_CHECK_FALSE(empty.valid(registry));
+
+    // Nothing here builds a plot: an item is not on the map.
+    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Item));
 }
 
 T2D_TEST_MAIN

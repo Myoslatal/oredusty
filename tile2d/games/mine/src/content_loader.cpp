@@ -10,13 +10,25 @@ namespace mine {
 void ContentDefinitions::add(types::TileDefinition definition) {
     // The same entry twice: the first one keeps the name, the way the registry keeps the first owner
     // of a content name. Two files that declare one name are reported by the registration, not here.
-    if (find(definition.kind, definition.name) != nullptr) return;
-    definitions_.push_back(std::move(definition));
+    if (find_tile(definition.kind, definition.name) != nullptr) return;
+    tiles_.push_back(std::move(definition));
 }
 
-const types::TileDefinition* ContentDefinitions::find(ContentKind kind, std::string_view name) const {
-    for (const types::TileDefinition& definition : definitions_) {
+void ContentDefinitions::add(types::ItemDefinition definition) {
+    if (find_item(definition.name) != nullptr) return;
+    items_.push_back(std::move(definition));
+}
+
+const types::TileDefinition* ContentDefinitions::find_tile(ContentKind kind, std::string_view name) const {
+    for (const types::TileDefinition& definition : tiles_) {
         if (definition.kind == kind && definition.name == name) return &definition;
+    }
+    return nullptr;
+}
+
+const types::ItemDefinition* ContentDefinitions::find_item(std::string_view name) const {
+    for (const types::ItemDefinition& definition : items_) {
+        if (definition.name == name) return &definition;
     }
     return nullptr;
 }

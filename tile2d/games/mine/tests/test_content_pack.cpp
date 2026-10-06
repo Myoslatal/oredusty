@@ -587,4 +587,57 @@ T2D_TEST(the_pack_workspace_and_its_template_always_load) {
     T2D_CHECK(pipeline.packs()[0].directory.find("template") != std::string::npos);
 }
 
+T2D_TEST(a_packs_items_are_registered_and_their_pictures_are_kept) {
+    Scratch scratch;
+    scratch.write("item_pack/items.ecfg", R"(
+item::
+    plate::
+        image:"art/plate.png"
+    scrap::
+        note:"no picture, and that is fine"
+)");
+    scratch.write("item_pack/art/plate.png", "pretend this is a png");
+
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({scratch.root()});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK_EQ(report.pack_content, 2u);
+
+    // An item is content like any other: it is registered, and it gets its id in registration order.
+    T2D_CHECK_EQ(registry.find(ContentKind::Item, "plate"), 1u);
+    T2D_CHECK_EQ(registry.find(ContentKind::Item, "scrap"), 2u);
+
+    // And it is defined: the picture a slot, a recipe or a demand draws comes from here.
+    T2D_CHECK_EQ(report.definitions.item_count(), 2u);
+    const types::ItemDefinition* plate = report.definitions.find_item("plate");
+    T2D_REQUIRE(plate != nullptr);
+    T2D_CHECK_EQ(plate->kind, ContentKind::Item);
+    T2D_CHECK_EQ(plate->name, std::string("plate"));
+    T2D_CHECK_EQ(plate->image, std::string("art/plate.png"));
+    const types::ItemDefinition* scrap = report.definitions.find_item("scrap");
+    T2D_REQUIRE(scrap != nullptr);
+    T2D_CHECK(scrap->image.empty());
+
+    // The two lists are separate: an item is not a plot, so looking one up as a plot finds nothing -
+    // and nothing in this load is a plot definition at all.
+    T2D_CHECK(report.definitions.find_tile(ContentKind::Item, "plate") == nullptr);
+    T2D_CHECK(report.definitions.find_item("wall") == nullptr);
+    T2D_CHECK_EQ(report.definitions.size(), 0u);
+
+    // A picture the engine cannot read is reported where the file is, and the pack says so - but the
+    // name is still registered: a field that cannot be read is a report, not a lost piece of content.
+    Scratch broken;
+    broken.write("broken_pack/items.ecfg", "item::\n    plate::\n        image:7\n");
+    ContentRegistry broken_registry;
+    ContentPipeline broken_pipeline;
+    broken_pipeline.set_pack_directories({broken.root()});
+    const ContentPipelineReport& broken_report = broken_pipeline.load(broken_registry);
+    T2D_CHECK(!broken_report.clean());
+    T2D_CHECK(mentions(broken_report.errors, "image must be a quoted path"));
+    T2D_CHECK_EQ(broken_registry.find(ContentKind::Item, "plate"), 1u);
+    T2D_CHECK_EQ(broken_report.definitions.item_count(), 0u);
+}
+
 T2D_TEST_MAIN

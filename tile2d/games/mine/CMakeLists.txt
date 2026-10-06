@@ -20,6 +20,8 @@ add_library(mine_core STATIC
     src/sandbox.cpp
     src/types/entity_tile.cpp
     src/types/floor.cpp
+    src/types/item.cpp
+    src/types/item_definition.cpp
     src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp
@@ -69,6 +71,8 @@ set(MINE_TABLE_SOURCES
     src/sandbox.cpp
     src/types/entity_tile.cpp
     src/types/floor.cpp
+    src/types/item.cpp
+    src/types/item_definition.cpp
     src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp

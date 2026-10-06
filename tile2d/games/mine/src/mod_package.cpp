@@ -436,6 +436,17 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
                 report_.errors.push_back(message);
                 if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
+            // The items its files describe (types/item_definition.h): registered and *shown*, so the
+            // picture each one named is kept too, and a mod's typo is reported by the mod that made it.
+            std::vector<std::string> item_errors;
+            for (types::ItemDefinition& definition : types::item_definitions(document, &item_errors)) {
+                slot.loaded.items.push_back(std::move(definition));
+            }
+            for (const std::string& item_error : item_errors) {
+                const std::string message = std::format("mod '{}': {}", manifest.id, item_error);
+                report_.errors.push_back(message);
+                if (slot.loaded.error.empty()) slot.loaded.error = message;
+            }
             // The same for the layers it describes (layer_rules.h): a rule the engine cannot read is a
             // mod's typo, and it is reported by the mod that made it.
             std::vector<std::string> layer_errors;
