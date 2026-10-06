@@ -58,7 +58,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 **所以 `codetab build` 在打包之前先链接一次**（`<compiler> -r`：部分链接，不放置、不绑定，重定位原样留着，
 上面那条 `-fsemantic-interposition` 的性质因此不变）。一次构建就是**一个程序**，而一个程序只有一份：链接器
 留下先到的那份，所有引用都指向它。实测本体表因此从 **845 节 / 2634 符号 / 8748 重定位**降到
-**686 节 / 2189 符号 / 8672 重定位**（1.13 → 1.07 MiB），少掉的是 9 个函数的 **55 份死拷贝**（约 41 KB）；
+**686 节 / 2190 符号 / 8678 重定位**（1.13 → 1.07 MiB），少掉的是 9 个函数的 **55 份死拷贝**（约 41 KB）；
 同一场景新旧两张表渲染出来**逐像素相同**（`compare -metric AE` = 0），启动日志少掉整整一页
 `… both define … and the two bodies differ …`（[`ABI.md`](ABI.md) H3）。
 
@@ -241,7 +241,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 | **本体代码进表并运行** | `mine_core` 的 `registry.cpp` 编成表：注册两个 item（id 1、2）、重复注册 id 不变，`game_probe()` = 110 |
 | **模组覆盖本体表里的函数** | 加一张模组表后 `game_probe()` = **112**，报告 1 条覆盖（`game_bonus`，game_mod ← mine），`find_previous()` = 5 |
 | **表回调宿主** | 表里没定义的 `host_service` 与 `t2d::log_enabled` 由宿主解析（后者超距，走了桩） |
-| **整块本体进表，可执行文件变启动器** | 表由工具链编（`codetab build`）：release **686 节 / 2189 符号 / 8672 重定位 / 1.07 MiB**；debug **5223 / 17780 / 23074 / 3.27 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
+| **整块本体进表，可执行文件变启动器** | 表由工具链编（`codetab build`）：release **686 节 / 2190 符号 / 8678 重定位 / 1.07 MiB**；debug **5223 / 17780 / 23086 / 3.27 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
 | **构建时统一 ABI** | 本体表与启动器记录同指纹（`bdcb9b070ab30e78`）；`-O0`/`-O2`/`-O3 -DNDEBUG` 三种构建指纹相同、完全合并；另一个 `std::string` ABI、头文件改动、CPU 缺特性三种情形**拒绝并指名**（§5.6、[`ABI.md`](ABI.md)） |
 | **一份定义两个函数体：构建期折叠，加载期报告** | 同一个 vague linkage 函数在 `-O3` 下可以有两份不同机器码（实测 253 / 744 字节）。`codetab build` 先链接，表里只剩一份（9 个函数少掉 55 份死拷贝，渲染逐像素相同）；`codetab pack` 原样打包的仍会在加载时报出来，被丢掉的拷贝连同它的重定位一起丢，越界即构建失败 |
 | **模组表端到端** | `--table mods/demo_mod/mod.codetab`：`mine_game_banner` 被 `demo_mod` 顶掉（报告 1 条覆盖），游戏自己的调用改道，输出从 `Mine, unmodified` 变成 `Mine, modded` |

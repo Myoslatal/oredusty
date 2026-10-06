@@ -146,24 +146,33 @@ structure::
 能问"这一格的地板是什么"的原因，也是它不会落在同一瓦片层已经有东西的格子上的原因。
 
 ```
+# 本体内容里的第一层（games/mine/content/layers.ecfg），一字不改：
 layer::
     entrance::                    # 层名：注册表按它认这一层
         size::                    # 这一层多大（三个字段都可以不写）
-            width:48
-            height:32
+            width:100
+            height:100
             tile_layers:2         # 1..32 个瓦片层
         floor::                   # 地板创建器
             layer:0               # 铺在哪个瓦片层（默认 0）
             full_flash:"dirt"     # 一条规则：每个格子都设成这个地板
         scatter::                 # 散点生成器，一个条目一个
-            copper::              # 给它起的名字，报告里用它
+            stone::               # 给它起的名字，报告里用它
                 kind:"ore"        # 撒什么：内容类别（ore / structure / machine / floor）
-                content:"copper"  # 注册表里的名字
+                content:"stone"   # 注册表里的名字（content/ores.ecfg 声明了它）
                 layer:1           # 撒在哪个瓦片层（默认 0）
-                density:0.01      # 平均密度：每个可用格子按这个概率被选中
-                min:6             # 最少几个（默认 0）
-                max:40            # 最多几个（不写就是不限）
+                density:0.003    # 平均密度：每个可用格子按这个概率被选中
+                min:20            # 最少几个（默认 0）
+                max:35            # 最多几个（不写就是不限）
                 floor:"dirt"      # 地板限制：只落在地板是 dirt 的格子上
+```
+
+矿物本身是一个内容条目（`games/mine/content/ores.ecfg`），`image` 是引擎读的两个字段之一（§1.18）：
+
+```
+ore::
+    stone::
+        image:"art/ore_stone.png"
 ```
 
 **散点生成器的属性**：
@@ -193,12 +202,16 @@ layer::
   512×512 = 262144 个地块 / 130606 个翻转 / **154.6 ms**。
 
 ```sh
-# 仓库里的故事测试替身（games/mine/tests/data/story_content）：两层，第一层 48x32
+# 本体自己的故事：第 1 层 100x100，地板泥地，20 到 35 块石头（content/layers.ecfg）
+./build/debug/games/mine/mine_game --world story --world-view 1
+
+# 一个包往故事里加层（games/mine/tests/data/story_content 是测试替身）：
+# 它加的两层排在本体那层后面，成为第 2、3 层
 ./build/debug/games/mine/mine_game --world story --world-view 1 \
     --packs games/mine/tests/data/story_content
 ```
 
-![故事模式的一层：full_flash 铺出来的地板，散点撒上去的矿](../games/mine/docs/images/world_story_en.png)
+![故事模式的第一层：本体内容里的 100×100 泥地，散点撒上去的 20 块石头](../games/mine/docs/images/world_story_en.png)
 
 ![放大之后：地板在下一层、矿石在上一层，各画各的](../games/mine/docs/images/world_story_zoom_en.png)
 
@@ -229,8 +242,8 @@ layer::
 ![本体内容 + 两个模组](../games/mine/docs/images/sandbox_mods_en.png)
 
 ```sh
-# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的泥地 1 项 + 模组 6 项
-# = 13 项，bands 填充
+# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的 3 项（泥地、石头、第 1 层）
+# + 模组 6 项 = 15 项，bands 填充
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
     --content games/mine/tests/data/placeholder_content \
     --mods build/debug/games/mine/tests/mods --fill bands
@@ -399,7 +412,8 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 
 `games/mine/content/` 是**游戏本体内容包**：它就是一个普通的内容包目录（同样的形态、同样的规则），
 不同的是它在加载顺序的第一段，不需要任何命令行参数——而且它跟着**可执行文件**走：游戏目录下的
-`content/` 优先，找不到时才回退到源码树（开发时跑构建目录里的游戏，编辑的就是正在跑的那份文件）。
+`content/` 优先，找不到时才回退到源码树。构建树里那一份是**构建时拷过去的**（"跑的就是构建出来的东西"），
+所以改了 `games/mine/content/` 里的文件要**重新构建一次**再跑；发布包里那一份同样是拷进去的。
 `--content <目录>` 是在它之后**追加**（不是替换，同一段，所以本体 id 仍然不会变）。
 
 现在里面有：
@@ -407,11 +421,15 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
     games/mine/content/
         pack.ecfg             id:"mine" name:"Mine"  —— 这个包是谁
         floors.ecfg           floor:: dirt::  —— 泥地，贴图 art/floor_dirt.png
+        ores.ecfg             ore:: stone::   —— 石头，贴图 art/ore_stone.png（设计者给的第一块矿物，§1.21）
+        layers.ecfg           layer:: entrance::  —— 故事的第 1 层：100×100、地板泥地、石头 20–35
         art/floor_dirt.png
+        art/ore_stone.png
 
-沙盒里打开就能看到它：内容面板列出 `floor #1 dirt`，空格键把泥地铺到格子上，画的就是这张贴图。
+沙盒里打开就能看到它们：内容面板列出 `floor #1 dirt`、`ore #1 stone`，空格键把泥地铺到格子上，
+画的就是这张贴图；故事模式（`--world story`）进的就是 `layers.ecfg` 描述的那一层。
 
-![本体内容：泥地](../games/mine/docs/images/content_dirt_floor_en.png)
+![本体内容：泥地与石头](../games/mine/docs/images/content_dirt_floor_en.png)
 
 ## 5. 内容列表：在游戏里看谁加载了
 
@@ -454,7 +472,7 @@ printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0
   覆盖语义，那是后续的设计。
 * **原生模组改不了本体的内部函数**：`dlopen` 进来的库无法改变本体在链接时就绑定好的调用。要改内部函数
   与类，用**代码表**（§3.5、[`TABLES.md`](TABLES.md)）：**整个本体已经在表里**（`mine.codetab`，release
-  686 节 / 2189 符号 / 8672 重定位，由 `codetab build` 编——工具链在打包前先把它链接成一个程序），`mine_game` 是启动器，模组表在启动时合并，
+  686 节 / 2190 符号 / 8678 重定位，由 `codetab build` 编——工具链在打包前先把它链接成一个程序），`mine_game` 是启动器，模组表在启动时合并，
   强定义连 vtable 条目一起改道。表里还带一份**构建记录**（`abi=`）：`codetab build` 问编译器这个构建的 ABI 是什么，
   头文件按内容哈希；加载时指纹相同就**完全合并**（`-O0` 的模组与 `-O3` 的本体就是一个程序），
   不同就**拒绝并指名是哪个事实**（另一个 `std::string` ABI、头文件改动、CPU 缺特性）——没有"降级加载"

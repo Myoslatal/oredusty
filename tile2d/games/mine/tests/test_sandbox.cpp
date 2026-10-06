@@ -100,6 +100,9 @@ T2D_TEST(a_new_layer_is_empty_and_the_cursor_stays_inside_it) {
 T2D_TEST(the_palette_is_the_registered_content_that_can_sit_on_a_tile) {
     T2D_CHECK(is_placeable_kind(ContentKind::Structure));
     T2D_CHECK(is_placeable_kind(ContentKind::Machine));
+    T2D_CHECK(is_placeable_kind(ContentKind::Floor));
+    // A SingleOre occupies one cell, so it is content the sandbox can paint and a layout can hold.
+    T2D_CHECK(is_placeable_kind(ContentKind::Ore));
     T2D_CHECK_FALSE(is_placeable_kind(ContentKind::Item));
     T2D_CHECK_FALSE(is_placeable_kind(ContentKind::Recipe));
     T2D_CHECK_FALSE(is_placeable_kind(ContentKind::Layer));

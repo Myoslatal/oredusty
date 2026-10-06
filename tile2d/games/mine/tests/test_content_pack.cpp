@@ -468,20 +468,44 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     const ContentPipelineReport& report = pipeline.load(registry);
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
     T2D_CHECK_EQ(report.base_packs, 1u);
-    T2D_REQUIRE(report.images.size() == 1u);
+    T2D_REQUIRE(report.images.size() == 2u);
     T2D_CHECK(report.images[0].ok);
     T2D_CHECK_EQ(report.images[0].kind, ContentKind::Floor);
     T2D_CHECK_EQ(report.images[0].content, std::string("dirt"));
     T2D_CHECK(report.images[0].resolved.find("floor_dirt.png") != std::string::npos);
-    T2D_CHECK_EQ(report.base_images, 1u);
+    T2D_CHECK_EQ(report.base_images, 2u);
     T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
     T2D_CHECK(registry.find(ContentKind::Floor, "dirt") != kNoContent);
-    // And it ships **no layer rules**: which layers a story has, how big they are and what their floors
-    // are made of is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8, 7.10), so the game's own
-    // content is exactly the one floor above. A story layer that turned up here would be content this
-    // repository invented.
-    T2D_CHECK_EQ(report.layers.size(), 0u);
-    T2D_CHECK_EQ(registry.count(ContentKind::Layer), 0u);
+    // The ore the designer asked for, with the picture the designer gave it: content is a name, a kind
+    // and one image, and nothing here is derived from the name (docs/MODS.md section 0).
+    T2D_CHECK_EQ(registry.count(ContentKind::Ore), 1u);
+    T2D_CHECK(registry.find(ContentKind::Ore, "stone") != kNoContent);
+    T2D_CHECK_EQ(report.images[1].kind, ContentKind::Ore);
+    T2D_CHECK_EQ(report.images[1].content, std::string("stone"));
+    T2D_CHECK(report.images[1].resolved.find("ore_stone.png") != std::string::npos);
+    // And it ships the story's **first layer**: how big it is, what its floor is made of, what is
+    // scattered on it and how much. That is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8,
+    // 7.10); what the engine owns is the format, and what this pins is the data as written.
+    T2D_REQUIRE(report.layers.size() == 1u);
+    T2D_REQUIRE(report.layers.at(0) != nullptr);
+    const LayerRule& first = *report.layers.at(0);
+    T2D_CHECK_EQ(first.name, std::string("entrance"));
+    T2D_CHECK_EQ(first.width, 100u);
+    T2D_CHECK_EQ(first.height, 100u);
+    T2D_CHECK_EQ(first.tile_layers, 2);
+    T2D_REQUIRE(first.floor.rules.size() == 1u);
+    T2D_CHECK_EQ(first.floor.rules[0].kind, FloorRule::Kind::FullFlash);
+    T2D_CHECK_EQ(first.floor.rules[0].floor, std::string("dirt"));
+    T2D_REQUIRE(first.scatter.size() == 1u);
+    T2D_CHECK_EQ(first.scatter[0].name, std::string("stone"));
+    T2D_CHECK_EQ(first.scatter[0].kind, ContentKind::Ore);
+    T2D_CHECK_EQ(first.scatter[0].content, std::string("stone"));
+    T2D_CHECK_EQ(first.scatter[0].layer, 1);
+    T2D_CHECK_EQ(first.scatter[0].min, 20u);
+    T2D_REQUIRE(first.scatter[0].max.has_value());
+    T2D_CHECK_EQ(*first.scatter[0].max, 35u);
+    T2D_CHECK_EQ(first.scatter[0].floor, std::string("dirt"));
+    T2D_CHECK_EQ(registry.count(ContentKind::Layer), 1u);
     // The header gives the game's own pack its name, so a content list can say what it is.
     T2D_REQUIRE(report.sources.size() == 1u);
     T2D_CHECK_EQ(report.sources[0].id, std::string("mine"));

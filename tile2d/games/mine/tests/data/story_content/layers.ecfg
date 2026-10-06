@@ -1,6 +1,7 @@
 # 故事模式的层 —— **测试替身**，不是游戏内容（docs/GAME_DESIGN.md §7.3/§7.8）。
 #
-# 这里的层名、矿物名与数字都是夹具的：游戏本体一个层、一块矿都没写，它只提供格式与引擎。这份文件
+# 这里的层名（`fixture_*`）、矿物名与数字都是夹具的：游戏本体现在有自己的第一层（content/layers.ecfg、
+# content/ores.ecfg），这份替身**跟在它后面**——一个包加的是层，不是内容。这份文件
 # 展示的是**数据的形状**：size:: 说一层多大，floor:: 是地板创建器（full_flash 把每个格子设成给定的
 # 地板），scatter:: 是散点生成器（在指定的瓦片层上按密度撒指定的东西，min/max 夹住数量，
 # floor: 限制它只落在某种地板上）。
@@ -12,7 +13,7 @@ ore::
     copper::
 
 layer::
-    entrance::
+    fixture_shallow::
         size::
             width:48
             height:32
@@ -29,7 +30,7 @@ layer::
                 min:6
                 max:40
                 floor:"dirt"
-    shaft::
+    fixture_deep::
         size::
             width:24
             height:16

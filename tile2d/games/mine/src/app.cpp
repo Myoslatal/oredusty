@@ -99,9 +99,10 @@ template <class... Args>
 }
 
 /// The game's own content pack: the "content" directory beside the executable, which is where a game
-/// that has been copied somewhere finds itself (content_search.h). A build tree has no such directory,
-/// so the one in the source tree is the fallback - the game the designer is editing and the game that
-/// is running are then the same files, which is the whole point of the content debug loop.
+/// that has been copied somewhere finds itself (content_search.h) - and a build tree has one too, put
+/// there by the build, so that what runs is what was built. The source tree is the fallback for a run
+/// that has neither (a bare executable): a designer who edits content rebuilds, and the copy beside
+/// the game is what the run reads.
 ///
 /// It is a pack like any other (content_pack.h); what makes it the game's own is that it registers
 /// first (docs/MODS.md), so the ids it hands out are the ones that never move.
@@ -175,7 +176,7 @@ void MineApp::on_configure(ore::AppConfig& config) {
 
 ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
     static const ore::CliOption kOptions[] = {
-        {"world", "<story|endless>", "which content pipeline produces the mine"},
+        {"world", "<story|endless|sandbox>", "which content pipeline produces the mine"},
         {"seed", "<n>", "seed for an endless world"},
         {"host", "<0|1>", "run as the host of the session"},
         {"connect", "<host:port>", "join a session instead of starting one"},
@@ -590,13 +591,23 @@ void MineApp::draw_session_screen() {
     y += kBeforeRule;
     batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + kRule}}, kPalette.panel_edge);
     y += kAfterRule;
-    y += draw_line(left, y, body_px_, kPalette.warning, locale_.text("session.pending")) + kBetweenPending;
+    // What the story describes, or that it describes nothing: a session screen that said "not authored
+    // yet" over a story that is authored would be a screen that lies about the data it just loaded
+    // (docs/GAME_DESIGN.md 7.3, 7.8). The two lines under it are about what is still the designer's to
+    // fill in - resources, structures and demands - and they are true either way.
+    if (content_.report().layers.empty()) {
+        y += draw_line(left, y, body_px_, kPalette.warning, locale_.text("session.pending")) + kBetweenPending;
+    } else {
+        y += draw_line(left, y, body_px_, kPalette.text,
+                       format_localized(locale_.text("session.story"), content_.report().layers.size())) +
+             kBetweenPending;
+    }
     y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.pending.line1"));
     y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.pending.line2"));
 
     y += kBeforeBack;
     // Entering the mine is what a session is for: what is entered is the layer the world's generator
-    // describes, which is empty until the designer's layer rules arrive (docs/GAME_DESIGN.md 7.3).
+    // describes - the story's first layer (docs/GAME_DESIGN.md 7.3).
     y += draw_line(left, y, body_px_, kPalette.accent, locale_.text("session.enter"));
     draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("session.back"));
 }

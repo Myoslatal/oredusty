@@ -16,7 +16,7 @@
 |---|---|
 | 我的数据文件解析了吗？ | 状态栏的 `RELOAD: N CONTENT   M CELLS REMAPPED   K LOST`；有错时同一行接上 `文件:行:列: 原因` |
 | 引擎给每个名字分了什么 id？ | 内容面板每行右侧 `structure #3`（id 按 kind 各自从 1 开始，按文件顺序分配） |
-| 哪些东西能放到格子上？ | 面板里只出现“占格子”的 kind（当前是 structure / machine / floor）；item / recipe / layer / channel 不出现 |
+| 哪些东西能放到格子上？ | 面板里只出现“占格子”的 kind（当前是 structure / machine / floor / ore）；item / recipe / layer / channel 不出现 |
 | 表名写错了会怎样？ | 内容照常加载，**内容列表**里记一条 `WARN … 'structurs' is not a content kind`，不会静默忽略 |
 | 我把一条内容删了，旧布局会怎样？ | 相关格子标红并显示“已缺失”，**不会**把它的 id 交给现在占用这个数字的别的内容 |
 | 我在文件中间插了一条，id 全变了，旧布局还认吗？ | 认。布局按名字重定位（见 §4） |
@@ -27,12 +27,12 @@
 | 这一层大概长什么样？ | `--fill scatter` 用注册到的内容铺一层（同 seed 完全可复现） |
 | 这一层**玩起来**是什么样？ | 按 `P` 进**试玩**（§9）：同一层，按游戏的方式画——没有面板、网格线、标签与压暗，输入只有相机与指针 |
 | **谁**加载了、谁没加载？ | 按 `F6` 打开**内容列表**（§10）：一行一个来源（本体文件 / 内容包 / 模组包），没加载成功的也在里面，展开能看它注册的每一条内容 |
-| 游戏自己带的内容是什么样？ | 面板里就有：`floor #1 dirt`（泥地，`games/mine/content/` 这个本体内容包）——空格键铺到格子上，画的就是它的贴图 |
+| 游戏自己带的内容是什么样？ | 面板里就有：`floor #1 dirt`（泥地）与 `ore #1 stone`（石头，都是 `games/mine/content/` 这个本体内容包）——空格键铺到格子上，画的就是它们的贴图 |
 
 ## 2. 运行
 
 ```sh
-# 什么都不给：本体内容（games/mine/content/）照样加载，面板里是游戏自己带的内容（现在只有泥地）；
+# 什么都不给：本体内容（games/mine/content/）照样加载，面板里是游戏自己带的内容（现在是泥地与石头）；
 # 网格仍然是空的——不按填充、不画格子，就什么都不画
 ./build/debug/games/mine/mine_game --world sandbox --start 1
 
@@ -147,11 +147,11 @@ D=games/mine/tests/data
 | 运行 | 数据文件 | 做了什么 | 结果 |
 |---|---|---|---|
 | A | v1（6 项） | `--fill scatter --seed 1` 铺 241 格，`--save-layout` 存盘 | 241 格 |
-| B | v2（7 项，在 structure 表**最前面**插了一项） | 读入 A 存的布局 | **241 格，0 缺失**；坐标、kind、名字与 A 完全一致；**123 个格子的 id 变了**（structure 全部 +1，machine 与 floor 不变；例如 (5,0) 的 `placeholder_wall` 1 → 2） |
-| C | v3（5 项，删掉了 `placeholder_ore`） | 读入同一个布局 | **200 格，41 缺失**；缺失格子仍显示 `placeholder_ore`、对外 id 为 0，**没有一格拿到新的数字** |
+| B | v2（7 项，在 structure 表**最前面**插了一项） | 读入 A 存的布局 | **241 格，0 缺失**；坐标、kind、名字与 A 完全一致；**105 个格子的 id 变了**（structure 全部 +1，machine 与 floor 不变；例如 (5,0) 的 `placeholder_wall` 1 → 2） |
+| C | v3（5 项，删掉了 `placeholder_ore`） | 读入同一个布局 | **207 格，34 缺失**；缺失格子仍显示 `placeholder_ore`、对外 id 为 0，**没有一格拿到新的数字** |
 
-B 里 id 移动的例子：`(5,0) placeholder_wall 1 → 2`、`(0,5) placeholder_floor 2 → 3`、`(15,0) placeholder_ore 3 → 4`。
-C 里 41 个格子全部保留名字、id 为 0（例如 `(15,0) placeholder_ore`）。
+B 里 id 移动的例子：`(5,0) placeholder_wall 1 → 2`、`(1,21) placeholder_floor 2 → 3`、`(0,5) placeholder_ore 3 → 4`。
+C 里 34 个格子全部保留名字、id 为 0（例如 `(0,5) placeholder_ore`）。
 
 同一件事在**三个瓦片层**上再跑一遍（同样 `--seed 1 --tile-layers 3 --fill-layer all`，A 里 687 个格子
 分布在三层：241 / 225 / 221）：
@@ -159,8 +159,8 @@ C 里 41 个格子全部保留名字、id 为 0（例如 `(15,0) placeholder_ore
 | 运行 | 数据文件 | 结果 |
 |---|---|---|
 | A | v1（6 项） | 三层各铺一份散点，687 格，存盘 |
-| B | v2（structure 表最前面插一项） | 读入 A 的布局：**687 格 / 0 缺失**，层号、坐标、kind、名字与 A 完全一致，**331 个格子的 id 变了** |
-| C | v3（删掉 `placeholder_ore`） | 读入同一布局：**575 格 / 112 缺失**，缺失分布在三层（41 / 37 / 34），全部保留名字、对外 id 为 0 |
+| B | v2（structure 表最前面插一项） | 读入 A 的布局：**687 格 / 0 缺失**，层号、坐标、kind、名字与 A 完全一致，**285 个格子的 id 变了** |
+| C | v3（删掉 `placeholder_ore`） | 读入同一布局：**592 格 / 95 缺失**，缺失分布在三层（34 / 35 / 26），全部保留名字、对外 id 为 0 |
 
 布局文件把**每一层**都写进去（magic `MSB2`，后面跟一个版本字节，当前是 3），所以层数变了或某层的内容被删掉，都会在载入时被如实报告。
 
@@ -174,10 +174,10 @@ C 里 41 个格子全部保留名字、id 为 0（例如 `(15,0) placeholder_ore
 
 ![繁體界面](../games/mine/docs/images/sandbox_zh_hant.png)
 
-![内容被删掉后：41 个格子标为缺失](../games/mine/docs/images/sandbox_missing.png)
+![内容被删掉后：34 个格子标为缺失](../games/mine/docs/images/sandbox_missing.png)
 
-窗口模式（真实窗口，DPI 缩放 1.67）：请求 2133×1200，窗口管理器按可用桌面把它调成 1920×1131，
-帧缓冲因而是 3200×1885（截图就是它）——界面单位与格子尺寸跟着窗口走：
+窗口模式（真实窗口，DPI 缩放 1.6667）：请求 2133×1200，窗口管理器照给，
+帧缓冲因而是 3555×2000（截图就是它）——界面单位与格子尺寸跟着窗口走：
 
 ![窗口模式](../games/mine/docs/images/sandbox_window.png)
 
@@ -185,7 +185,7 @@ C 里 41 个格子全部保留名字、id 为 0（例如 `(15,0) placeholder_ore
 
 ![三个瓦片层](../games/mine/docs/images/sandbox_layers_en.png)
 
-同一份三层布局，换成删掉了 `placeholder_ore` 的数据文件：112 个格子在三层上被标为缺失（红框），没有一个拿到新的数字：
+同一份三层布局，换成删掉了 `placeholder_ore` 的数据文件：95 个格子在三层上被标为缺失（红框），没有一个拿到新的数字：
 
 ![三层布局里的缺失内容](../games/mine/docs/images/sandbox_layers_missing_zh_hans.png)
 
@@ -290,7 +290,7 @@ C 里 41 个格子全部保留名字、id 为 0（例如 `(15,0) placeholder_ore
 
 ![试玩，内容包的贴图，简体界面](../games/mine/docs/images/sandbox_playtest_zh_hans.png)
 
-真实窗口（DPI 缩放 1.67，帧缓冲 3200×1885）：界面单位与格子尺寸跟着窗口走，试玩也一样。
+真实窗口（DPI 缩放 1.6667，帧缓冲 3555×2000）：界面单位与格子尺寸跟着窗口走，试玩也一样。
 
 ![试玩，真实窗口](../games/mine/docs/images/sandbox_playtest_window.png)
 

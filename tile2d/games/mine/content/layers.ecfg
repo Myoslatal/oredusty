@@ -1,0 +1,28 @@
+# 故事模式的层 —— 设计者的数据（docs/GAME_DESIGN.md §1.21、§7.3、§7.8）。
+#
+# 层的顺序就是**挖下去的顺序**：写在前面的就是第 1 层（玩家看到的"层1/N"）。size:: 说一层多大，
+# floor:: 是地板创建器（full_flash 把每个格子设成给定的地板），scatter:: 是散点生成器（在指定的瓦片层
+# 上按密度撒指定的东西，min/max 夹住数量，floor: 限制它只落在某种地板上）。
+#
+# 地板与矿物都是本体自己的内容（content/floors.ecfg、content/ores.ecfg）：这一层只说"多大、铺什么、
+# 撒什么、撒多少"。数量是规则：每个可用格子以 density 为概率被选中，再夹到 [min, max]——所以石头
+# 一定在 20 到 35 块之间，位置由这一层的骰子决定（同一个种子给同一张图）。
+
+layer::
+    entrance::
+        size::
+            width:100
+            height:100
+            tile_layers:2
+        floor::
+            layer:0
+            full_flash:"dirt"
+        scatter::
+            stone::
+                kind:"ore"
+                content:"stone"
+                layer:1
+                density:0.003
+                min:20
+                max:35
+                floor:"dirt"

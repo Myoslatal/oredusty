@@ -75,8 +75,11 @@ void add_unique(ContentTable& table, const ContentEntry& entry) {
 
 bool is_placeable_kind(ContentKind kind) {
     // The kinds whose instances occupy a tile. Extending this is a one line change the moment the
-    // designer says what else sits on the map (a submit channel, for instance).
-    return kind == ContentKind::Structure || kind == ContentKind::Machine || kind == ContentKind::Floor;
+    // designer says what else sits on the map (a submit channel, for instance). Ore is one of them -
+    // a SingleOre is a scene plot on one cell (docs/TYPES.md) - so the palette can paint the ore the
+    // story scatters, and a layout that holds one loads instead of being counted as an unknown kind.
+    return kind == ContentKind::Structure || kind == ContentKind::Machine || kind == ContentKind::Floor ||
+           kind == ContentKind::Ore;
 }
 
 i32 draw_step_for(usize visible_cells, i32 layers, usize max_quads) {

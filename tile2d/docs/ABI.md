@@ -76,7 +76,7 @@
 
 实测（本机，debug 与 release 两个预设）：`engine.abi` 与 `mine.codetab` 的指纹都是 `bdcb9b070ab30e78`，
 演示模组也是；启动日志只有一行 `table: module 'mine': __EXCEPTIONS: 0 here, 1 there (does not change a layout)`，
-随后 `tables: 1 module(s), 17780 symbol(s), 23074 relocation(s), 0 override(s), 0 error(s)`（debug）。
+随后 `tables: 1 module(s), 17780 symbol(s), 23086 relocation(s), 0 override(s), 0 error(s)`（debug）。
 这一行「只有一行」是量出来的：H3 的两函数体报告曾经让这张表每次启动刷 36 行，根因与修法见 §2 H3。
 
 ## 2. 十二处不一致
@@ -178,7 +178,7 @@ personality 都找不到，handler 自然永远找不到。
 
 * **构建期折叠**：`codetab build` 在打包之前先做一次**部分链接**（`<compiler> -r`）——一次构建是**一个程序**，
   链接器留下先到的那份、所有引用都指向它。本体表里 9 个函数的 **55 份死拷贝**因此不再进表（845 → **686 节**，
-  2634 → **2189 符号**，1.13 → 1.07 MiB），启动日志里那一页报告随之消失；同一场景新旧两张表渲染出来
+  2634 → **2190 符号**，1.13 → 1.07 MiB），启动日志里那一页报告随之消失；同一场景新旧两张表渲染出来
   **逐像素相同**（`compare -metric AE` = 0）。回归用例 `the_toolchain_links_a_build_before_it_packs_it`：两个
   故意写得不一样的 `twin_width` 被链接成**一个**函数（两份地址相等），加载 **0 条警告**。
 * **加载期报告**：真正被合并的同名弱定义（`codetab pack` 把别人编好的目标文件放在一起，或者跨模块）仍然比较

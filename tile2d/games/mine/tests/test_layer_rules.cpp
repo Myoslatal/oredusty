@@ -1122,31 +1122,65 @@ layer::
               std::string::npos);
 }
 
-T2D_TEST(the_story_fixture_the_documents_show_loads_and_is_two_layers) {
-    // The one story pack that lives in the repository, and the one the documents tell a designer to run
-    // (docs/MODS.md section 0): it is a **test double** - the game's own content ships no layers at all
-    // (test_content_pack pins that) - so a test keeps it loadable rather than letting a screenshot go
-    // stale behind it.
+T2D_TEST(the_games_own_story_layer_is_the_first_one_and_the_fixture_follows_it) {
+    // Two packs, one story. The game's own content describes the first layer - 100x100, the game's own
+    // dirt, and the stone the designer asked for (docs/GAME_DESIGN.md 1.21, 7.3) - and the test double
+    // adds two more after it, which is what a pack adding layers does. The fixture's names say what they
+    // are (`fixture_*`) so that a log line cannot be read as the game's own layer.
     ContentRegistry registry;
     ContentPipeline pipeline;
     pipeline.set_base_packs({std::string(T2D_SOURCE_DIR) + "/games/mine/content"});
     pipeline.set_pack_directories({std::string(T2D_SOURCE_DIR) + "/games/mine/tests/data/story_content"});
     const ContentPipelineReport& report = pipeline.load(registry);
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
-    T2D_CHECK_EQ(report.layers.size(), 2u);
+    T2D_REQUIRE(report.layers.size() == 3u);
     T2D_REQUIRE(report.layers.at(0) != nullptr);
     T2D_CHECK_EQ(report.layers.at(0)->name, std::string("entrance"));
-    T2D_CHECK_EQ(report.layers.at(0)->width, 48u);
-    T2D_CHECK_EQ(report.layers.at(0)->height, 32u);
+    T2D_CHECK_EQ(report.layers.at(0)->width, 100u);
+    T2D_CHECK_EQ(report.layers.at(0)->height, 100u);
     T2D_CHECK_EQ(report.layers.at(0)->tile_layers, 2);
+    T2D_REQUIRE(report.layers.at(1) != nullptr);
+    T2D_CHECK_EQ(report.layers.at(1)->name, std::string("fixture_shallow"));
+    T2D_CHECK_EQ(report.layers.at(1)->width, 48u);
+    T2D_CHECK_EQ(report.layers.at(1)->height, 32u);
+    T2D_CHECK_EQ(report.layers.at(1)->tile_layers, 2);
+    T2D_REQUIRE(report.layers.at(2) != nullptr);
+    T2D_CHECK_EQ(report.layers.at(2)->name, std::string("fixture_deep"));
 
-    // It names the game's own floor, which is what a pack adding to a story does: add layers, not content.
+    // The game's own layer, built: what the designer asked for is a 100x100 floor of the game's dirt
+    // with 20 to 35 stone on it, and the rule is what makes that true rather than the dice - the count
+    // is a coin flip per eligible cell, clamped into [min, max].
     MineWorld world(1, LayerShape{40, 24, 1});
     world.set_generator(story_layer_generator(report.layers, world.shape()));
-    const MineLayer& layer = world.enter(0, registry, report.definitions);
+    const MineLayer& first = world.enter(0, registry, report.definitions);
     T2D_CHECK_MSG(world.build_report().clean(), "the build refused {} placement(s)",
                   world.build_report().refused);
-    T2D_CHECK_EQ(layer.mirrored_count(), 769u);
+    const std::vector<GridPos> stone = ore_cells(first);
+    T2D_CHECK_EQ(first.plot_count(), 10000u + stone.size());
+    T2D_CHECK_GE(stone.size(), 20u);
+    T2D_CHECK(stone.size() <= 35u);
+    for (const GridPos cell : stone) {
+        const SceneTile* plot = first.plot_at(1, cell);
+        T2D_REQUIRE(plot != nullptr);
+        T2D_CHECK(plot->is_ore());
+        T2D_CHECK_EQ(plot->id(), registry.find(ContentKind::Ore, "stone"));
+        const SceneTile* below = first.plot_at(0, cell);
+        T2D_REQUIRE(below != nullptr);
+        T2D_CHECK(below->is_floor());
+    }
+
+    // The fixture's first layer, built the same way: it names the game's own floor, which is what a pack
+    // adding to a story does - add layers, not content.
+    MineWorld fixture_world(1, LayerShape{40, 24, 1});
+    fixture_world.set_generator(story_layer_generator(report.layers, fixture_world.shape()));
+    const MineLayer& layer = fixture_world.enter(1, registry, report.definitions);
+    T2D_CHECK_MSG(fixture_world.build_report().clean(), "the build refused {} placement(s)",
+                  fixture_world.build_report().refused);
+    // About half of the 1536 tiles flip (`random_reverse` is a coin per tile), and which half is the
+    // layer's own dice: the fixture is layer 1 now that the game describes layer 0, so this is layer
+    // 1's seed (measured: 765 of 1536, where the fixture as layer 0 gave 769).
+    T2D_CHECK_GT(layer.mirrored_count(), 700u);
+    T2D_CHECK_LT(layer.mirrored_count(), 836u);
 
     // The floor it filled, and the ore the scatter put on the tile layer above it: a density of 0.01
     // over 1536 cells is around fifteen of them, bounded by the rule's own min and max.

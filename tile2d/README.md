@@ -52,7 +52,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                9 cases / 343 checks  UTF-8, language tables, the line box, the shipped interface strings
+    tests/test_text                9 cases / 345 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_code_table         33 cases / 333 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
@@ -60,14 +60,14 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
     tests/test_render_offscreen   10 cases /  71 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
     games/mine/tests/test_mine_menu      11 cases / 168 checks  the start screen as a state machine
-    games/mine/tests/test_registry       10 cases / 128 checks  content ids and the per-save name -> id table
+    games/mine/tests/test_registry       10 cases / 129 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     14 cases / 187 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
-    games/mine/tests/test_layer_rules    23 cases / 725 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
-    games/mine/tests/test_sandbox        28 cases / 716 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   13 cases / 198 checks  packs: a directory per pack, several files each, headers, order, collisions, art
+    games/mine/tests/test_layer_rules    23 cases / 797 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
+    games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
+    games/mine/tests/test_content_pack   13 cases / 215 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
@@ -334,12 +334,18 @@ a native mod runs with the game's privileges.
 
 `games/mine/content/` is what the game itself is made of, and it is the first stage of the load order:
 it loads with no arguments at all, and `--content` adds to it rather than replacing it. It holds the
-first real content — a **dirt floor** (`floor:: dirt::`, texture `art/floor_dirt.png`) — and the
-sandbox paints it: the palette lists `floor #1 dirt`, and a cell painted with it draws that texture.
+game's own content — a **dirt floor** (`floor:: dirt::`, texture `art/floor_dirt.png`), a **stone ore**
+(`ore:: stone::`, texture `art/ore_stone.png`) and the **first story layer** (`layer:: entrance::`,
+100×100, dirt under it, 20 to 35 stone) — and the sandbox paints both tiles: the palette lists
+`floor #1 dirt` and `ore #1 stone`, and a cell painted with either draws that texture.
 
     games/mine/content/
-        floors.ecfg          floor:: dirt::  with image:"art/floor_dirt.png"
+        pack.ecfg            id:"mine" name:"Mine"
+        floors.ecfg          floor:: dirt::   with image:"art/floor_dirt.png"
+        ores.ecfg            ore:: stone::    with image:"art/ore_stone.png"
+        layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35
         art/floor_dirt.png
+        art/ore_stone.png
 
 Two fields are the engine's to read (`image` and `random_reverse`); everything else in an entry is the
 designer's. Both are checked when the content loads: a picture that is not there, or a
@@ -396,7 +402,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 686 sections, 2 189 symbols, 8 672 relocations (release)
+        mine.codetab         the game: 686 sections, 2 190 symbols, 8 678 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -536,6 +542,11 @@ Ore is its own kind of thing: `ContentKind::Ore` (appended, so an older save tab
 `mine::types::SingleOre`, a scene plot whose one addition is `is_ore()` — one cell per ore, which is
 what makes "this cell has ore" and "this plot is that ore" the same question.
 
+The game's own pack is the worked example: `games/mine/content/layers.ecfg` describes the first layer
+(100×100, the game's own dirt under it, 20 to 35 `stone` scattered on tile layer 1) and
+`content/ores.ecfg` declares the ore with the picture it is drawn with. A pack adds layers **after**
+the game's own — that is what the test double under `games/mine/tests/data/story_content/` does.
+
 Everything else under the entry belongs to the designer. A field the engine reads and cannot read is
 refused with the file named rather than ignored, and content the registry does not have builds the
 layer anyway and says so on screen — once, not once per cell. Endless mode still derives its layers
@@ -574,10 +585,9 @@ Guide: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §4 and §8, [docs/TYPES.md](d
 
 ### The sandbox
 
-Content is not authored yet, so the game ships a **content debugger** instead of a pretend map: one
-map, no demands, no progression, and no content of its own — the palette is whatever the designer's
-data registered. The map has tile layers, so ground, ore and structures can be painted and inspected
-separately.
+The sandbox is the **content debugger**: one map, no demands, no progression — the palette is
+whatever the designer's data registered (the game's own pack, a pack, or a mod). The map has tile
+layers, so ground, ore and structures can be painted and inspected separately.
 
     ./build/debug/games/mine/mine_game --world sandbox --start 1
     ./build/debug/games/mine/mine_game --world sandbox --start 1 \
