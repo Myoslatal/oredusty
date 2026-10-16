@@ -766,11 +766,13 @@ void MineApp::draw_content_screen() {
                               kPalette.highlight);
         }
         if (row.is_entry()) {
-            // One name this source registered: the kind and the id a save would store, then the name.
+            // One name this source registered: the kind and the id a save would store, then the name the
+            // interface calls it - the localized one when the text table has it (content_name.h).
             const ContentEntry& entry = source.entries[static_cast<usize>(row.entry)];
             const f32 indent = 3.0f * unit_;
             draw_fitted(layout.left + indent, row_y, body_px_, focused ? kPalette.accent : kPalette.text,
-                        std::format("{} #{} {}", content_kind_name(entry.kind), entry.id, entry.name),
+                        std::format("{} #{} {}", content_kind_name(entry.kind), entry.id,
+                                    content_name(entry.kind, entry.id)),
                         full_width - indent);
             row_y += line;
             continue;
@@ -875,7 +877,10 @@ std::string MineApp::cell_text(GridPos pos) const {
         const CellView value = sandbox_.cell(layer, pos);
         if (value.empty()) continue;
         if (!text.empty()) text += " | ";
-        text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.shown_id(), value.name);
+        // The name the interface uses, not the id the designer wrote (content_name.h); a cell whose
+        // content is gone has no registry entry left to ask, so it keeps the name it was remembered by.
+        text += std::format("L{} {} #{} {}", layer, content_kind_name(value.kind), value.shown_id(),
+                            value.missing() ? std::string(value.name) : content_name(value.kind, value.id));
         if (value.missing()) text += std::string(" ") + std::string(locale_.text("sandbox.cell.missing"));
     }
     if (text.empty()) text = locale_.text("sandbox.cell.empty");
@@ -1125,10 +1130,8 @@ void MineApp::clamp_world_view() {
 void MineApp::report_release(ReleaseResult result) {
     const DragRelease& release = world_drag_.last_release();
     if (result == ReleaseResult::Stored) {
-        const ContentEntry* entry = registry_.find(release.kind, release.id);
-        const std::string name = entry != nullptr ? entry->name : std::format("#{}", release.id);
         set_status(format_localized(locale_.text("world.stored"), content_kind_name(release.kind), release.id,
-                                    name),
+                                    content_name(release.kind, release.id)),
                    false);
     } else if (result == ReleaseResult::Refused) {
         // A box with no room says so, in the error colour: the drop stayed where it was let go.
@@ -1255,13 +1258,13 @@ std::string MineApp::world_cell_text(GridPos cell) const {
     // cell's own description would say nothing about it.
     if (const types::Entity* held = world_drag_.held(); held != nullptr) {
         return format_localized(locale_.text("world.dragging"), content_kind_name(held->kind()), held->id(),
-                                held->name(registry_));
+                                content_name(held->kind(), held->id()));
     }
     const types::SceneTile* plot = world_.layer().top_plot_at(cell);
     if (plot == nullptr) return std::string{locale_.text("sandbox.cell.empty")};
     std::string text = format_localized(locale_.text("world.cell.plot"), content_kind_name(plot->kind()),
-                                        plot->id(), plot->name(registry_), plot->width(), plot->height(),
-                                        plot->anchor().x, plot->anchor().y);
+                                        plot->id(), content_name(plot->kind(), plot->id()), plot->width(),
+                                        plot->height(), plot->anchor().x, plot->anchor().y);
     // Whether the dice turned this one around is part of what it is: it is decided once, when the map
     // is built, and it is the only thing about a plot that a viewer cannot work out from the data.
     if (plot->mirrored()) text = format_localized(locale_.text("world.cell.mirrored"), text);
@@ -1724,7 +1727,8 @@ void MineApp::draw_sandbox_screen() {
                 style.color = value.missing() ? kPalette.missing : colour;
                 // The name when it fits, otherwise the id: on a small cell the number a save would
                 // store is the more useful label anyway.
-                std::string label{value.name};
+                std::string label =
+                    value.missing() ? std::string(value.name) : content_name(value.kind, value.id);
                 t2d::TextMetrics box = text_->measure(label, fonts_, style);
                 if (box.width > cell - 4.0f) {
                     label = std::format("#{}", value.id);
@@ -1802,7 +1806,10 @@ void MineApp::draw_sandbox_screen() {
             const std::string kind = std::format("{} #{}", content_kind_name(entry.kind), entry.id);
             const f32 kind_width = text_->measure(kind, fonts_, measure_style).width;
             const f32 name_x = panel_left + 16.0f;
-            draw_fitted(name_x, y, body_px_, focused ? kPalette.accent : kPalette.text, entry.name,
+            // The palette shows the name the interface uses, so a designer reads "石头" rather than the id
+            // they wrote (content_name.h) - the id is still there, on the right, where a save looks.
+            draw_fitted(name_x, y, body_px_, focused ? kPalette.accent : kPalette.text,
+                        content_name(entry.kind, entry.id),
                         std::max(8.0f, panel_right - kind_width - 8.0f - name_x));
             draw_line(panel_right - kind_width, y, body_px_, kPalette.text_dim, kind);
             y += line;

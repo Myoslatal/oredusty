@@ -3,9 +3,12 @@
 //
 // The content in here is a **test double**: names like "wall" or "dirt" are the fixture's, not the
 // game's - the game names no content at all (docs/GAME_DESIGN.md section 7).
+#include <mine/view_limits.h>
 #include <mine/world.h>
 
 #include <support/test_support.h>
+
+#include <t2d/core/camera2d.h>
 
 #include <format>
 #include <string>
@@ -434,6 +437,47 @@ T2D_TEST(a_generator_that_answers_for_the_wrong_layer_is_reported) {
     T2D_REQUIRE(world.build_report().errors.size() == 1u);
     T2D_CHECK(world.build_report().errors[0].find("layer 1") != std::string::npos);
     T2D_CHECK_EQ(world.layer_index(), 0);
+}
+
+T2D_TEST(the_views_camera_draws_a_cell_between_forty_and_a_hundred_pixels) {
+    // The designer's numbers (docs/GAME_DESIGN.md section 1.30): below 40 pixels a cell is a speck and
+    // the pointer cannot pick anything out, above 100 one cell fills the window.
+    T2D_CHECK_NEAR(kMinViewZoom, 40.0f, 1e-6f);
+    T2D_CHECK_NEAR(kMaxViewZoom, 100.0f, 1e-6f);
+    T2D_CHECK_NEAR(clamp_view_zoom(0.0f), 40.0f, 1e-6f);
+    T2D_CHECK_NEAR(clamp_view_zoom(12.0f), 40.0f, 1e-6f);   // fitting a 100x100 layer would be ~12
+    T2D_CHECK_NEAR(clamp_view_zoom(40.0f), 40.0f, 1e-6f);
+    T2D_CHECK_NEAR(clamp_view_zoom(64.0f), 64.0f, 1e-6f);
+    T2D_CHECK_NEAR(clamp_view_zoom(100.0f), 100.0f, 1e-6f);
+    T2D_CHECK_NEAR(clamp_view_zoom(1000.0f), 100.0f, 1e-6f);
+
+    // What makes the rule hold is that the camera enforces it, not each call site: every way of changing
+    // the zoom - the wheel, +/-, --view, fitting the layer - goes through set_zoom()/zoom_at(), and both
+    // are clamped. A zoom that is clamped does not move the view either: the anchor has nowhere to go.
+    t2d::Camera2D camera(t2d::Vec2{1280.0f, 720.0f}, 64.0f, t2d::Vec2{50.0f, 50.0f});
+    camera.set_zoom_limits(kMinViewZoom, kMaxViewZoom);
+    camera.set_zoom(5.0f);
+    T2D_CHECK_NEAR(camera.zoom(), kMinViewZoom, 1e-4f);
+    camera.set_zoom(400.0f);
+    T2D_CHECK_NEAR(camera.zoom(), kMaxViewZoom, 1e-4f);
+
+    // At the top of the range a zoom that asks for more changes nothing at all, and then the view must
+    // not move either: the anchor has nowhere to go (camera2d.cpp returns early on exactly that).
+    camera.set_zoom(kMaxViewZoom);
+    const t2d::Vec2 before = camera.centre();
+    camera.zoom_at(t2d::Vec2{0.0f, 0.0f}, 2.0f);
+    T2D_CHECK_NEAR(camera.zoom(), kMaxViewZoom, 1e-4f);
+    T2D_CHECK_NEAR(camera.centre().x, before.x, 1e-4f);
+    T2D_CHECK_NEAR(camera.centre().y, before.y, 1e-4f);
+
+    // Inside the range the anchor holds: the point under the pointer stays under it.
+    camera.set_zoom(64.0f);
+    const t2d::Vec2 anchor{400.0f, 300.0f};
+    const t2d::Vec2 world_under_anchor = camera.world_of(anchor);
+    camera.zoom_at(anchor, 1.25f);
+    T2D_CHECK_NEAR(camera.zoom(), 80.0f, 1e-3f);
+    T2D_CHECK_NEAR(camera.world_of(anchor).x, world_under_anchor.x, 1e-3f);
+    T2D_CHECK_NEAR(camera.world_of(anchor).y, world_under_anchor.y, 1e-3f);
 }
 
 T2D_TEST_MAIN

@@ -98,6 +98,30 @@ stores and what the data refers to, not a label. Where the interface shows a pie
 empty one by the rule above — a table answers with the **id it was asked for** when it has no string —
 so nothing has to be listed twice to say "no label here".
 
+**Every place the interface shows a name goes through it.** One lookup, five callers, and the game's
+only entry point is `MineApp::content_name(kind, id)` (`games/mine/include/mine/app.h`):
+
+| Where | What it shows |
+|---|---|
+| the world view's HUD, second line | the plot the pointer is on, and the drop being dragged: `CELL 52,43   ore #1 STONE   1x1 AT 52,43` |
+| the warehouse panel | the title and every row: `[picture] [name] xN` |
+| the content list (`F6`) | every entry a source registered |
+| the sandbox palette | the name on the left, `kind #id` on the right — the id stays, because a save and a log use it |
+| the sandbox's cell readout and cell labels | `L0 floor #1 DIRT` in the status bar, and the label drawn on a cell when it is big enough to hold one (it falls back to `#id` when the name does not fit) |
+| the HUD's stored message | `STORED drop #1 chunk` / `已入库 drop #1 chunk` |
+
+**The kind's own word is not translated.** `ore`, `warehouse`, `floor`… are the engine's vocabulary
+(`content_kind_name`): they are what the docs, the log and `engine.api` say, so `warehouse #1 石头仓库`
+reads as "the engine's word, then the designer's name". A kind that should follow the language is one
+line at the callers.
+
+Content with no entry in the table keeps showing its id — that is why the fixtures (`chunk`, `scrap`,
+`wall`) look the same in every language, and why a screenshot of them still matches the build.
+
+![The world HUD names the plot under the pointer: ore #1 STONE](../games/mine/docs/images/world_story_zoom_en.png)
+![A warehouse panel: the title and every row are named](../games/mine/docs/images/world_warehouse_panel_zh_hans.png)
+![The content list in Simplified Chinese: floor #1 泥地, item #1 石头, layer #1 入口, ore #1 石头, warehouse #1 石头仓库](../games/mine/docs/images/content_names_zh_hans.png)
+
 ## Adding a language
 
 1. Add the tag to `Language` and the names to `kNames` in `text/locale.cpp` (and, if it needs a

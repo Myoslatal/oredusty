@@ -14,6 +14,7 @@
 #pragma once
 
 #include <mine/content_list.h>
+#include <mine/content_name.h>
 #include <mine/content_pack.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
@@ -21,6 +22,7 @@
 #include <mine/registry.h>
 #include <mine/sandbox.h>
 #include <mine/session.h>
+#include <mine/view_limits.h>
 #include <mine/world.h>
 
 #include <t2d/render/sprite_batch.h>
@@ -111,7 +113,11 @@ struct MineOptions {
 
 class MineApp final : public ore::Application {
 public:
-    explicit MineApp(MineOptions options) : options_(std::move(options)) {}
+    explicit MineApp(MineOptions options) : options_(std::move(options)) {
+        // The game's camera draws a cell between 40 and 100 pixels (view_limits.h): the camera clamps
+        // every way of changing the zoom itself, so no call site has to remember the rule.
+        world_camera_.set_zoom_limits(kMinViewZoom, kMaxViewZoom);
+    }
     ~MineApp() override;
 
 protected:
@@ -159,6 +165,13 @@ private:
     void point_world_at(t2d::Vec2 screen);
     /// What the pointer is over: the topmost plot at the cell, with its footprint and its mirroring.
     [[nodiscard]] std::string world_cell_text(GridPos cell) const;
+    /// The name a piece of content goes by in the interface (mine/content_name.h): the string table's
+    /// entry for it - `content.name.<kind>.<name>`, then `content.name.<name>` - and the name the
+    /// registry knows it by when the table has neither. Every place the interface shows a content name
+    /// asks this, so a language names a thing once (docs/TEXT.md).
+    [[nodiscard]] std::string content_name(ContentKind kind, ContentId id) const {
+        return content_label(registry_, kind, id, [this](std::string_view id_text) { return locale_.text(id_text); });
+    }
     /// The layer, what it holds, and what the two passes did last frame.
     [[nodiscard]] std::string world_summary_text() const;
     [[nodiscard]] std::string world_passes_text() const;

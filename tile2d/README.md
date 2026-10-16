@@ -52,7 +52,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                9 cases / 345 checks  UTF-8, language tables, the line box, the shipped interface strings
+    tests/test_text                9 cases / 367 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_code_table         33 cases / 333 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
@@ -60,18 +60,18 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
     tests/test_render_offscreen   10 cases /  71 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
     games/mine/tests/test_mine_menu      11 cases / 168 checks  the start screen as a state machine
-    games/mine/tests/test_registry       10 cases / 129 checks  content ids and the per-save name -> id table
+    games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     15 cases / 211 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
-    games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
+    games/mine/tests/test_world          13 cases / 146 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
     games/mine/tests/test_layer_rules    23 cases / 807 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
-    games/mine/tests/test_warehouses      6 cases / 106 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
+    games/mine/tests/test_warehouses      7 cases / 114 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   14 cases / 239 checks  packs: a directory per pack, several files each, headers, order, collisions, art
+    games/mine/tests/test_content_pack   14 cases / 245 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
@@ -342,8 +342,8 @@ game's own content — a **dirt floor** (`floor:: dirt::`, texture `art/floor_di
 (`ore:: stone::`, texture `art/ore_stone.png`), a **stone item** (`item:: stone::`, texture
 `art/item_stone.png`: the first thing in the game that is *not* on the map — an item is what a machine
 makes, a recipe moves and a demand asks for) and the **first story layer** (`layer:: entrance::`,
-100×100, dirt under it, 20 to 35 stone). The sandbox paints both plots: the palette lists `floor #1 dirt`
-and `ore #1 stone`, and a cell painted with either draws that texture — an item has no cell to paint, so
+100×100, dirt under it, 20 to 35 stone). The sandbox paints both plots: the palette lists `floor #1 DIRT`
+and `ore #1 STONE` (the names the interface uses, docs/TEXT.md), and a cell painted with either draws that texture — an item has no cell to paint, so
 it is not in the palette.
 
     games/mine/content/
@@ -492,7 +492,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 818 sections, 2 585 symbols, 9 891 relocations (release)
+        mine.codetab         the game: 822 sections, 2 602 symbols, 9 928 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings

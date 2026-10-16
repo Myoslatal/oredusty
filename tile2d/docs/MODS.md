@@ -303,8 +303,8 @@ warehouse::
 ![本体内容 + 两个模组](../games/mine/docs/images/sandbox_mods_en.png)
 
 ```sh
-# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的 3 项（泥地、石头、第 1 层）
-# + 模组 6 项 = 15 项，bands 填充
+# 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的 5 项（泥地、石头、第 1 层、
+# 物品石头、石头仓库）+ 模组 6 项 = 17 项，bands 填充（M2.13 重出：这一屏的状态栏写着 17 CONTENT）
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
     --content games/mine/tests/data/placeholder_content \
     --mods build/debug/games/mine/tests/mods --fill bands
@@ -489,10 +489,10 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
         art/item_stone.png
         art/ore_stone.png
 
-沙盒里打开就能看到它们：内容面板列出 `floor #1 dirt`、`ore #1 stone`，空格键把泥地铺到格子上，
+沙盒里打开就能看到它们：内容面板列出 `floor #1 DIRT`、`ore #1 STONE`（界面上的名字来自字符串表，`docs/TEXT.md`），空格键把泥地铺到格子上，
 画的就是这张贴图；故事模式（`--world story`）进的就是 `layers.ecfg` 描述的那一层。**物品不在面板里**：
 它不占格子，没有格子可以铺——但它的贴图照样在加载时解码好（展开内容列表里本体包那一行，会看到
-`item #1 stone` 与 `ore #1 stone` 并列）。
+`item #1 stone` 与 `ore #1 stone` 并列——注册表里的名字是小写的 `stone`，界面上显示的是本地化名称）。
 
 ![本体内容：泥地与石头](../games/mine/docs/images/content_dirt_floor_en.png)
 
