@@ -1,5 +1,7 @@
 #include <mine/world.h>
 
+#include <t2d/core/log.h>
+
 #include <format>
 
 namespace mine {
@@ -25,6 +27,18 @@ namespace {
         }
     }
     return entries;
+}
+
+/// The ore a drill standing on \p rig_layer at \p cell would mine: the topmost plot that is ore on a
+/// tile layer below it, or nullptr. Ore is on a layer under the drill because a plot occupies cells and
+/// one cell holds one plot per tile layer - which is what tile layers are for (docs/GAME_DESIGN.md
+/// sections 1.12, 1.26).
+[[nodiscard]] const types::SceneTile* ore_under(const MineLayer& layer, i32 rig_layer, GridPos cell) {
+    for (i32 tile_layer = rig_layer - 1; tile_layer >= 0; --tile_layer) {
+        const types::SceneTile* plot = layer.plot_at(tile_layer, cell);
+        if (plot != nullptr && plot->is_ore()) return plot;
+    }
+    return nullptr;
 }
 
 /// How a placement is named in a message: kind, name, the cells it covers and the tile layer.
@@ -98,7 +112,8 @@ LayerGenerator debug_scatter_generator(const ContentRegistry& registry, LayerSha
     };
 }
 
-usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry) {
+usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry,
+                     const ContentDefinitions& definitions) {
     const ConstSpan<ContentEntry> drops = registry.entries(ContentKind::Drop);
     if (drops.empty()) return 0;
     // Evenly spaced across the middle of the layer, alternating slightly above and below the middle row -
@@ -109,8 +124,103 @@ usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry) {
         const f32 across = (static_cast<f32>(index) + 1.0f) / (static_cast<f32>(drops.size()) + 1.0f);
         const t2d::Vec2 where{static_cast<f32>(layer.width()) * across,
                               middle + (index % 2 == 0 ? 0.25f : -0.25f)};
-        layer.adopt(std::make_unique<types::Drop>(drops[index].kind, drops[index].id, where));
+        // Built through the definer when the load read one - the road a plot takes through make_tile -
+        // and as a plain drop when the content was registered without a file behind it.
+        if (const types::DropDefinition* definition = definitions.find_drop(drops[index].name);
+            definition != nullptr) {
+            layer.adopt(types::make_drop(*definition, drops[index].id, where));
+        } else {
+            layer.adopt(std::make_unique<types::Drop>(drops[index].kind, drops[index].id, where));
+        }
         ++placed;
+    }
+    return placed;
+}
+
+void MineLayer::configure_drill(types::Drill& drill, const ContentRegistry& registry,
+                                const ContentDefinitions& definitions, LayerBuildReport* report) {
+    const auto refuse = [&](std::string message) {
+        if (report != nullptr) report->refuse(std::move(message));
+    };
+    const std::string at = std::format("{},{}", drill.anchor().x, drill.anchor().y);
+    const std::string what = std::format("the drill '{}' at {}", drill.name(registry), at);
+    if (drill.dig_power() <= 0.0f) {
+        refuse(std::format("layer {}: {} says nothing about its dig_power, so there is no rate to mine at",
+                           index_, what));
+        return;
+    }
+    const types::SceneTile* ore = ore_under(*this, drill.layer(), drill.anchor());
+    if (ore == nullptr) {
+        refuse(std::format("layer {}: {} has no ore under it (a drill mines what is on a tile layer below "
+                           "the one it stands on)",
+                           index_, what));
+        return;
+    }
+    const std::string ore_name = ore->name(registry);
+    const types::TileDefinition* definition = definitions.find_tile(ore->kind(), ore_name);
+    if (definition == nullptr) {
+        refuse(std::format("layer {}: the ore '{}' under {} was registered without a file, so nothing says "
+                           "how hard it is or what it drops",
+                           index_, ore_name, what));
+        return;
+    }
+    if (definition->hardness <= 0.0f) {
+        refuse(std::format("layer {}: the ore '{}' under {} says nothing about its hardness", index_,
+                           ore_name, what));
+        return;
+    }
+    if (definition->drop.empty()) {
+        refuse(std::format("layer {}: the ore '{}' under {} says nothing about what it drops", index_,
+                           ore_name, what));
+        return;
+    }
+    const ContentId drop = registry.find(ContentKind::Drop, definition->drop);
+    if (drop == kNoContent) {
+        refuse(std::format("layer {}: the ore '{}' under {} drops '{}', and no drop named '{}' is registered",
+                           index_, ore_name, what, definition->drop, definition->drop));
+        return;
+    }
+    types::DrillJob job;
+    job.ore_kind = ore->kind();
+    job.ore_id = ore->id();
+    job.ore_name = ore_name;
+    job.drop_id = drop;
+    job.drop_name = definition->drop;
+    // The rule the designer asked for: the ore's hardness over the drill's power, in seconds per drop
+    // (docs/GAME_DESIGN.md section 1.26).
+    job.period_seconds = definition->hardness / drill.dig_power();
+    drill.set_job(std::move(job));
+    T2D_INFO("world: the drill '{}' at {} mines ore '{}' (hardness {:.2f} / power {:.2f} = {:.2f}s per drop "
+             "of '{}')",
+             drill.name(registry), at, ore_name, definition->hardness, drill.dig_power(),
+             drill.job().period_seconds, definition->drop);
+}
+
+usize lay_out_drills(MineLayer& layer, const ContentRegistry& registry,
+                     const ContentDefinitions& definitions) {
+    const ConstSpan<ContentEntry> drills = registry.entries(ContentKind::Drill);
+    // A drill stands above what it mines, so the top tile layer is where this fill puts it - and a layer
+    // with only one tile layer has no room for both (docs/GAME_DESIGN.md section 1.26).
+    const i32 rig_layer = layer.layer_count() - 1;
+    if (drills.empty() || rig_layer < 1) return 0;
+    usize placed = 0;
+    usize next_drill = 0;
+    for (i32 y = 0; y < static_cast<i32>(layer.height()) && next_drill < drills.size(); ++y) {
+        for (i32 x = 0; x < static_cast<i32>(layer.width()) && next_drill < drills.size(); ++x) {
+            const GridPos cell{x, y};
+            if (layer.plot_at(rig_layer, cell) != nullptr) continue;   // something is already on top
+            if (ore_under(layer, rig_layer, cell) == nullptr) continue;
+            PlacedContent where;
+            where.kind = ContentKind::Drill;
+            where.name = drills[next_drill].name;
+            where.layer = rig_layer;
+            where.anchor = cell;
+            // The fill's own report: a drill it cannot place is logged with the reason, never silent.
+            LayerBuildReport report;
+            if (layer.place(registry, definitions, where, &report) != nullptr) ++placed;
+            for (const std::string& error : report.errors) T2D_WARN("world: {}", error);
+            ++next_drill;
+        }
     }
     return placed;
 }
@@ -207,8 +317,19 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
     }
     const usize serial = plots_.size();
     if (ticking) ticking_.push_back(static_cast<types::EntityTile*>(plot.get()));
+    // A plot is placed *into* a layer, and what it does while it runs happens in that layer: a drill
+    // making a drop is the first thing that needs to know which one (types/tile.h, types/drill.h).
+    plot->owner_ = this;
     plots_.push_back(std::move(plot));
     index_plot(serial);
+
+    // A drill is told what it stands on here, while the layer is built: this is the one moment the
+    // registry (names to ids) and the definitions (the designer's numbers) are both in hand, and a drill
+    // with nothing to mine is then a **reported** refusal instead of a machine that does nothing forever
+    // (docs/GAME_DESIGN.md section 1.26).
+    if (auto* drill = dynamic_cast<types::Drill*>(plots_[serial].get()); drill != nullptr) {
+        configure_drill(*drill, registry, definitions, report);
+    }
 
     if (report != nullptr) {
         ++report->placed;
@@ -378,6 +499,17 @@ std::string MineLayer::dump_text(const ContentRegistry& registry) const {
                             plot.anchor().y, plot.width(), plot.height(), plot.layer(),
                             dynamic_cast<const types::EntityTile*>(&plot) != nullptr ? " ticking" : "",
                             plot.mirrored() ? " mirrored" : "", plot.dirty() ? " dirty" : "");
+        // A drill is the one plot whose *job* is part of what it is: what it mines, how long a drop
+        // takes, and how many it has thrown - which is what a bug report about production needs.
+        if (const auto* drill = dynamic_cast<const types::Drill*>(&plot); drill != nullptr) {
+            if (drill->ready()) {
+                text += std::format("        mines ore '{}' every {:.3f}s -> drop '{}', {} thrown\n",
+                                    drill->job().ore_name, drill->job().period_seconds, drill->job().drop_name,
+                                    drill->produced());
+            } else {
+                text += std::format("        idle: no ore under it, or nothing that says how hard it is\n");
+            }
+        }
     }
     return text;
 }

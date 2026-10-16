@@ -1,9 +1,12 @@
 // Mine - what the designer's data says about a plot, and how a plot is made out of it.
 //
 // The definitions are data (docs/MODS.md): an entry under a kind's table names a piece of content and
-// may carry fields. The engine reads **two** of those fields and nothing else - "image", the picture
-// the content is drawn with, and "random_reverse", whether the map may turn copies of it around when it
-// is built. Everything else in an entry belongs to the designer.
+// may carry fields. The engine reads a few of those fields and nothing else - "image", the picture the
+// content is drawn with, and "random_reverse", whether the map may turn copies of it around when it is
+// built, for every plot; plus the two numbers a mine is made of, for the kinds that have them: a
+// **drill** says its "dig_power" (how fast it mines), and an **ore** says its "hardness" (how long it
+// takes to mine) and its "drop" (what it yields when it is mined). Everything else in an entry belongs
+// to the designer, and a field that belongs to another kind is one of those - not read, not an error.
 //
 // This is the definer: it reads an entry into a TileDefinition, and builds the plot a definition
 // describes. Which class a definition becomes is decided by its kind - a floor is a Floor, a machine is
@@ -14,6 +17,7 @@
 #include <mine/types/scene_tile.h>
 
 #include <t2d/core/ecfg.h>
+#include <t2d/core/types.h>
 
 #include <memory>
 #include <optional>
@@ -23,6 +27,8 @@
 
 namespace mine::types {
 
+using t2d::f32;
+
 /// The fields the engine reads out of one content entry. Everything else in the entry is the
 /// designer's, and the engine never looks at it.
 struct TileDefinition {
@@ -30,6 +36,14 @@ struct TileDefinition {
     std::string name;                       ///< the entry's name, which is what the registry knows it by
     std::string image;                      ///< "image" as written; empty when the entry has none
     bool random_reverse = false;            ///< "random_reverse"; false when the entry does not say
+    /// "dig_power" (a drill): how fast it mines, in hardness per second. 0 when the entry does not say,
+    /// which is a drill that is reported as one that cannot mine rather than one given a rate.
+    f32 dig_power = 0.0f;
+    /// "hardness" (an ore): how long mining it takes, in power-seconds. 0 when the entry does not say.
+    f32 hardness = 0.0f;
+    /// "drop" (an ore): the name of the drop content it yields when it is mined. Empty when it does not
+    /// say - the ore of a drill that has nothing to throw out.
+    std::string drop;
 
     /// True for the kinds whose entries describe something that occupies cells. An item, a recipe, a
     /// layer or a channel describes something else, and is not a plot.

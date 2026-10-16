@@ -23,6 +23,14 @@
 
 #include <string>
 
+namespace mine {
+
+/// The layer that holds plots (world.h). Only the name is needed here: the definition would be a cycle,
+/// and a plot only ever calls back into the layer it is already in.
+class MineLayer;
+
+} // namespace mine
+
 namespace mine::types {
 
 using t2d::i32;
@@ -85,6 +93,11 @@ public:
     /// what a placement check asks before a 2x2 is put down near the edge.
     [[nodiscard]] bool within(i32 map_width, i32 map_height) const;
 
+    /// The layer this plot is in, or nullptr while it is in none. What a plot's own logic needs in order
+    /// to ask the world something from inside its turn - a drill making a drop out of the ore it stands
+    /// on (types/drill.h). Named owner() because layer() is already the tile layer it sits on.
+    [[nodiscard]] MineLayer* owner() const { return owner_; }
+
     // --- how it draws itself ----------------------------------------------------------------------
     /// Whether this plot's art may be turned around. Some content looks better when every copy of it
     /// does not face the same way - an ore vein, a patch of floor - and the designer's data says which.
@@ -111,6 +124,11 @@ protected:
     Tile(ContentKind kind, ContentId id, i32 layer, GridPos anchor, i32 width = 1, i32 height = 1);
 
 private:
+    /// The layer sets this when it takes the plot in (world.h): a plot is placed *into* a layer, and
+    /// what it does while it runs happens in that layer.
+    friend class mine::MineLayer;
+
+    MineLayer* owner_ = nullptr;
     ContentKind kind_ = ContentKind::Item;
     ContentId id_ = kNoContent;
     i32 layer_ = 0;

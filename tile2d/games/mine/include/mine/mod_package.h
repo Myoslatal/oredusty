@@ -81,6 +81,9 @@ struct LoadedMod {
     /// The item definitions its content files declare (types/item_definition.h), kept for the same
     /// reason: what shows an item draws the picture the data named.
     std::vector<types::ItemDefinition> items;
+    /// The drop definitions its content files declare (types/drop_definition.h): what a drill throws out
+    /// is one of these, so a mod that adds an ore and its drop is read the way the game's own files are.
+    std::vector<types::DropDefinition> drops;
     /// The layers its content files describe, in file order (layer_rules.h): a mod can add a story
     /// layer exactly the way the game's own content does.
     std::vector<LayerRule> layers;

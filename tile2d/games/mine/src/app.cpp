@@ -204,6 +204,7 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"mine-layer", "<n>", "which layer of the mine the world view opens on (default 0)"},
         {"layer-fill", "<none|bands|scatter>", "world view debug fill: the registry laid out in the layer"},
         {"layer-drops", "<0|1>", "world view debug fill: one of every registered drop, laid out in the layer"},
+        {"layer-drills", "<0|1>", "world view debug fill: one of every registered drill, each on a cell that has ore"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
@@ -1084,8 +1085,12 @@ void MineApp::enter_mine_layer(i32 index) {
     // The debug fill for entities, when it was asked for: one of every registered drop, spread across the
     // layer, so a designer can see and drag them before the data that places drops exists (world.h).
     if (options_.layer_drops) {
-        const usize placed = lay_out_drops(world_.layer(), registry_);
+        const usize placed = lay_out_drops(world_.layer(), registry_, content_.report().definitions);
         T2D_INFO("world: laid out {} drop(s) for the debug fill", placed);
+    }
+    if (options_.layer_drills) {
+        const usize placed = lay_out_drills(world_.layer(), registry_, content_.report().definitions);
+        T2D_INFO("world: laid out {} drill(s) for the debug fill", placed);
     }
     fit_world_view();
 }

@@ -104,6 +104,17 @@ PackFileResult load_pack_files(ContentPack& pack, ContentRegistry& registry, Con
             report.errors.push_back(message);
             if (pack.error.empty()) pack.error = message;
         }
+        // And the drops (types/drop_definition.h): what a drill throws out is one of these, so the
+        // picture it is drawn with has to be kept as well.
+        std::vector<std::string> drop_errors;
+        for (types::DropDefinition& definition : types::drop_definitions(document, &drop_errors)) {
+            report.definitions.add(std::move(definition));
+        }
+        for (const std::string& drop_error : drop_errors) {
+            const std::string message = std::format("{}: {}", label, drop_error);
+            report.errors.push_back(message);
+            if (pack.error.empty()) pack.error = message;
+        }
         // And the layers the file describes (layer_rules.h): the story's own layers, read while the file
         // loads anyway, so a rule the engine cannot read is reported where the file is. The first
         // declaration of a layer name keeps it, the way the registry keeps the first owner of a name.
@@ -500,6 +511,7 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         // content.
         for (const types::TileDefinition& definition : mod.definitions) report_.definitions.add(definition);
         for (const types::ItemDefinition& definition : mod.items) report_.definitions.add(definition);
+        for (const types::DropDefinition& definition : mod.drops) report_.definitions.add(definition);
         // And the layers it describes: a mod adds a story layer the way the game's own content does.
         for (const LayerRule& rule : mod.layers) report_.layers.add(rule);
         report_.sources.push_back(std::move(source));

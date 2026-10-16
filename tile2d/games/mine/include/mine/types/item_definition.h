@@ -33,7 +33,7 @@ struct ItemDefinition {
 };
 
 /// Reads one entry of the item table. \p kind is the table it was declared in and has to be the item
-/// table: the table an entry is written in is what it *is* (docs/TYPES.md section 9), so an entry read
+/// table: the table an entry is written in is what it *is* (docs/TYPES.md section 10), so an entry read
 /// out of another table would be an item no file declares. Returns nothing and fills \p error when the
 /// entry cannot be read - a field the engine reads and cannot read is refused rather than guessed at.
 [[nodiscard]] std::optional<ItemDefinition> read_item_definition(ContentKind kind, std::string_view name,

@@ -19,6 +19,11 @@ void ContentDefinitions::add(types::ItemDefinition definition) {
     items_.push_back(std::move(definition));
 }
 
+void ContentDefinitions::add(types::DropDefinition definition) {
+    if (find_drop(definition.name) != nullptr) return;
+    drops_.push_back(std::move(definition));
+}
+
 const types::TileDefinition* ContentDefinitions::find_tile(ContentKind kind, std::string_view name) const {
     for (const types::TileDefinition& definition : tiles_) {
         if (definition.kind == kind && definition.name == name) return &definition;
@@ -28,6 +33,13 @@ const types::TileDefinition* ContentDefinitions::find_tile(ContentKind kind, std
 
 const types::ItemDefinition* ContentDefinitions::find_item(std::string_view name) const {
     for (const types::ItemDefinition& definition : items_) {
+        if (definition.name == name) return &definition;
+    }
+    return nullptr;
+}
+
+const types::DropDefinition* ContentDefinitions::find_drop(std::string_view name) const {
+    for (const types::DropDefinition& definition : drops_) {
         if (definition.name == name) return &definition;
     }
     return nullptr;

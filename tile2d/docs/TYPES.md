@@ -250,7 +250,41 @@ drag.end();                                    // 放下：它停在放下它的
 
 ![两颗掉落物躺在矿场里（夹具内容）](../games/mine/docs/images/world_drops_en.png)
 
-## 9. 数据怎么变成地块：定义器
+## 9. 钻头（`Drill`）：实体地块，按"硬度 ÷ 能力"出料
+
+**钻头**是**实体地块**（§3）：它占着一格、会跑，跑起来做的事情是**挖它脚下的矿**。它站在矿**上面**——
+矿在它下面的瓦片层，因为一个格子每层只放一个地块（`docs/GAME_DESIGN.md` §1.12、§1.26）。数据侧两个
+数字决定节奏：矿的 `hardness`（硬度）与钻头的 `dig_power`（挖掘能力），**周期 = hardness / dig_power**；
+到点它就往外丢一个**那条矿对应的掉落物**（§8），四个方向轮流、一格远。
+
+```cpp
+// drill:: rig:: dig_power:1.0     ore:: vein:: hardness:2.0 drop:"chunk"
+MineLayer layer(0, LayerShape{24, 16, 3}, 1);
+layer.place(registry, definitions, at(ContentKind::Floor, "dirt", 0, 5, 5));   // 地板
+layer.place(registry, definitions, at(ContentKind::Ore, "vein", 1, 5, 5));     // 矿：下面那一层
+layer.place(registry, definitions, at(ContentKind::Drill, "rig", 2, 5, 5));    // 钻头：上面那一层
+Drill* drill = dynamic_cast<Drill*>(layer.plot_at(2, GridPos{5, 5}));
+
+drill->ready();            // true —— 脚下有矿，而且那条矿说清了自己多硬、掉什么
+drill->period_seconds();   // 2.0  = hardness 2.0 / power 1.0
+layer.tick(2.0f);          // 它的回合到了：丢出一个掉落物
+layer.entity_count();      // 1 —— 就是那个掉落物，落在钻头旁边一格
+```
+
+* **它不自己找矿**：层在**建层时**就把脚下那条矿、它的硬度、它掉什么、以及算出来的周期交给钻头
+  （`DrillJob`，`types/drill.h`）——那是注册表（名字 → id）与定义（设计者的数字）同时在手的唯一时刻。
+  于是"脚下没矿""矿没说自己多硬""矿没说自己掉什么""钻头没说自己多能挖"都是**建层时就报出来的拒绝**
+  （`LayerBuildReport`），而不是一台永远默默不动的机器。
+* **一帧比一个周期长时按时间出料**：`on_update` 拿到的是这一帧覆盖的整段时间（§3 的节奏规则），
+  所以一次卡顿丢掉三个周期就是三个掉落物，而不是一个——"一次卡顿不改变矿场产出什么"。
+* **掉落物落在外面**：四个方向轮流、一格远，所以钻头不会把自己埋在一个点上；落在图外时贴边。
+  丢出来的是**实体**（§8），所以它能被指针拖走——"机器出料、玩家搬走"这条路已经通了。
+* **矿不会被挖完**：一条矿脉有多少、挖完怎么办是设计者的数据（`docs/GAME_DESIGN.md` §7.3/§7.10）；
+  引擎现在只按时间出料，不减少矿。
+* **地块第一次够得到世界**：`Tile::owner()` 是它所在的层（`types/tile.h`），钻头就是靠它把掉落物放进层里
+  （`owner()->adopt(...)`）。在这之前只有实体有这条路（§7）。
+
+## 10. 数据怎么变成地块：定义器
 
 定义在数据里（`docs/MODS.md`），地块在 C++ 里，中间这一步就是**定义器**
 （`types/tile_definition.h`）：
@@ -277,7 +311,7 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
   （`ContentDefinitions::find_item()`）。两个定义器**各走各的表**：`item_definitions()` 只收 `item::`，
   `tile_definitions()` 只收占格子的类别，所以一份文档里叫同一个名字的地板与物品互不干扰。
 
-## 10. 加一个新类型
+## 11. 加一个新类型
 
 1. 在 `include/mine/types/` 下加一个头文件，写清它是什么、为什么这样切；
 2. 在 `src/types/` 下加实现，进 `mine_core`（**不依赖 Ore**：内容逻辑要能在专用服务器上跑）——同时
@@ -288,7 +322,7 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
 一个类型**不属于地块家族**时（物品 §6、实体 §7），这条一样成立，只是它进的是自己的测试文件
 （`test_entities.cpp`），并且要在`types/types.h` 之外想清楚它**是不是内容**：实体现在就不是。
 
-## 11. 谁在用它们：世界
+## 12. 谁在用它们：世界
 
 地块的第一个使用者是**世界**（`mine/world.h`，`docs/GAME_DESIGN.md` §4）：
 
@@ -313,11 +347,15 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
 * **掉落物是实体里第一个"有图、还会被拖"的**（§8）：世界视图把它画成一格大、以位置为中心的图，画在所有
   地块之后；左键按下由 `PointerDrag` 接管（`app.cpp` 只负责把屏幕坐标换成世界坐标）。
   `--layer-drops 1` 把 `drop::` 的每一条在层里铺一个，好在"按数据放掉落物"的规则出现之前先看见它们。
+* **钻头把"会跑的地块"与"掉落物"接起来**（§9）：层在建层时把脚下的矿与算出来的周期交给它
+  （`configure_drill`），它到点就往层里放一个掉落物实体（`owner()->adopt(...)`）——地块第一次够得到世界
+  （`Tile::owner()`）。`--layer-drills 1` 把 `drill::` 的每一条放在一个有矿的格子上，好在"按数据放设备"
+  的规则出现之前先看见它出料。
 
 单测 `test_world`（12 用例 / 130 断言）覆盖上面每一条，包括**同一 `(seed, 层号)` 两次生成逐字节相同**；
 实体那半边是 `test_entities`（8 用例 / 129 断言，§7）。
 
-## 12. 现在还没有的
+## 13. 现在还没有的
 
 * **没有内容规则**：谁在什么时候把哪些内容放到哪些格子上，是**设计者的层规则**（`docs/GAME_DESIGN.md`
   §7.3/§7.4/§7.8/§7.9）。世界已经能把一条内容变成地块、把一层建出来、把两条推进路径跑起来；
@@ -333,6 +371,9 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
   现在能放下它的只有 `--layer-drops` 这个调试填充，或 C++。掉落物也**不说它是谁的**：
   "这是哪条物品掉出来的、有几个"是设计者的数据模型（`docs/GAME_DESIGN.md` §7.2/§7.6/§7.10），
   引擎现在只读它的 `image`；拾取、背包、需求点名同样都还没有。
+* **没有数据说"哪里该有钻头"**：`drill::` 说得清"有这么一台机器"，说不清"在这一层放一台"——
+  现在能放下它的只有 `--layer-drills` 这个调试填充，或 C++。**矿也不会被挖完**：一条矿脉有多少、
+  挖完怎么办是设计者的（§7.3/§7.10），引擎只按时间出料。
 * **地块没有世界访问**：`EntityTile::on_update(elapsed)` 现在只拿到时间（实体有 `layer()`，§7）。
   机器要读邻居、背包、需求时，那个上下文随模拟一起设计，而不是现在猜。
 * **没有存档**：地块怎么进快照（含"哪一格是它的锚点"）等模拟的形状定了再说。现在的地图格只存

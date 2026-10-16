@@ -1,0 +1,8 @@
+# 测试替身：钻头（docs/GAME_DESIGN.md §1.26）。
+#
+# 钻头是**实体地块**（会跑的功能地块），它的条目说一件事：dig_power（挖掘能力）。
+# 它挖什么、多久出一个，由它脚下那条矿的 hardness / drop 与这个数字一起决定。
+drill::
+    rig::
+        image:"art/drill.png"
+        dig_power:1.0

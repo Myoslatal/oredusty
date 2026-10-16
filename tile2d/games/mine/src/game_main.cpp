@@ -137,6 +137,7 @@ extern "C" int mine_game_main(int argc, char** argv) {
     }
     if (const auto fill = cli.value("layer-fill"); fill.has_value()) options.layer_fill = *fill;
     if (const auto drops = cli.bool_value("layer-drops"); drops.has_value()) options.layer_drops = *drops;
+    if (const auto drills = cli.bool_value("layer-drills"); drills.has_value()) options.layer_drills = *drills;
 
     mine::MineApp application(std::move(options));
     return application.run(argc, argv);

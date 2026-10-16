@@ -198,8 +198,11 @@ T2D_TEST(the_debug_fill_lays_out_every_registered_drop) {
     fixture.add(ContentKind::Drop, "bolt");
     fixture.add(ContentKind::Item, "stone");   // not a drop: the fill lays out the drop table only
     MineLayer layer(0, LayerShape{40, 30, 1}, 1);
+    // No definitions: the fill builds a plain drop when the load read no file for the content, which is
+    // what a name a mod registered through the C ABI looks like (types/drop_definition.h).
+    const ContentDefinitions definitions;
 
-    T2D_CHECK_EQ(lay_out_drops(layer, fixture.registry), 2u);
+    T2D_CHECK_EQ(lay_out_drops(layer, fixture.registry, definitions), 2u);
     T2D_CHECK_EQ(layer.entity_count(), 2u);
     // Both are drops, both are inside the map, and both can be picked up - which is what the fill is for.
     for (const std::unique_ptr<Entity>& entity : layer.entities()) {
@@ -212,7 +215,7 @@ T2D_TEST(the_debug_fill_lays_out_every_registered_drop) {
     // Nothing registered under the drop table: the fill places nothing, because it never invents content.
     const ContentRegistry none;
     MineLayer empty(0, LayerShape{8, 8, 1}, 1);
-    T2D_CHECK_EQ(lay_out_drops(empty, none), 0u);
+    T2D_CHECK_EQ(lay_out_drops(empty, none, definitions), 0u);
     T2D_CHECK_EQ(empty.entity_count(), 0u);
 }
 

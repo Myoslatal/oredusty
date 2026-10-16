@@ -36,7 +36,7 @@ using t2d::usize;
 /// inserting one in the middle would renumber the content behind it. Appending one is what makes an
 /// older save table readable: it has fewer kind sections than this build knows, and a kind it does not
 /// have is a kind with no entries in it (ContentTable::deserialize).
-enum class ContentKind : u8 { Item = 0, Structure, Machine, Recipe, Layer, Channel, Floor, Ore, Drop, Count };
+enum class ContentKind : u8 { Item = 0, Structure, Machine, Recipe, Layer, Channel, Floor, Ore, Drop, Drill, Count };
 inline constexpr usize kContentKindCount = static_cast<usize>(ContentKind::Count);
 [[nodiscard]] const char* content_kind_name(ContentKind kind);
 

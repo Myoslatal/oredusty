@@ -121,7 +121,16 @@ using LayerGenerator = std::function<LayerSpec(u64 seed, i32 index)>;
 /// data that places drops exists (docs/GAME_DESIGN.md sections 1.25, 7.7). The positions are deliberately
 /// not on whole cells: a drop's position is a point, and a layout that landed on cell corners would hide
 /// that. The registry must outlive the layer's use of what it names, the way every other fill's must.
-[[nodiscard]] usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry);
+[[nodiscard]] usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry,
+                                 const ContentDefinitions& definitions);
+
+/// Lays out one of every registered **drill** in \p layer, each on a cell that has ore under it, on the
+/// layer's **top** tile layer - a drill stands above what it mines (docs/GAME_DESIGN.md section 1.26).
+/// This is the debug fill for the mining rule, the way lay_out_drops is for drops: it names no content,
+/// it places what the registry holds under the drill table, and what it cannot place is logged rather
+/// than guessed at. Returns how many it placed.
+[[nodiscard]] usize lay_out_drills(MineLayer& layer, const ContentRegistry& registry,
+                                   const ContentDefinitions& definitions);
 
 /// What building a layer did. A description that names content the registry does not have, puts a
 /// footprint outside the map, or puts it on top of something already on that tile layer is **refused
@@ -309,6 +318,13 @@ private:
     /// types::Entity::set_position(), which is the only way a position changes - an index nobody has to
     /// remember to update is an index that cannot go stale.
     void reindex(types::Entity& entity, t2d::Vec2 before);
+
+    /// Tells a drill what it stands on, while the layer is being built: the ore below it, how hard that
+    /// ore is and what it drops, and the period that comes out of it (hardness / power). A drill with
+    /// nothing to mine is refused into \p report rather than left to do nothing forever
+    /// (docs/GAME_DESIGN.md section 1.26).
+    void configure_drill(types::Drill& drill, const ContentRegistry& registry,
+                         const ContentDefinitions& definitions, LayerBuildReport* report);
     /// Frees the storage of what was destroyed during a pass, once nothing can be walking it.
     void sweep_destroyed();
 

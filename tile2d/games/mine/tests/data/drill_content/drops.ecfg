@@ -1,0 +1,4 @@
+# 测试替身：这条矿挖出来的掉落物（docs/GAME_DESIGN.md §1.25）。
+drop::
+    chunk::
+        image:"art/drop_chunk.png"

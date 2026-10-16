@@ -68,6 +68,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_layer_rules    23 cases / 807 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
+    games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   14 cases / 239 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -426,6 +427,20 @@ movement. `--layer-drops 1` lays out one of every registered drop so there is so
 
 ![A drop being dragged: the HUD says what the pointer is holding](games/mine/docs/images/world_drop_drag_en.png)
 
+A **drill** (`types/drill.h`) is the first machine that does something: it is an **entity plot** — a
+plot that occupies its cell and runs on a cadence — and what it does is mine the ore **under** it, on a
+tile layer below the one it stands on (one plot per cell per layer, so "above" is a higher tile layer).
+Two numbers the designer writes decide the rhythm: the ore's `hardness` and the drill's `dig_power`,
+and **the period is hardness / dig_power** — 2.00 s for a hardness-2.0 ore under a power-1.0 drill.
+Every turn it throws one **drop** of that ore's content out to a neighbouring cell, turning a quarter
+each time. Both facts are settled **while the layer is built**, because that is the one moment the
+registry (names to ids) and the definitions (the designer's numbers) are both in hand: a drill with no
+ore under it, an ore that does not say how hard it is or what it drops, a drill with no power — each is
+a **refusal in the build report**, not a machine that quietly does nothing forever. A frame longer than
+a period is worth several drops, because a hitch must not change what the mine produces.
+`--layer-drills 1` lays one of every registered drill on a cell that has ore. The ore is **not**
+consumed: how much a vein holds is the designer's to say.
+
 Guide: [docs/TYPES.md](docs/TYPES.md).
 
 ## Code tables: code that can replace the code it was loaded by
@@ -452,7 +467,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 760 sections, 2 413 symbols, 9 203 relocations (release)
+        mine.codetab         the game: 789 sections, 2 499 symbols, 9 620 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -702,12 +717,12 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 28/28 tests green |
-| `release` | 28/28 tests green |
-| `asan` (Address + UB sanitizers) | 28/28 tests green |
-| `tsan` (ThreadSanitizer) | 28/28 tests green |
+| `debug` | 29/29 tests green |
+| `release` | 29/29 tests green |
+| `asan` (Address + UB sanitizers) | 29/29 tests green |
+| `tsan` (ThreadSanitizer) | 29/29 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
-| `server-only` | 28/28 tests green |
+| `server-only` | 29/29 tests green |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

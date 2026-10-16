@@ -447,6 +447,16 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
                 report_.errors.push_back(message);
                 if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
+            // And the drops its files describe (types/drop_definition.h), for the same reason.
+            std::vector<std::string> drop_errors;
+            for (types::DropDefinition& definition : types::drop_definitions(document, &drop_errors)) {
+                slot.loaded.drops.push_back(std::move(definition));
+            }
+            for (const std::string& drop_error : drop_errors) {
+                const std::string message = std::format("mod '{}': {}", manifest.id, drop_error);
+                report_.errors.push_back(message);
+                if (slot.loaded.error.empty()) slot.loaded.error = message;
+            }
             // The same for the layers it describes (layer_rules.h): a rule the engine cannot read is a
             // mod's typo, and it is reported by the mod that made it.
             std::vector<std::string> layer_errors;

@@ -1,5 +1,6 @@
 #include <mine/types/tile_definition.h>
 
+#include <mine/types/drill.h>
 #include <mine/types/entity_tile.h>
 #include <mine/types/floor.h>
 #include <mine/types/scene_tile.h>
@@ -17,7 +18,8 @@ bool kind_is_a_tile(ContentKind kind) {
         case ContentKind::Floor:
         case ContentKind::Ore:
         case ContentKind::Structure:
-        case ContentKind::Machine: return true;
+        case ContentKind::Machine:
+        case ContentKind::Drill: return true;
         default: return false;
     }
 }
@@ -48,6 +50,40 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
             return fail(std::format("{} '{}': random_reverse must be true or false", content_kind_name(kind), name));
         }
         definition.random_reverse = reverse->as_bool();
+    }
+
+    // The two numbers a mine is made of, read for the kinds that have them (docs/GAME_DESIGN.md section
+    // 1.26). A number the engine reads and cannot use is refused here, where the file is: a drill with no
+    // power and an ore with no hardness are data errors, not things to guess a rate for.
+    const auto positive = [&](std::string_view field, f32& out) -> std::optional<std::string> {
+        const t2d::EcfgValue* value = entry.find(field);
+        if (value == nullptr) return std::nullopt;
+        if (value->type() != t2d::EcfgType::Int && value->type() != t2d::EcfgType::Float) {
+            return std::format("{} '{}': {} must be a number", content_kind_name(kind), name, field);
+        }
+        out = static_cast<f32>(value->as_float());
+        if (!(out > 0.0f)) {
+            return std::format("{} '{}': {} must be greater than zero", content_kind_name(kind), name, field);
+        }
+        return std::nullopt;
+    };
+    if (kind == ContentKind::Drill) {
+        if (std::optional<std::string> problem = positive("dig_power", definition.dig_power);
+            problem.has_value()) {
+            return fail(std::move(*problem));
+        }
+    }
+    if (kind == ContentKind::Ore) {
+        if (std::optional<std::string> problem = positive("hardness", definition.hardness);
+            problem.has_value()) {
+            return fail(std::move(*problem));
+        }
+        if (const t2d::EcfgValue* drop = entry.find("drop"); drop != nullptr) {
+            if (!drop->is_string() || drop->as_string().empty()) {
+                return fail(std::format("ore '{}': drop must be the quoted name of a drop", name));
+            }
+            definition.drop = std::string(drop->as_string());
+        }
     }
     return definition;
 }
@@ -89,6 +125,15 @@ std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId
             // A machine is scenery that also runs, so it is an entity plot.
             tile = std::make_unique<EntityTile>(definition.kind, id, layer, anchor, width, height);
             break;
+        case ContentKind::Drill: {
+            // A drill is a machine that mines what is under it: an entity plot whose digging power comes
+            // from its entry. What it mines is decided when the layer places it, because that is where
+            // the ore under it is known (types/drill.h, world.h).
+            auto drill = std::make_unique<Drill>(definition.kind, id, layer, anchor, width, height);
+            drill->set_dig_power(definition.dig_power);
+            tile = std::move(drill);
+            break;
+        }
         case ContentKind::Structure:
             tile = std::make_unique<SceneTile>(definition.kind, id, layer, anchor, width, height);
             break;

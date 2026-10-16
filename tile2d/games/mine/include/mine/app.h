@@ -103,6 +103,10 @@ struct MineOptions {
     /// as --layer-fill, for the things that are not on a cell - so a designer can see a drop and drag it
     /// before the data that places drops exists (docs/GAME_DESIGN.md section 1.25).
     bool layer_drops = false;
+    /// Lay out one of every registered drill in the layer the world view enters, each on a cell that has
+    /// ore under it (world.h) - so the mining rule can be watched producing before the data that places
+    /// drills exists (docs/GAME_DESIGN.md section 1.26).
+    bool layer_drills = false;
 };
 
 class MineApp final : public ore::Application {

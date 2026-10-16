@@ -17,6 +17,7 @@
 #pragma once
 
 #include <mine/registry.h>
+#include <mine/types/drop_definition.h>
 #include <mine/types/item_definition.h>
 #include <mine/types/tile_definition.h>
 
@@ -52,6 +53,9 @@ public:
     /// Item definitions are kept the same way and for the same reason (types/item_definition.h):
     /// everything that shows an item - an inventory slot, a recipe, a demand - shows its picture.
     void add(types::ItemDefinition definition);
+    /// Drop definitions as well (types/drop_definition.h): a drill throws out the drop its ore names, and
+    /// what that drop is drawn with is read from the file it was declared in.
+    void add(types::DropDefinition definition);
     /// The **plot** definition \p kind and \p name have, or nullptr when the load read none: content a
     /// mod registered through the C ABI has no file behind it, and is then a plot with no picture and
     /// no turning around rather than a plot that cannot be placed. It is find_tile and not find so that
@@ -60,15 +64,21 @@ public:
     /// The **item** definition \p name has, or nullptr when the load read none. There is no kind
     /// argument because an item is always the item table's (types/item.h).
     [[nodiscard]] const types::ItemDefinition* find_item(std::string_view name) const;
+    /// The **drop** definition \p name has, or nullptr when the load read none. Like find_item(), there
+    /// is no kind argument: a drop is always the drop table's.
+    [[nodiscard]] const types::DropDefinition* find_drop(std::string_view name) const;
     /// How many plot definitions the load read: what a log line reports, and what makes "the data said
     /// nothing about any plot" visible instead of silent.
     [[nodiscard]] usize size() const { return tiles_.size(); }
     /// How many item definitions the load read, for the same reason.
     [[nodiscard]] usize item_count() const { return items_.size(); }
+    /// How many drop definitions the load read, for the same reason.
+    [[nodiscard]] usize drop_count() const { return drops_.size(); }
 
 private:
     std::vector<types::TileDefinition> tiles_;
     std::vector<types::ItemDefinition> items_;
+    std::vector<types::DropDefinition> drops_;
 };
 
 /// Every piece of content \p document declares, in file order (ids are kNoContent: nothing is

@@ -32,6 +32,7 @@ const char* content_kind_name(ContentKind kind) {
         case ContentKind::Floor: return "floor";
         case ContentKind::Ore: return "ore";
         case ContentKind::Drop: return "drop";
+        case ContentKind::Drill: return "drill";
         case ContentKind::Count: break;
     }
     return "?";

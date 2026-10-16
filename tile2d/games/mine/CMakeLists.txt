@@ -19,6 +19,7 @@ add_library(mine_core STATIC
     src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
     src/types/entity.cpp
@@ -75,6 +76,7 @@ set(MINE_TABLE_SOURCES
     src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
     src/types/entity.cpp
