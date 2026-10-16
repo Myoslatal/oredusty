@@ -12,14 +12,14 @@
 // is where the saving is - the refresh pass can then walk everything and pay only for what is dirty,
 // while the tick pass walks machines and nothing else.
 //
-// The cadence is time, not ticks: advance() is handed the frame's seconds and decides for itself
-// whether its turn has come. A frame that took longer than a period runs the plot once, with the whole
-// span in its hand - a plot cannot replay the ticks it missed, and pretending otherwise would make a
-// hitch change what the mine produces. What the span means is the content's business: a drill that
-// accounts for five seconds can produce what five seconds are worth.
+// The cadence itself - the period, the remainder it carries, and the rule that a long frame runs
+// something once rather than replaying what it missed - lives in types/update_cadence.h, because an
+// entity (types/entity.h) runs on the same rule. What is here is the plot's half of it: a plot that is
+// in the layer's tick list, and the hook its content fills in.
 #pragma once
 
 #include <mine/types/scene_tile.h>
+#include <mine/types/update_cadence.h>
 
 #include <t2d/core/types.h>
 
@@ -39,17 +39,17 @@ public:
         : SceneTile(kind, id, layer, anchor, width, height) {}
 
     /// How often it wants its turn: 0 means every tick, anything else is a period in seconds.
-    [[nodiscard]] f32 period_seconds() const { return period_; }
+    [[nodiscard]] f32 period_seconds() const { return cadence_.period_seconds(); }
     /// Sets the period. A negative one is read as "every tick", which is what a period below zero
     /// would mean anyway.
-    void set_period_seconds(f32 seconds);
+    void set_period_seconds(f32 seconds) { cadence_.set_period_seconds(seconds); }
 
     /// Hands the plot the frame's time and runs it when its turn has come; returns whether it ran. The
     /// remainder is carried, so a period of one second does not drift by the fractions of a frame.
     bool advance(f32 delta_seconds);
 
     /// The time that has piled up since the last run.
-    [[nodiscard]] f32 since_last_update() const { return elapsed_; }
+    [[nodiscard]] f32 since_last_update() const { return cadence_.since_last_update(); }
 
 protected:
     /// What the plot does when its turn comes. \p elapsed is how much time this run accounts for: the
@@ -57,8 +57,7 @@ protected:
     virtual void on_update(f32 elapsed_seconds) { (void)elapsed_seconds; }
 
 private:
-    f32 period_ = 0.0f;
-    f32 elapsed_ = 0.0f;
+    UpdateCadence cadence_;
 };
 
 } // namespace mine::types

@@ -91,6 +91,11 @@ target_link_libraries(test_world PRIVATE mine_core)
 t2d_add_test(test_layer_rules test_layer_rules.cpp)
 target_link_libraries(test_layer_rules PRIVATE mine_core)
 
+# Entities: things that are not on a cell, the cadence they run on, the interaction hook, and the
+# quadtree a layer indexes them with for a radius query.
+t2d_add_test(test_entities test_entities.cpp)
+target_link_libraries(test_entities PRIVATE mine_core)
+
 
 # --- the game's own code in a code table --------------------------------------------------------------
 # mine_core's registry is compiled into a table and *not* linked into the test: what the test loads is

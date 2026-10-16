@@ -66,6 +66,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_mine_types     15 cases / 211 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
     games/mine/tests/test_layer_rules    23 cases / 807 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
+    games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   14 cases / 239 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -392,7 +393,22 @@ plot but never an item. It carries the same identity a plot does (kind + the id 
 never a name) plus the one field the engine reads for it, the picture everything that shows an item
 draws. `item::` entries are read by their own definer (`types/item_definition.h`) and kept by the load,
 so a field the engine cannot read is reported where the file is. Which items *exist* is the designer's
-to say, and the game's own content has none yet.
+to say, and the game's own content has one (`stone`, `content/items.ecfg`).
+
+An **entity** (`types/entity.h`) is the third thing a layer can hold: not a plot (a plot *is* cells) and
+not an item (an item is content that gets carried) — it is a point in a layer that **moves**. Its
+position is a pair of floats and **not aligned to the tile grid**: 3.5, 2.25 is a place like any other.
+It can be asked to **interact** (both sides of an interaction are asked, and neither has to know what
+the other one is), and it is updated while the game runs — **every tick by default**, or on a period it
+declares, or never at all (`set_auto_update(false)`, for something driven by a script or a player
+action). The cadence is the rule a functional plot already ran on, now shared
+(`types/update_cadence.h`): a frame longer than a period runs it once with the whole span in its hand,
+because a hitch must not change what the mine produces. Because entities move, the layer indexes them
+in a **quadtree** (`mine/quadtree.h`) rather than in the chunk index the plots use — so "what is near
+this point" costs what the answer is: ten thousand entities in a 1000×1000 layer, and a radius-20 query
+walks 21 nodes and tests **31 entries** instead of ten thousand. Moving tells the layer (an entity knows
+the one it is in), so the index cannot go stale. Nothing spawns entities yet — the class and the index
+are here, and which entities exist is the designer's to say.
 
 Guide: [docs/TYPES.md](docs/TYPES.md).
 
@@ -420,7 +436,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 706 sections, 2 247 symbols, 8 756 relocations (release)
+        mine.codetab         the game: 734 sections, 2 329 symbols, 8 981 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -670,12 +686,12 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 26/26 tests green |
-| `release` | 26/26 tests green |
-| `asan` (Address + UB sanitizers) | 26/26 tests green |
-| `tsan` (ThreadSanitizer) | 26/26 tests green |
+| `debug` | 27/27 tests green |
+| `release` | 27/27 tests green |
+| `asan` (Address + UB sanitizers) | 27/27 tests green |
+| `tsan` (ThreadSanitizer) | 27/27 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
-| `server-only` | 26/26 tests green |
+| `server-only` | 27/27 tests green |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

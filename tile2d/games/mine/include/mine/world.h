@@ -10,6 +10,11 @@
 // cheaply. The **plots** are the objects that content turns into, and they are what carries a
 // footprint (a 3x3 is one plot, not nine), a cadence and a way of drawing itself.
 //
+// A layer also holds **entities** (types/entity.h): things that are not on a cell, that move, and that
+// can interact. They are found the other way round - a plot through the chunk index, because a plot is
+// cells, and an entity through a quadtree over the layer's rectangle, because an entity is a point
+// (quadtree.h, docs/GAME_DESIGN.md section 1.24).
+//
 // A layer is built from a **layer description** (LayerSpec): the shape of its map and the content that
 // goes in it. That is what a generator produces - the designer's data in story mode, a derivation from
 // (seed, index) in endless mode - and both produce the same description, so nothing below this comment
@@ -24,6 +29,7 @@
 
 #include <mine/content_grid.h>
 #include <mine/content_loader.h>
+#include <mine/quadtree.h>
 #include <mine/registry.h>
 #include <mine/types/types.h>
 
@@ -170,8 +176,10 @@ public:
     /// Walks every plot and brings the dirty ones up to date; returns how many actually ran. A plot
     /// nobody touched costs one branch (types/scene_tile.h).
     usize refresh();
-    /// Hands the frame's seconds to the plots that run, and returns how many took their turn. Plots
-    /// that do not run are not in this list at all - that is the saving (types/entity_tile.h).
+    /// Hands the frame's seconds to everything that runs - the plots on a cadence, and the entities -
+    /// and returns how many took their turn. Plots that do not run are not in the list at all, which is
+    /// the saving for the many; entities are walked and each one decides, because a cadence belongs to
+    /// the thing that owns it and there are few entities next to the plots (types/entity.h).
     usize tick(f32 delta_seconds);
 
     // --- what is where ----------------------------------------------------------------------------
@@ -220,6 +228,35 @@ public:
         }
     }
 
+    // --- entities: what is in the layer without being on a cell (types/entity.h) -------------------
+    /// Takes ownership of \p entity, hands it the next serial and puts it in the quadtree. Nothing is
+    /// refused: which content exists is the registry's business, and an entity is a thing a caller
+    /// built (a machine's own code, a mod, a test).
+    types::Entity& adopt(std::unique_ptr<types::Entity> entity);
+    /// Makes an entity of content \p kind and \p id at \p position, or returns nullptr for a
+    /// kNoContent id - an entity no save can name is not something a layer should hold.
+    [[nodiscard]] types::Entity* spawn(ContentKind kind, ContentId id, t2d::Vec2 position);
+    /// Marks \p entity dead and takes it out of the index **now**, so the next query cannot find it;
+    /// the storage is compacted at the end of the tick pass, because a callback may be walking it.
+    /// Returns whether it was alive and this layer's.
+    bool destroy(types::Entity& entity);
+    /// Asks two entities to interact: each is handed the other, and the layer reports whether either
+    /// did anything. Both are asked, because an interaction has two sides - and neither side has to
+    /// know what the other one is (types/entity.h).
+    bool interact(types::Entity& a, types::Entity& b);
+    /// Visits every entity within \p radius of \p center, in the tree's own order. A query does not
+    /// change the layer, but what it finds is fair game: a caller may move it, ask it to interact, or
+    /// destroy it.
+    template <typename Visitor>
+    void for_each_entity_within(t2d::Vec2 center, f32 radius, Visitor&& visit) const {
+        entity_index_.for_each_within(center, radius, [&](const QuadTree<types::Entity*>::Entry& entry) {
+            visit(*entry.payload);
+        });
+    }
+    /// The same walk, collected and ordered by serial - spawn order. A caller that acts on the answer
+    /// gets the same order twice, which is what a save and a test both want from it.
+    [[nodiscard]] std::vector<types::Entity*> entities_within(t2d::Vec2 center, f32 radius) const;
+
     // --- what it holds ----------------------------------------------------------------------------
     [[nodiscard]] usize plot_count() const { return plots_.size(); }
     [[nodiscard]] usize ticking_count() const { return ticking_.size(); }
@@ -231,6 +268,18 @@ public:
     /// Every plot, in the order it was placed.
     [[nodiscard]] const std::vector<std::unique_ptr<types::SceneTile>>& plots() const { return plots_; }
     [[nodiscard]] const ContentGrid& cells() const { return cells_; }
+
+    /// Every entity, in spawn order. Dead ones are gone from here at the end of the tick that killed
+    /// them, so this is the list of what is alive.
+    [[nodiscard]] const std::vector<std::unique_ptr<types::Entity>>& entities() const { return entities_; }
+    [[nodiscard]] usize entity_count() const { return entities_.size(); }
+    /// How many of them the layer updates by itself (the rest are driven by something else).
+    [[nodiscard]] usize auto_updating_count() const;
+    /// What the last entity query walked (quadtree.h): the number that makes "the index is why a
+    /// radius query is cheap" a measurement rather than a claim.
+    [[nodiscard]] const QuadTree<types::Entity*>::Cost& last_entity_query_cost() const {
+        return entity_index_.last_query_cost();
+    }
 
     /// The layer as text: one line per plot, then what the layer costs. What goes into a bug report -
     /// and what a test compares to prove that the same (seed, index) builds the same layer twice.
@@ -247,6 +296,17 @@ private:
     }
     /// Registers a plot in every chunk its footprint touches.
     void index_plot(usize serial);
+
+    /// An entity that is in this layer moved: the quadtree follows it. Called by
+    /// types::Entity::set_position(), which is the only way a position changes - an index nobody has to
+    /// remember to update is an index that cannot go stale.
+    void reindex(types::Entity& entity, t2d::Vec2 before);
+    /// Frees the storage of what was destroyed during a pass, once nothing can be walking it.
+    void sweep_destroyed();
+
+    /// The bookkeeping an entity cannot do for itself: which layer it is in, which serial it has, and
+    /// whether it is still alive (types/entity.h).
+    friend class types::Entity;
 
     i32 index_ = 0;
     LayerShape shape_{};
@@ -268,6 +328,19 @@ private:
     /// chunks is still visited once. Mutable because a query does not change what the layer is.
     mutable std::vector<u32> visited_;
     mutable u32 visit_stamp_ = 0;
+
+    /// Everything that is in the layer without being on a cell, owned here, in spawn order. What
+    /// destroy() marked leaves the index at once and this vector at the end of the tick.
+    std::vector<std::unique_ptr<types::Entity>> entities_;
+    /// The same things, indexed by position: a query answers "what is near this point" instead of
+    /// walking the layer (quadtree.h). Its root is the map, so the layer's rectangle is what a radius
+    /// query is bounded by.
+    QuadTree<types::Entity*> entity_index_;
+    /// What destroy() marked, waiting for the pass that is running to finish.
+    std::vector<types::Entity*> destroyed_;
+    /// Handed out in spawn order, never reused: it is what a query is ordered by, and what a save can
+    /// point at without depending on where an entity sits in the vector.
+    u32 next_serial_ = 1;
 };
 
 /// The mine: a seed, the shape of its layers, the generator that describes them, and the one layer
@@ -290,9 +363,9 @@ public:
     /// of a hundred layers costs one layer, and entering a layer again builds the same mine back,
     /// because the generator only ever sees (seed, index).
     const MineLayer& enter(i32 index, const ContentRegistry& registry, const ContentDefinitions& definitions);
-    [[nodiscard]] bool has_layer() const { return layer_.has_value(); }
+    [[nodiscard]] bool has_layer() const { return layer_ != nullptr; }
     [[nodiscard]] const MineLayer& layer() const { return *layer_; }
-    [[nodiscard]] i32 layer_index() const { return layer_.has_value() ? layer_->index() : 0; }
+    [[nodiscard]] i32 layer_index() const { return layer_ != nullptr ? layer_->index() : 0; }
     /// What building the layer in force did, including everything the generator asked for that was
     /// refused.
     [[nodiscard]] const LayerBuildReport& build_report() const { return build_report_; }
@@ -306,7 +379,11 @@ private:
     u64 seed_ = 0;
     LayerShape shape_{};
     LayerGenerator generator_{};
-    std::optional<MineLayer> layer_{};
+    /// The layer being played, held by pointer: **what is in a layer points back at it** (an entity
+    /// knows the layer it is in, so that moving tells the index, types/entity.h), and a layer that moved
+    /// would leave those pointers naming a layer that is no longer there. Entering a layer replaces this
+    /// one, which is what makes "a mine of a hundred layers costs one layer" true.
+    std::unique_ptr<MineLayer> layer_;
     LayerBuildReport build_report_{};
 };
 

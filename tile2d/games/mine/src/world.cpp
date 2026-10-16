@@ -109,7 +109,13 @@ void LayerBuildReport::refuse(std::string message) {
 
 MineLayer::MineLayer(i32 index, LayerShape shape, u64 seed)
     : index_(index), shape_(shape), seed_(seed), rng_(seed),
-      cells_(shape.width, shape.height, shape.tile_layers) {
+      cells_(shape.width, shape.height, shape.tile_layers),
+      // The index is over the map: what a radius query is bounded by, and what its root rectangle is.
+      // A position outside it is still kept - it is just not found by a query that does not cover it
+      // (quadtree.h).
+      entity_index_(t2d::Aabb2::from_top_left(t2d::Vec2{0.0f, 0.0f},
+                                              t2d::Vec2{static_cast<f32>(cells_.width()),
+                                                        static_cast<f32>(cells_.height())})) {
     shape_.width = cells_.width();
     shape_.height = cells_.height();
     shape_.tile_layers = cells_.layer_count();
@@ -224,7 +230,84 @@ usize MineLayer::tick(f32 delta_seconds) {
     for (types::EntityTile* plot : ticking_) {
         if (plot->advance(delta_seconds)) ++ran;
     }
+    // The entities are walked and each one decides for itself: a cadence belongs to the thing that owns
+    // it, and an entity that says "not me" costs one branch rather than a list the layer would have to
+    // keep in step with what it said (types/entity.h). The count is taken before the walk, so an entity
+    // that spawns another during its turn does not have that one run in the same tick.
+    const usize count = entities_.size();
+    for (usize index = 0; index < count; ++index) {
+        types::Entity* entity = entities_[index].get();
+        if (entity->alive() && entity->advance(delta_seconds)) ++ran;
+    }
+    sweep_destroyed();
     return ran;
+}
+
+// ----------------------------------------------------------------------- entities ---
+
+types::Entity& MineLayer::adopt(std::unique_ptr<types::Entity> entity) {
+    entity->layer_ = this;
+    entity->serial_ = next_serial_++;
+    entity->alive_ = true;
+    types::Entity* raw = entity.get();
+    entities_.push_back(std::move(entity));
+    entity_index_.insert(raw->serial_, raw->position_, raw);
+    return *raw;
+}
+
+types::Entity* MineLayer::spawn(ContentKind kind, ContentId id, t2d::Vec2 position) {
+    // An entity no save can name is not something a layer should hold: the id is what a save stores,
+    // and kNoContent is what "there is no content here" is spelled as (registry.h).
+    if (id == kNoContent) return nullptr;
+    return &adopt(std::make_unique<types::Entity>(kind, id, position));
+}
+
+bool MineLayer::destroy(types::Entity& entity) {
+    if (!entity.alive() || entity.layer_ != this) return false;
+    // Out of the index at once, so a query in the same tick cannot find it; out of the storage at the
+    // end of the pass, because whoever is walking the entities right now is holding this one.
+    entity.alive_ = false;
+    entity_index_.remove(entity.serial_, entity.position_);
+    destroyed_.push_back(&entity);
+    return true;
+}
+
+bool MineLayer::interact(types::Entity& a, types::Entity& b) {
+    if (!a.alive() || !b.alive()) return false;
+    // Both sides are asked, and neither is privileged: an interaction is between two things, and the
+    // default (do nothing, say so) costs one call each (types/entity.h).
+    const bool first = a.on_interact(b);
+    const bool second = b.on_interact(a);
+    return first || second;
+}
+
+std::vector<types::Entity*> MineLayer::entities_within(t2d::Vec2 center, f32 radius) const {
+    std::vector<types::Entity*> found;
+    for_each_entity_within(center, radius, [&](types::Entity& entity) { found.push_back(&entity); });
+    // The tree visits in its own order; a caller that acts on the answer (a pointer action, a save, a
+    // test) gets spawn order instead, so the same question gives the same answer twice.
+    std::sort(found.begin(), found.end(), [](const types::Entity* left, const types::Entity* right) {
+        return left->serial() < right->serial();
+    });
+    return found;
+}
+
+usize MineLayer::auto_updating_count() const {
+    usize count = 0;
+    for (const std::unique_ptr<types::Entity>& entity : entities_) {
+        if (entity->auto_update()) ++count;
+    }
+    return count;
+}
+
+void MineLayer::reindex(types::Entity& entity, t2d::Vec2 before) {
+    entity_index_.move(entity.serial_, before, entity.position_);
+}
+
+void MineLayer::sweep_destroyed() {
+    if (destroyed_.empty()) return;
+    destroyed_.clear();
+    std::erase_if(entities_, [](const std::unique_ptr<types::Entity>& entity) { return !entity->alive(); });
 }
 
 const types::SceneTile* MineLayer::plot_at(i32 layer, GridPos cell) const {
@@ -259,6 +342,18 @@ std::string MineLayer::dump_text(const ContentRegistry& registry) const {
     text += std::format("  {} plot(s), {} of them ticking, {} mirrored, {} cell(s) filled of {} ({} KiB)\n",
                         plots_.size(), ticking_.size(), mirrored_, cells_.filled(), cells_.cell_count(),
                         cell_bytes() / 1024);
+    text += std::format("  {} entity(ies), {} of them updating themselves\n", entities_.size(),
+                        auto_updating_count());
+    for (const std::unique_ptr<types::Entity>& entity : entities_) {
+        text += std::format("  [e{}] {} #{} '{}' at {:.2f},{:.2f}{}\n", entity->serial(),
+                            content_kind_name(entity->kind()), entity->id(), entity->name(registry),
+                            entity->position().x, entity->position().y,
+                            entity->auto_update()
+                                ? (entity->period_seconds() > 0.0f
+                                       ? std::format(" every {:.3f}s", entity->period_seconds())
+                                       : std::string(" every tick"))
+                                : std::string(" not updated by the layer"));
+    }
     for (usize serial = 0; serial < plots_.size(); ++serial) {
         const types::SceneTile& plot = *plots_[serial];
         text += std::format("  [{}] {} #{} '{}' at {},{} {}x{} on tile layer {}{}{}{}\n", serial,
@@ -291,7 +386,7 @@ const MineLayer& MineWorld::enter(i32 index, const ContentRegistry& registry,
     if (shape.width == 0) shape.width = shape_.width;
     if (shape.height == 0) shape.height = shape_.height;
     if (shape.tile_layers <= 0) shape.tile_layers = shape_.tile_layers;
-    layer_.emplace(index, shape, layer_seed(seed_, index));
+    layer_ = std::make_unique<MineLayer>(index, shape, layer_seed(seed_, index));
     // What the description itself could not do comes first: it is about the data, and everything the
     // build says after it is about what that cost.
     for (const std::string& problem : spec.problems) build_report_.refuse(problem);
@@ -299,12 +394,12 @@ const MineLayer& MineWorld::enter(i32 index, const ContentRegistry& registry,
     return *layer_;
 }
 
-usize MineWorld::refresh() { return layer_.has_value() ? layer_->refresh() : 0; }
+usize MineWorld::refresh() { return layer_ != nullptr ? layer_->refresh() : 0; }
 
-usize MineWorld::tick(f32 delta_seconds) { return layer_.has_value() ? layer_->tick(delta_seconds) : 0; }
+usize MineWorld::tick(f32 delta_seconds) { return layer_ != nullptr ? layer_->tick(delta_seconds) : 0; }
 
 bool MineWorld::blocks(i32 layer_mask, GridPos cell) const {
-    return !layer_.has_value() || layer_->blocks(layer_mask, cell);
+    return layer_ == nullptr || layer_->blocks(layer_mask, cell);
 }
 
 } // namespace mine

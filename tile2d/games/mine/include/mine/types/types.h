@@ -20,6 +20,7 @@
 // The namespace is the contract between the two halves: data says *what*, these types say *how*.
 #pragma once
 
+#include <mine/types/entity.h>
 #include <mine/types/entity_tile.h>
 #include <mine/types/floor.h>
 #include <mine/types/item.h>

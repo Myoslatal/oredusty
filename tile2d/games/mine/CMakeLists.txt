@@ -18,6 +18,7 @@ add_library(mine_core STATIC
     src/mod_package.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/entity.cpp
     src/types/entity_tile.cpp
     src/types/floor.cpp
     src/types/item.cpp
@@ -25,6 +26,7 @@ add_library(mine_core STATIC
     src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp
+    src/types/update_cadence.cpp
     src/world.cpp
 )
 add_library(mine::core ALIAS mine_core)
@@ -69,6 +71,7 @@ set(MINE_TABLE_SOURCES
     src/mod_package.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/entity.cpp
     src/types/entity_tile.cpp
     src/types/floor.cpp
     src/types/item.cpp
@@ -76,6 +79,7 @@ set(MINE_TABLE_SOURCES
     src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp
+    src/types/update_cadence.cpp
     src/world.cpp
 )
 # What the toolchain is told about this build. The includes and the defines are the ones the sources
