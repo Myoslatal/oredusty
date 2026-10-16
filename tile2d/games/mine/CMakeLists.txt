@@ -119,12 +119,21 @@ foreach(source ${MINE_TABLE_SOURCES})
     list(APPEND MINE_TABLE_SOURCES_ABS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
 endforeach()
 set(MINE_TABLE_PATH "${CMAKE_CURRENT_BINARY_DIR}/${MINE_TABLE_NAME}")
+# What the table is built **from** is more than its sources: a header it includes is part of what it is
+# (an inline function, a constant, a class layout), and so is the published surface it is measured
+# against. Without them in DEPENDS, editing a header leaves the table - which is what actually runs -
+# built from the header before it, and the numbers a build reports are the numbers of the last time a
+# .cpp changed. CONFIGURE_DEPENDS, so a header that is new is picked up by a rebuild.
+file(GLOB_RECURSE MINE_TABLE_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
+    "${CMAKE_SOURCE_DIR}/include/*.h"
+    "${PROJECT_BINARY_DIR}/generated/*.h")
 add_custom_command(
     OUTPUT "${MINE_TABLE_PATH}"
     COMMAND $<TARGET_FILE:codetab> build ${MINE_TABLE_SOURCES_ABS}
             -o "${MINE_TABLE_PATH}" --id mine --name "Mine" --version 1.0 --requires engine@1.0
             --api "${CMAKE_SOURCE_DIR}/engine.api" ${MINE_TOOLCHAIN_ARGS}
-    DEPENDS codetab ${MINE_TABLE_SOURCES_ABS}
+    DEPENDS codetab ${MINE_TABLE_SOURCES_ABS} ${MINE_TABLE_HEADERS} "${CMAKE_SOURCE_DIR}/engine.api"
     # The source list is a list, not one long argument: without this the shell sees the semicolons.
     COMMAND_EXPAND_LISTS
     # A define like T2D_SOURCE_DIR="/path" carries quotes the shell must not eat.

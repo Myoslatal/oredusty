@@ -801,8 +801,12 @@
   （release / debug / asan / tsan / server-only 27/27、no-renderer 11/11、Ore 13/13）。
 * **屏幕上一个像素都没动**：没有内容生成实体，也没有任何界面画实体——三张有代表性的文档截图
   （`world_story_en` / `sandbox_en` / `session_screen`）重渲染后**逐字节相同**（`compare -metric AE` = 0）。
-* **表与公开面**：本体表 706 → **734 节 / 2247 → 2329 符号 / 8756 → 8981 重定位**（release，
-  1 146 806 → 1 180 003 B = 1.13 MiB；debug 5592 / 19023 / 24758 / 3.50 MiB），指纹不变
+* **顺带修掉一处会让人读到错数字的构建缺陷**：代码表的依赖里只有 `.cpp`——**改头文件不会重建表**，
+  而表才是真正在跑的那个东西。这一次它当场咬人：`quadtree.h` 改了一个函数体之后表还是旧的
+  （734 节 / 2329 符号 / 8981 重定位），强制重建才是 734 / 2330 / 8974。现在表的依赖里加上本体与引擎的
+  头文件、生成的 `config.h`，以及它据以校验的 `engine.api`（`CONFIGURE_DEPENDS`，新加的头文件也会被带上）。
+* **表与公开面**：本体表 706 → **734 节 / 2247 → 2330 符号 / 8756 → 8974 重定位**（release，
+  1 146 806 → 1 178 601 B = 1.13 MiB；debug 5592 / 19023 / 24758 / 3.50 MiB），指纹不变
   （`bdcb9b070ab30e78`，头文件 77 → 80），align 分布
   `{1:121, 2:59, 4:6, 8:75, 16:406, 32:37, 64:30}`，向宿主索取的符号仍是 **160** 个（t2d 57 / ore 25 / 平台 78）。
 * **还没有的东西**：① **没有 `entity::` 定义器**——设计者要的是"实体类"，不是"实体 ecfg 注册器"
@@ -961,7 +965,7 @@
   所有重定位。于是"模组覆盖本体函数"与"模组覆盖虚函数、本体的虚调用改道"都成立（实测 11 → 101、25 → 97）。
   设计、边界与实测数字：`docs/TABLES.md`；公开面与版本规则：`docs/ENGINE_API.md`。
 * `[已实现]` **整块本体进表，可执行文件变启动器（游戏）**：`mine.codetab` 里是**整个游戏**，由工具链编
-  （release 734 节 / 2329 符号 / 8981 重定位 / 1.13 MiB；debug 5592 / 19023 / 24758 / 3.50 MiB），
+  （release 734 节 / 2330 符号 / 8974 重定位 / 1.13 MiB；debug 5592 / 19023 / 24758 / 3.50 MiB），
   `mine_game` 只做启动：收集表
   （本体表 + `--table` + `packs/*.codetab`）、合并、校验公开面与版本、调用入口符号 `mine_game_main`。演示模组
   `mods/demo_mod/mod.codetab` 顶掉本体一个函数：输出从 `Mine, unmodified` 变成 `Mine, modded`。
@@ -1093,7 +1097,7 @@
 | M2.4 | **代码表：让 C++ 模组能改本体**（`docs/TABLES.md`、`docs/ENGINE_API.md`）：① **表与工具**——
   `t2d/core/object_file.h` 读 ELF64 目标文件（含 COMDAT 组），`t2d/core/code_table.h` 是表格式 + `CodeImage`
   （放置、合并、重定位、跑 `.init_array`），`tools/codetab` 提供 `build` / `pack` / `dump` / `api` / `dumphead`。
-  ② **整块本体进表**：`mine.codetab`（release 734 节 / 2329 符号 / 8981 重定位 / 1.13 MiB；debug 5592 / 19023 /
+  ② **整块本体进表**：`mine.codetab`（release 734 节 / 2330 符号 / 8974 重定位 / 1.13 MiB；debug 5592 / 19023 /
   24758 / 3.50 MiB），由 `codetab build` 编、带构建记录；`mine_game` 变成**启动器**——收集本体表 + `--table` + `packs/*.codetab`、合并、调用入口
   符号 `mine_game_main`；引擎留在可执行文件里，`--whole-archive` 链接并导出自己的符号。③ **公开面与版本规则**：
   `engine.api`（82 个符号：A 层 38 / B 层 44）是"模组能碰什么"，`api_verdict` 是"差多远还能用"——清单内跨整个
