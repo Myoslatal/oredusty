@@ -19,6 +19,9 @@ add_library(mine_core STATIC
     src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/click.cpp
+    src/types/container.cpp
+    src/types/drag_into.cpp
     src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
@@ -31,6 +34,7 @@ add_library(mine_core STATIC
     src/types/tile.cpp
     src/types/tile_definition.cpp
     src/types/update_cadence.cpp
+    src/types/warehouse.cpp
     src/world.cpp
 )
 add_library(mine::core ALIAS mine_core)
@@ -76,6 +80,9 @@ set(MINE_TABLE_SOURCES
     src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/click.cpp
+    src/types/container.cpp
+    src/types/drag_into.cpp
     src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
@@ -88,6 +95,7 @@ set(MINE_TABLE_SOURCES
     src/types/tile.cpp
     src/types/tile_definition.cpp
     src/types/update_cadence.cpp
+    src/types/warehouse.cpp
     src/world.cpp
 )
 # What the toolchain is told about this build. The includes and the defines are the ones the sources

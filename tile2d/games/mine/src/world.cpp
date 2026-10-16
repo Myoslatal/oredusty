@@ -458,6 +458,13 @@ const types::SceneTile* MineLayer::plot_at(i32 layer, GridPos cell) const {
     return found;
 }
 
+types::SceneTile* MineLayer::plot_at(i32 layer, GridPos cell) {
+    // The same walk as the const one, and the same reason for it: a plot is found through the chunk
+    // index, so a 3x3 answers for all nine of its cells. The plots are held by pointer, so handing one
+    // back as mutable changes nothing about the layer itself.
+    return const_cast<types::SceneTile*>(std::as_const(*this).plot_at(layer, cell));
+}
+
 const types::SceneTile* MineLayer::top_plot_at(GridPos cell) const {
     for (i32 layer = layer_count() - 1; layer >= 0; --layer) {
         if (const types::SceneTile* plot = plot_at(layer, cell); plot != nullptr) return plot;

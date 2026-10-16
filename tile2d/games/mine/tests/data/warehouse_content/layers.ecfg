@@ -1,0 +1,21 @@
+# 测试替身：一层放仓库的矿场（docs/GAME_DESIGN.md §1.27）。
+#
+# 两个瓦片层：0 是地板（本体自己的泥地），1 是仓库——一个格子每层只放一个地块（§1.12）。
+layer::
+    warehouse_fixture::
+        size::
+            width:20
+            height:12
+            tile_layers:2
+        floor::
+            layer:0
+            full_flash:"dirt"
+        scatter::
+            sheds::
+                kind:"warehouse"
+                content:"shed"
+                layer:1
+                density:0.02
+                min:2
+                max:3
+                floor:"dirt"

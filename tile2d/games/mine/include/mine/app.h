@@ -235,6 +235,12 @@ private:
     /// what the pointer is over and what the passes did. Drawn after the layer, so a zoomed-in map
     /// cannot paint over the status bar (measured: it used to).
     void draw_world_overlay();
+    /// What a warehouse holds, drawn at the plot's **bottom-right corner** - the panel a click opens
+    /// (types/warehouse.h). One line per kind of thing inside, in the order it first arrived.
+    void draw_warehouse_panel(const types::Warehouse& warehouse);
+    /// Says what letting go of a dragged drop did: a box with no room has to say so
+    /// (pointer_drag.h, types/drag_into.h).
+    void report_release(ReleaseResult result);
 
     /// Where the content screen puts things. The lines of the list, the room left for the selected
     /// source and the room the load's messages take all come from one place, so the pass that draws

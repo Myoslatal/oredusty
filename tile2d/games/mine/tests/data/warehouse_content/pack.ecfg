@@ -1,0 +1,6 @@
+# 测试替身内容包：仓库（docs/GAME_DESIGN.md §1.27）。
+#
+# 名字、容量、贴图都是**夹具的**，不是本体的内容：本体有哪些仓库、装得下多少，是设计者的（§7.7、§7.10）。
+id:"warehouse_content"
+name:"Warehouse fixture"
+version:"1.0"

@@ -20,6 +20,9 @@
 // The namespace is the contract between the two halves: data says *what*, these types say *how*.
 #pragma once
 
+#include <mine/types/click.h>
+#include <mine/types/container.h>
+#include <mine/types/drag_into.h>
 #include <mine/types/drill.h>
 #include <mine/types/drop.h>
 #include <mine/types/drop_definition.h>
@@ -32,3 +35,4 @@
 #include <mine/types/single_ore.h>
 #include <mine/types/tile.h>
 #include <mine/types/tile_definition.h>
+#include <mine/types/warehouse.h>

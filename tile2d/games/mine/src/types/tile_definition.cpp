@@ -5,6 +5,7 @@
 #include <mine/types/floor.h>
 #include <mine/types/scene_tile.h>
 #include <mine/types/single_ore.h>
+#include <mine/types/warehouse.h>
 
 #include <format>
 
@@ -19,7 +20,8 @@ bool kind_is_a_tile(ContentKind kind) {
         case ContentKind::Ore:
         case ContentKind::Structure:
         case ContentKind::Machine:
-        case ContentKind::Drill: return true;
+        case ContentKind::Drill:
+        case ContentKind::Warehouse: return true;
         default: return false;
     }
 }
@@ -71,6 +73,20 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
         if (std::optional<std::string> problem = positive("dig_power", definition.dig_power);
             problem.has_value()) {
             return fail(std::move(*problem));
+        }
+    }
+    if (kind == ContentKind::Warehouse) {
+        // A capacity is a count, so it has to be a whole number: "capacity:2.5" is a warehouse whose size
+        // its author cannot have meant, and 0 is one that can hold nothing.
+        if (const t2d::EcfgValue* capacity = entry.find("capacity"); capacity != nullptr) {
+            if (capacity->type() != t2d::EcfgType::Int) {
+                return fail(std::format("warehouse '{}': capacity must be a whole number", name));
+            }
+            const t2d::i64 value = capacity->as_int();
+            if (value <= 0) {
+                return fail(std::format("warehouse '{}': capacity must be greater than zero", name));
+            }
+            definition.capacity = static_cast<usize>(value);
         }
     }
     if (kind == ContentKind::Ore) {
@@ -137,6 +153,14 @@ std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId
         case ContentKind::Structure:
             tile = std::make_unique<SceneTile>(definition.kind, id, layer, anchor, width, height);
             break;
+        case ContentKind::Warehouse: {
+            // A warehouse is scenery that holds things: a scene plot (never ticked) whose container has
+            // the capacity its entry declared (types/warehouse.h).
+            auto warehouse = std::make_unique<Warehouse>(definition.kind, id, layer, anchor, width, height);
+            warehouse->set_capacity(definition.capacity);
+            tile = std::move(warehouse);
+            break;
+        }
         default:
             // Not a plot: an item, a recipe, a layer or a channel describes something else.
             return nullptr;

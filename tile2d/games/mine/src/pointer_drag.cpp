@@ -1,9 +1,25 @@
 #include <mine/pointer_drag.h>
 
+#include <mine/types/warehouse.h>
+
 namespace mine {
 
+namespace {
+
+/// The warehouse at \p cell, the topmost tile layer first: what a drop let go there lands on. Topmost
+/// because that is the one a viewer sees - a plot on a higher tile layer is drawn over the ones below it.
+[[nodiscard]] types::Warehouse* warehouse_at(MineLayer& layer, GridPos cell) {
+    for (i32 tile_layer = layer.layer_count() - 1; tile_layer >= 0; --tile_layer) {
+        auto* warehouse = dynamic_cast<types::Warehouse*>(layer.plot_at(tile_layer, cell));
+        if (warehouse != nullptr) return warehouse;
+    }
+    return nullptr;
+}
+
+} // namespace
+
 bool PointerDrag::begin(MineLayer& layer, t2d::Vec2 point, f32 radius) {
-    end();
+    (void)end();   // letting go of whatever was held, before taking hold of something else
     types::Entity* nearest = nullptr;
     f32 best_distance = 0.0f;
     layer.for_each_entity_within(point, radius, [&](types::Entity& entity) {
@@ -43,10 +59,38 @@ bool PointerDrag::move_to(t2d::Vec2 point) {
     return true;
 }
 
-void PointerDrag::end() {
+ReleaseResult PointerDrag::end() {
+    types::Entity* released = held_;
+    MineLayer* layer = layer_;
     layer_ = nullptr;
     held_ = nullptr;
     offset_ = t2d::Vec2{};
+    if (released == nullptr || layer == nullptr) {
+        last_release_ = DragRelease{};
+        return ReleaseResult::Nothing;
+    }
+
+    // What it was let go on: the cell its own position is in - "drag it onto the warehouse" means the
+    // thing lands *on* the warehouse's cells, and a position is a point rather than a cell (section 1.24).
+    const GridPos cell{t2d::floor_to_i32(released->position().x), t2d::floor_to_i32(released->position().y)};
+    last_release_.kind = released->kind();
+    last_release_.id = released->id();
+
+    types::Warehouse* warehouse = warehouse_at(*layer, cell);
+    if (warehouse == nullptr) {
+        last_release_.result = ReleaseResult::Left;
+        return last_release_.result;
+    }
+    if (!warehouse->draginto().receive(*released)) {
+        // No room: the drop stays where it was let go, and the caller is told why (types/drag_into.h).
+        last_release_.result = ReleaseResult::Refused;
+        return last_release_.result;
+    }
+    // It is inside the warehouse now, so the thing on the ground is gone: the layer keeps what is in a
+    // container, not a picture of it (world.h).
+    layer->destroy(*released);
+    last_release_.result = ReleaseResult::Stored;
+    return last_release_.result;
 }
 
 } // namespace mine

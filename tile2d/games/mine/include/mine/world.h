@@ -206,6 +206,9 @@ public:
     /// the chunk index, so a 3x3 answers for all nine of its cells and the caller never has to know
     /// where its anchor is.
     [[nodiscard]] const types::SceneTile* plot_at(i32 layer, GridPos cell) const;
+    /// The same lookup, for the things that **act** on a plot: a drop let go on a warehouse goes into it
+    /// (pointer_drag.h), a click opens its panel (app.cpp). Everything that only reads keeps the const one.
+    [[nodiscard]] types::SceneTile* plot_at(i32 layer, GridPos cell);
     /// The topmost plot at \p cell, whatever tile layer it is on: what the pointer is over.
     [[nodiscard]] const types::SceneTile* top_plot_at(GridPos cell) const;
     /// Whether \p cell is occupied on any tile layer in \p layer_mask. This is the collision question

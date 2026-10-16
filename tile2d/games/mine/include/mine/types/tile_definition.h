@@ -4,9 +4,10 @@
 // may carry fields. The engine reads a few of those fields and nothing else - "image", the picture the
 // content is drawn with, and "random_reverse", whether the map may turn copies of it around when it is
 // built, for every plot; plus the two numbers a mine is made of, for the kinds that have them: a
-// **drill** says its "dig_power" (how fast it mines), and an **ore** says its "hardness" (how long it
-// takes to mine) and its "drop" (what it yields when it is mined). Everything else in an entry belongs
-// to the designer, and a field that belongs to another kind is one of those - not read, not an error.
+// **drill** says its "dig_power" (how fast it mines), an **ore** says its "hardness" (how long it takes
+// to mine) and its "drop" (what it yields when it is mined), and a **warehouse** says its "capacity" (how
+// many things it holds). Everything else in an entry belongs to the designer, and a field that belongs to
+// another kind is one of those - not read, not an error.
 //
 // This is the definer: it reads an entry into a TileDefinition, and builds the plot a definition
 // describes. Which class a definition becomes is decided by its kind - a floor is a Floor, a machine is
@@ -28,6 +29,7 @@
 namespace mine::types {
 
 using t2d::f32;
+using t2d::usize;
 
 /// The fields the engine reads out of one content entry. Everything else in the entry is the
 /// designer's, and the engine never looks at it.
@@ -44,6 +46,9 @@ struct TileDefinition {
     /// "drop" (an ore): the name of the drop content it yields when it is mined. Empty when it does not
     /// say - the ore of a drill that has nothing to throw out.
     std::string drop;
+    /// "capacity" (a warehouse): how many things it can hold. 0 when the entry does not say, which is a
+    /// warehouse that can hold nothing rather than one given a size nobody wrote.
+    usize capacity = 0;
 
     /// True for the kinds whose entries describe something that occupies cells. An item, a recipe, a
     /// layer or a channel describes something else, and is not a plot.

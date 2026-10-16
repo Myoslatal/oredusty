@@ -69,6 +69,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
+    games/mine/tests/test_warehouses      6 cases / 106 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   14 cases / 239 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -441,6 +442,21 @@ a period is worth several drops, because a hitch must not change what the mine p
 `--layer-drills 1` lays one of every registered drill on a cell that has ore. The ore is **not**
 consumed: how much a vein holds is the designer's to say.
 
+A **warehouse** (`types/warehouse.h`) is the opposite kind of machine: a **scene plot** that is never
+ticked, because nothing about it changes on its own — it does something when something is done to it,
+and there are exactly two such things. A **drop dragged onto it** goes into its **container**, and a
+**click** opens a panel at the plot's bottom-right corner that says what is inside. It is built out of
+three components that are useful on their own (`types/container.h`, `types/drag_into.h`,
+`types/click.h`): the container holds kind + id + count with a capacity from the entry and **tells the
+caller how much it actually took** (a full one takes nothing, a nearly full one takes what fits), the
+draginto takes a dragged drop **whole or not at all** — a refusal changes nothing, which is a rule the
+first version of it broke and a test caught — and the click opens on a hit and closes on a click
+somewhere else, because one pointer means one thing selected. The drag ends by looking at the cell the
+drop was let go in, topmost tile layer first: it goes in and the thing on the ground is gone, or it is
+refused and stays where it was put. Measured on the fixture layer: a drop dragged from (642, 372) to a
+warehouse at (375, 482) left **no drop pixels on the ground at all** (198 before), the HUD said
+`STORED drop #1 chunk`, and clicking the warehouse showed `WAREHOUSE 1 / 4` and `drop #1 chunk x1`.
+
 Guide: [docs/TYPES.md](docs/TYPES.md).
 
 ## Code tables: code that can replace the code it was loaded by
@@ -467,7 +483,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 789 sections, 2 499 symbols, 9 620 relocations (release)
+        mine.codetab         the game: 806 sections, 2 553 symbols, 9 773 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -717,12 +733,12 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 29/29 tests green |
-| `release` | 29/29 tests green |
-| `asan` (Address + UB sanitizers) | 29/29 tests green |
-| `tsan` (ThreadSanitizer) | 29/29 tests green |
+| `debug` | 30/30 tests green |
+| `release` | 30/30 tests green |
+| `asan` (Address + UB sanitizers) | 30/30 tests green |
+| `tsan` (ThreadSanitizer) | 30/30 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
-| `server-only` | 29/29 tests green |
+| `server-only` | 30/30 tests green |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

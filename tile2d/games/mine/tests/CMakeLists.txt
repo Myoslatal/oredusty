@@ -105,6 +105,11 @@ target_link_libraries(test_drops PRIVATE mine_core)
 t2d_add_test(test_drills test_drills.cpp)
 target_link_libraries(test_drills PRIVATE mine_core)
 
+# Warehouses: the scene plot that holds things - its container, the draginto that fills it, the click
+# that shows it, and the drag that puts a drop in.
+t2d_add_test(test_warehouses test_warehouses.cpp)
+target_link_libraries(test_warehouses PRIVATE mine_core)
+
 
 # --- the game's own code in a code table --------------------------------------------------------------
 # mine_core's registry is compiled into a table and *not* linked into the test: what the test loads is

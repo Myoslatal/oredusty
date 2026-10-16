@@ -1120,6 +1120,64 @@ void MineApp::clamp_world_view() {
                                                 static_cast<f32>(layer.height())}});
 }
 
+void MineApp::report_release(ReleaseResult result) {
+    const DragRelease& release = world_drag_.last_release();
+    if (result == ReleaseResult::Stored) {
+        const ContentEntry* entry = registry_.find(release.kind, release.id);
+        const std::string name = entry != nullptr ? entry->name : std::format("#{}", release.id);
+        set_status(format_localized(locale_.text("world.stored"), content_kind_name(release.kind), release.id,
+                                    name),
+                   false);
+    } else if (result == ReleaseResult::Refused) {
+        // A box with no room says so, in the error colour: the drop stayed where it was let go.
+        set_status(locale_.text("world.storage.full"), true);
+    }
+}
+
+void MineApp::draw_warehouse_panel(const types::Warehouse& warehouse) {
+    const t2d::Aabb2 area = world_area();
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const f32 inset = 4.0f * unit_;
+
+    // The panel hangs off the plot's **bottom-right corner**, which is what the designer asked for
+    // (docs/GAME_DESIGN.md section 1.27): the corner of the plot, in screen pixels.
+    const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{
+        static_cast<f32>(warehouse.anchor().x + warehouse.width()),
+        static_cast<f32>(warehouse.anchor().y + warehouse.height())});
+
+    std::vector<std::string> lines;
+    lines.push_back(format_localized(locale_.text("world.warehouse.title"), warehouse.container().total(),
+                                     warehouse.container().capacity()));
+    for (const types::ContainerSlot& slot : warehouse.container().slots()) {
+        const ContentEntry* entry = registry_.find(slot.kind, slot.id);
+        const std::string name = entry != nullptr ? entry->name : std::format("#{}", slot.id);
+        lines.push_back(format_localized(locale_.text("world.warehouse.slot"), content_kind_name(slot.kind),
+                                         slot.id, name, slot.count));
+    }
+    if (warehouse.container().empty()) lines.push_back(std::string(locale_.text("world.warehouse.empty")));
+
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    f32 width = 0.0f;
+    for (const std::string& text : lines) {
+        width = std::max(width, text_->measure(text, fonts_, style).width);
+    }
+    const t2d::Aabb2 panel{
+        t2d::Vec2{corner.x + inset, corner.y + inset},
+        t2d::Vec2{corner.x + inset + width + padding * 2.0f,
+                  corner.y + inset + line * static_cast<f32>(lines.size()) + padding}};
+    batch_->draw_rect(panel, kPalette.panel_fill);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{panel.min.x, panel.min.y}, t2d::Vec2{panel.max.x, panel.min.y + 2.0f}},
+                      kPalette.panel_edge);
+    f32 y = panel.min.y + padding * 0.5f;
+    for (usize index = 0; index < lines.size(); ++index) {
+        draw_line(panel.min.x + padding, y, body_px_, index == 0 ? kPalette.accent : kPalette.text, lines[index]);
+        y += line;
+    }
+    (void)area;
+}
+
 void MineApp::point_world_at(t2d::Vec2 screen) {
     const t2d::Vec2 world = world_camera_.world_of(screen);
     const GridPos cell{t2d::floor_to_i32(world.x), t2d::floor_to_i32(world.y)};
@@ -1199,13 +1257,24 @@ void MineApp::handle_world_input(f32 delta_seconds) {
     // now, so the press and every move after it are measured against the same view. What else a pointer
     // may do to a cell is still the action table the designer has not given (section 7.14).
     if (world_.has_layer() && area.contains(mouse) && input.mouse_pressed(ore::MouseButton::Left)) {
-        world_drag_.begin(world_.layer(), world_camera_.world_of(mouse));
+        const t2d::Vec2 at = world_camera_.world_of(mouse);
+        if (!world_drag_.begin(world_.layer(), at)) {
+            // Nothing to pick up, so the press is a **click**: everything that receives clicks is told
+            // about it, and the one it landed on is what opens (or closes) its panel - the others close
+            // theirs, because there is one pointer and therefore one thing selected (types/click.h).
+            const GridPos cell{t2d::floor_to_i32(at.x), t2d::floor_to_i32(at.y)};
+            for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
+                if (auto* warehouse = dynamic_cast<types::Warehouse*>(plot.get()); warehouse != nullptr) {
+                    (void)warehouse->on_click(cell);
+                }
+            }
+        }
     }
     if (world_drag_.holding()) {
         if (input.mouse_down(ore::MouseButton::Left)) {
             world_drag_.move_to(world_camera_.world_of(mouse));
         } else {
-            world_drag_.end();
+            report_release(world_drag_.end());
         }
     }
 
@@ -1963,8 +2032,12 @@ void MineApp::draw_world_overlay() {
 
     // The second line: what the pointer is over, and - on the right - what the frame cost. A reload
     // that failed has to be visible here too, so an error message takes the right hand slot.
+    // A message from the last thing that happened takes the right hand slot: an error in the error colour,
+    // anything else in the warning colour. What the frame cost can wait a moment - "the drop went in" is
+    // what the player just did.
     const bool failed = status_is_error_ && !status_.empty();
-    const std::string passes = failed ? status_ : world_passes_text();
+    const bool said = !status_.empty();
+    const std::string passes = said ? status_ : world_passes_text();
     const f32 passes_width =
         std::min(text_->measure(passes, fonts_, style).width, std::max(16.0f, (right - left) * 0.5f));
     if (world_pointer_.has_value()) {
@@ -1976,8 +2049,16 @@ void MineApp::draw_world_overlay() {
         draw_fitted(left, bottom_y, body_px_, kPalette.text_dim, locale_.text("world.off"),
                     std::max(16.0f, right - passes_width - left - padding));
     }
-    draw_fitted(right - passes_width, bottom_y, body_px_, failed ? kPalette.error : kPalette.text_dim, passes,
-                passes_width);
+    draw_fitted(right - passes_width, bottom_y, body_px_,
+                failed ? kPalette.error : (said ? kPalette.warning : kPalette.text_dim), passes, passes_width);
+
+    // And last, over everything: what a warehouse is holding, for the ones a click opened. It is drawn
+    // after the two lines because a panel that the status bar painted over would not be an answer to
+    // anything (docs/GAME_DESIGN.md section 1.27).
+    for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
+        const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
+        if (warehouse != nullptr && warehouse->click().open()) draw_warehouse_panel(*warehouse);
+    }
 }
 
 MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
