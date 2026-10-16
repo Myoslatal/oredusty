@@ -65,9 +65,9 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     15 cases / 211 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
-    games/mine/tests/test_layer_rules    23 cases / 797 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
+    games/mine/tests/test_layer_rules    23 cases / 807 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   14 cases / 231 checks  packs: a directory per pack, several files each, headers, order, collisions, art
+    games/mine/tests/test_content_pack   14 cases / 239 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
@@ -335,17 +335,25 @@ a native mod runs with the game's privileges.
 `games/mine/content/` is what the game itself is made of, and it is the first stage of the load order:
 it loads with no arguments at all, and `--content` adds to it rather than replacing it. It holds the
 game's own content — a **dirt floor** (`floor:: dirt::`, texture `art/floor_dirt.png`), a **stone ore**
-(`ore:: stone::`, texture `art/ore_stone.png`) and the **first story layer** (`layer:: entrance::`,
-100×100, dirt under it, 20 to 35 stone) — and the sandbox paints both tiles: the palette lists
-`floor #1 dirt` and `ore #1 stone`, and a cell painted with either draws that texture.
+(`ore:: stone::`, texture `art/ore_stone.png`), a **stone item** (`item:: stone::`, texture
+`art/item_stone.png`: the first thing in the game that is *not* on the map — an item is what a machine
+makes, a recipe moves and a demand asks for) and the **first story layer** (`layer:: entrance::`,
+100×100, dirt under it, 20 to 35 stone). The sandbox paints both plots: the palette lists `floor #1 dirt`
+and `ore #1 stone`, and a cell painted with either draws that texture — an item has no cell to paint, so
+it is not in the palette.
 
     games/mine/content/
         pack.ecfg            id:"mine" name:"Mine"
         floors.ecfg          floor:: dirt::   with image:"art/floor_dirt.png"
+        items.ecfg           item:: stone::   with image:"art/item_stone.png"
         ores.ecfg            ore:: stone::    with image:"art/ore_stone.png"
         layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35
         art/floor_dirt.png
+        art/item_stone.png
         art/ore_stone.png
+
+The ore and the item are both called `stone`, and that is not a clash: ids are handed out **per kind**,
+so the stone on the map and the stone you can carry are two entries that never collide.
 
 Two fields are the engine's to read: `image` out of any entry, and `random_reverse` out of the kinds that
 are drawn on the map (a plot turns itself around; an item is not on the map and has no such field).
@@ -412,7 +420,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 702 sections, 2 236 symbols, 8 735 relocations (release)
+        mine.codetab         the game: 706 sections, 2 247 symbols, 8 756 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -545,8 +553,10 @@ floor first, the scatters after it.
 The world view says which layer the player is on, top left, as `LAYER 1/2` (`层1/2` in Chinese):
 counted **from one**, the way a player counts, with the story's own layer count after the slash — and
 only the layer alone when nothing says how many there are (an endless mine, or a layer past the end of
-the story). The line at the bottom is the engine's numbering, from zero, which is what `--mine-layer`
-and a bug report use.
+the story). The **mode** decides that, not the data (`layer_depth_for`, `mine/layer_rules.h`): only a
+story has a total to count to, so an endless mine is not turned into "1/1" by the game's own content
+describing a first layer. The line at the bottom is the engine's numbering, from zero, which is what
+`--mine-layer` and a bug report use.
 
 Ore is its own kind of thing: `ContentKind::Ore` (appended, so an older save table still reads) and
 `mine::types::SingleOre`, a scene plot whose one addition is `is_ore()` — one cell per ore, which is
@@ -576,6 +586,7 @@ only for the dirty ones, `tick(dt)` walks the plots that run and nothing else. W
 is decided once, when they are created — never by asking a plot at runtime.
 
     ./build/debug/games/mine/mine_game --world-view 1                    # into the mine, layer 0
+    ./build/debug/games/mine/mine_game --world endless --world-view 1    # an endless mine: no rules yet, so an empty layer
     ./build/debug/games/mine/mine_game --world-view 1 --grid 64x40 --layer-fill scatter --seed 1
 
 ![The world view: an empty layer, and it says so](games/mine/docs/images/world_empty_en.png)

@@ -176,6 +176,18 @@ ore::
         image:"art/ore_stone.png"
 ```
 
+物品也是内容条目（`games/mine/content/items.ecfg`），而 `image` 是它**唯一**一个引擎字段——它不在图上，
+所以没有 `random_reverse`（`docs/TYPES.md` §6）：
+
+```
+item::
+    stone::
+        image:"art/item_stone.png"
+```
+
+矿物 `stone` 与物品 `stone` 同名，这不是冲突：id 按**种类**发号（`registry.h`），地图上那一格与能被搬走的
+那个是两条互不相干的内容。
+
 **散点生成器的属性**：
 
 | 属性 | 含义 |
@@ -422,13 +434,17 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
     games/mine/content/
         pack.ecfg             id:"mine" name:"Mine"  —— 这个包是谁
         floors.ecfg           floor:: dirt::  —— 泥地，贴图 art/floor_dirt.png
-        ores.ecfg             ore:: stone::   —— 石头，贴图 art/ore_stone.png（设计者给的第一块矿物，§1.21）
+        items.ecfg            item:: stone::  —— 石头（**物品**），贴图 art/item_stone.png（设计者给的第一件物品，§1.23）
+        ores.ecfg             ore:: stone::   —— 石头（**矿物**），贴图 art/ore_stone.png（设计者给的第一块矿物，§1.21）
         layers.ecfg           layer:: entrance::  —— 故事的第 1 层：100×100、地板泥地、石头 20–35
         art/floor_dirt.png
+        art/item_stone.png
         art/ore_stone.png
 
 沙盒里打开就能看到它们：内容面板列出 `floor #1 dirt`、`ore #1 stone`，空格键把泥地铺到格子上，
-画的就是这张贴图；故事模式（`--world story`）进的就是 `layers.ecfg` 描述的那一层。
+画的就是这张贴图；故事模式（`--world story`）进的就是 `layers.ecfg` 描述的那一层。**物品不在面板里**：
+它不占格子，没有格子可以铺——但它的贴图照样在加载时解码好（展开内容列表里本体包那一行，会看到
+`item #1 stone` 与 `ore #1 stone` 并列）。
 
 ![本体内容：泥地与石头](../games/mine/docs/images/content_dirt_floor_en.png)
 
@@ -473,7 +489,7 @@ printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0
   覆盖语义，那是后续的设计。
 * **原生模组改不了本体的内部函数**：`dlopen` 进来的库无法改变本体在链接时就绑定好的调用。要改内部函数
   与类，用**代码表**（§3.5、[`TABLES.md`](TABLES.md)）：**整个本体已经在表里**（`mine.codetab`，release
-  702 节 / 2236 符号 / 8735 重定位，由 `codetab build` 编——工具链在打包前先把它链接成一个程序），`mine_game` 是启动器，模组表在启动时合并，
+  706 节 / 2247 符号 / 8756 重定位，由 `codetab build` 编——工具链在打包前先把它链接成一个程序），`mine_game` 是启动器，模组表在启动时合并，
   强定义连 vtable 条目一起改道。表里还带一份**构建记录**（`abi=`）：`codetab build` 问编译器这个构建的 ABI 是什么，
   头文件按内容哈希；加载时指纹相同就**完全合并**（`-O0` 的模组与 `-O3` 的本体就是一个程序），
   不同就**拒绝并指名是哪个事实**（另一个 `std::string` ABI、头文件改动、CPU 缺特性）——没有"降级加载"

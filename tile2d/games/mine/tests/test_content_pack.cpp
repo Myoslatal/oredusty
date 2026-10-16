@@ -468,21 +468,37 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     const ContentPipelineReport& report = pipeline.load(registry);
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
     T2D_CHECK_EQ(report.base_packs, 1u);
-    T2D_REQUIRE(report.images.size() == 2u);
+    // One picture per content entry, in the order the pack's files are read - which is sorted, so the
+    // floor comes first, then the item, then the ore.
+    T2D_REQUIRE(report.images.size() == 3u);
     T2D_CHECK(report.images[0].ok);
     T2D_CHECK_EQ(report.images[0].kind, ContentKind::Floor);
     T2D_CHECK_EQ(report.images[0].content, std::string("dirt"));
     T2D_CHECK(report.images[0].resolved.find("floor_dirt.png") != std::string::npos);
-    T2D_CHECK_EQ(report.base_images, 2u);
+    T2D_CHECK_EQ(report.base_images, 3u);
     T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
     T2D_CHECK(registry.find(ContentKind::Floor, "dirt") != kNoContent);
+    // The item the designer asked for (docs/GAME_DESIGN.md section 1.23), with the picture the designer
+    // gave it. It is registered as an item and its definition is kept, because something that has to be
+    // shown needs more than a name - and it is **not** a plot: the lookup by kind cannot hand it out.
+    T2D_CHECK_EQ(registry.count(ContentKind::Item), 1u);
+    T2D_CHECK(registry.find(ContentKind::Item, "stone") != kNoContent);
+    T2D_CHECK_EQ(report.images[1].kind, ContentKind::Item);
+    T2D_CHECK_EQ(report.images[1].content, std::string("stone"));
+    T2D_CHECK(report.images[1].resolved.find("item_stone.png") != std::string::npos);
+    T2D_REQUIRE(report.definitions.item_count() == 1u);
+    T2D_REQUIRE(report.definitions.find_item("stone") != nullptr);
+    T2D_CHECK_EQ(report.definitions.find_item("stone")->image, std::string("art/item_stone.png"));
+    T2D_CHECK(report.definitions.find_tile(ContentKind::Item, "stone") == nullptr);
     // The ore the designer asked for, with the picture the designer gave it: content is a name, a kind
-    // and one image, and nothing here is derived from the name (docs/MODS.md section 0).
+    // and one image, and nothing here is derived from the name (docs/MODS.md section 0). The ore and the
+    // item share the name "stone" and that is not a clash: ids are handed out per kind.
     T2D_CHECK_EQ(registry.count(ContentKind::Ore), 1u);
     T2D_CHECK(registry.find(ContentKind::Ore, "stone") != kNoContent);
-    T2D_CHECK_EQ(report.images[1].kind, ContentKind::Ore);
-    T2D_CHECK_EQ(report.images[1].content, std::string("stone"));
-    T2D_CHECK(report.images[1].resolved.find("ore_stone.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[2].kind, ContentKind::Ore);
+    T2D_CHECK_EQ(report.images[2].content, std::string("stone"));
+    T2D_CHECK(report.images[2].resolved.find("ore_stone.png") != std::string::npos);
+    T2D_CHECK_EQ(report.definitions.size(), 2u);   // the two plots: the floor and the ore, no item
     // And it ships the story's **first layer**: how big it is, what its floor is made of, what is
     // scattered on it and how much. That is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8,
     // 7.10); what the engine owns is the format, and what this pins is the data as written.

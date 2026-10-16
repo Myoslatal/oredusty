@@ -1231,6 +1231,21 @@ T2D_TEST(the_depth_a_hud_shows_is_counted_the_way_a_player_counts) {
     T2D_CHECK_EQ(layer_depth(endless, 0).total, 0u);
     T2D_CHECK_EQ(layer_depth(endless, 7).number, 8u);
     T2D_CHECK_EQ(layer_depth(endless, 7).total, 0u);
+
+    // The mode decides whether there is a total at all. An endless mine is pushed out of (seed, layer)
+    // and the sandbox is one layer the designer is editing, so neither counts the story's layers - and
+    // the game's own content does describe a first layer now, which is exactly the case that used to
+    // come out as "1/1" in an endless mine (docs/GAME_DESIGN.md section 1.20).
+    T2D_CHECK_EQ(layer_depth_for(Mode::Story, rules, 0).number, 1u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Story, rules, 0).total, 3u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Story, rules, 2).total, 3u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Story, rules, 3).total, 0u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Endless, rules, 0).number, 1u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Endless, rules, 0).total, 0u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Endless, rules, 2).number, 3u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Endless, rules, 2).total, 0u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Sandbox, rules, 0).total, 0u);
+    T2D_CHECK_EQ(layer_depth_for(Mode::Endless, endless, 7).number, 8u);
 }
 
 T2D_TEST_MAIN

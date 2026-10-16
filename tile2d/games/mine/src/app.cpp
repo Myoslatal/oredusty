@@ -1879,7 +1879,8 @@ void MineApp::draw_world_overlay() {
     //
     // The line at the bottom is the engine's: it names the layer the way the code and --mine-layer do
     // (from zero), which is what a bug report needs. Two numberings on purpose, one per reader.
-    const LayerDepth depth = layer_depth(content_.report().layers, world_.layer_index());
+    const LayerDepth depth =
+        layer_depth_for(session_.mode, content_.report().layers, world_.layer_index());
     const std::string where =
         depth.total > 0 ? format_localized(locale_.text("world.depth"), depth.number, depth.total)
                         : format_localized(locale_.text("world.depth.endless"), depth.number);

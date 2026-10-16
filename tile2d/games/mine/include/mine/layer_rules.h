@@ -47,6 +47,7 @@
 #pragma once
 
 #include <mine/registry.h>
+#include <mine/session.h>
 #include <mine/world.h>
 
 #include <t2d/core/ecfg.h>
@@ -168,6 +169,13 @@ struct LayerDepth {
 /// The depth of layer \p index in \p rules, for a HUD (app.cpp). A negative index is the first layer:
 /// nothing can be entered before it.
 [[nodiscard]] LayerDepth layer_depth(const LayerRules& rules, i32 index);
+
+/// The depth to show a player who is in a \p mode mine: **only a story has a total to count to**. An
+/// endless mine's layers are pushed out of (seed, layer) and the sandbox is a single layer tool, so both
+/// are shown the layer alone however many layers the story data happens to describe - the game's own
+/// content ships a first layer, and an endless mine must not claim to be one layer deep because of it
+/// (docs/GAME_DESIGN.md section 1.20).
+[[nodiscard]] LayerDepth layer_depth_for(Mode mode, const LayerRules& rules, i32 index);
 
 /// Reads one "scatter::" entry, the way read_layer_rule reads a "layer::" one. \p layer_name is the
 /// layer it belongs to, for messages. The checks that need the layer's other tables - a tile layer this

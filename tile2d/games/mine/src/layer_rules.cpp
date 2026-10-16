@@ -108,6 +108,15 @@ LayerDepth layer_depth(const LayerRules& rules, i32 index) {
     return depth;
 }
 
+LayerDepth layer_depth_for(Mode mode, const LayerRules& rules, i32 index) {
+    // The story's layers are only a total to count to in the story. An endless mine is pushed out of
+    // (seed, layer) and the sandbox is one layer the designer is editing, so both are shown the layer
+    // alone - the game's own content describing a first layer must not turn an endless mine into a
+    // one-layer mine (docs/GAME_DESIGN.md section 1.20).
+    static const LayerRules kNoStory;
+    return layer_depth(mode == Mode::Story ? rules : kNoStory, index);
+}
+
 std::optional<LayerRule> read_layer_rule(std::string_view name, const t2d::EcfgValue& entry, std::string* error) {
     const auto fail = [&](std::string message) -> std::optional<LayerRule> {
         if (error != nullptr) *error = std::move(message);
