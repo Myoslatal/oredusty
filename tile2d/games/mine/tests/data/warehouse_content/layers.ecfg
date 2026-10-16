@@ -13,7 +13,7 @@ layer::
         scatter::
             sheds::
                 kind:"warehouse"
-                content:"shed"
+                content:"stone"      # 本体自己的石头仓库（content/warehouses.ecfg）
                 layer:1
                 density:0.02
                 min:2

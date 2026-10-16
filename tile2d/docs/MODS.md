@@ -223,17 +223,18 @@ ore::
 因为一个格子每层只放一个地块（`docs/GAME_DESIGN.md` §1.12）。
 
 **仓库**（`warehouse::`）是"存放"的那一半（`docs/GAME_DESIGN.md` §1.27）：它是**场景地块**（不跑、不自动
-更新），条目里说一件事——装得下多少：
+更新），条目里说一件事——装得下多少。本体自己的那一个（`games/mine/content/warehouses.ecfg`，一字不改）：
 
 ```
 warehouse::
-    shed::
-        image:"art/shed.png"
-        capacity:12          # 装得下多少件
+    stone::
+        image:"art/capacity_stone_warehouse.png"
+        capacity:100         # 装得下多少件
 ```
 
 把掉落物**拖到它上面**松手就进它的容器（满了会在 HUD 上说出来，掉落物留在原地）；**点一下**它，面板出现在
-地块右下角，写着里面有什么。
+地块右下角，每一行是 **[贴图][本地化名称][数量]**——名字写在界面字符串表里
+（`content.name.<种类>.<名字>`，其次 `content.name.<名字>`，见 `docs/TEXT.md`），没写名字就显示注册表里的 id。
 
 **散点生成器的属性**：
 

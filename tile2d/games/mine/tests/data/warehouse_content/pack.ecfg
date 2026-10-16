@@ -1,6 +1,7 @@
-# 测试替身内容包：仓库（docs/GAME_DESIGN.md §1.27）。
+# 测试替身内容包：一层放仓库的矿场（docs/GAME_DESIGN.md §1.27）。
 #
-# 名字、容量、贴图都是**夹具的**，不是本体的内容：本体有哪些仓库、装得下多少，是设计者的（§7.7、§7.10）。
+# 这个夹具**自己不带仓库**：它放的是本体自己的 `warehouse:: stone::`（content/warehouses.ecfg，容量 100、
+# 设计者给的贴图）——一个包可以点名本体已有的内容，这正是"包往故事里加层"的用法（docs/MODS.md）。
 id:"warehouse_content"
 name:"Warehouse fixture"
 version:"1.0"

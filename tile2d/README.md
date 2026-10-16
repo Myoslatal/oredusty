@@ -455,7 +455,16 @@ somewhere else, because one pointer means one thing selected. The drag ends by l
 drop was let go in, topmost tile layer first: it goes in and the thing on the ground is gone, or it is
 refused and stays where it was put. Measured on the fixture layer: a drop dragged from (642, 372) to a
 warehouse at (375, 482) left **no drop pixels on the ground at all** (198 before), the HUD said
-`STORED drop #1 chunk`, and clicking the warehouse showed `WAREHOUSE 1 / 4` and `drop #1 chunk x1`.
+`STORED drop #1 chunk`, and clicking the warehouse opened its panel.
+
+What that panel says is **[picture][localized name][count]** per line, with the warehouse's own localized
+name as its title (`docs/GAME_DESIGN.md` section 1.28). Content names are the designer's ids — an id is
+what a save stores, not a label — so the name shown comes from the interface string table:
+`content.name.<kind>.<name>` first, then `content.name.<name>`, then the id itself
+(`mine/content_name.h`, `docs/TEXT.md`). The panel is drawn by **two passes** — the words with the
+chrome, the pictures with their own textures — and both ask one `warehouse_panel_layout()`, so a row's
+picture cannot land beside its name. The game's own warehouse is the designer's:
+`warehouse:: stone::`, capacity 100, and the crate they drew themselves.
 
 Guide: [docs/TYPES.md](docs/TYPES.md).
 
@@ -483,7 +492,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 806 sections, 2 553 symbols, 9 773 relocations (release)
+        mine.codetab         the game: 818 sections, 2 585 symbols, 9 891 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings

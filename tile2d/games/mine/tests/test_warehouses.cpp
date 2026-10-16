@@ -3,6 +3,7 @@
 //
 // The content in here is a **test double**: names like "shed" or "chunk" are the fixture's, not the
 // game's - the game names no content at all (docs/GAME_DESIGN.md section 7).
+#include <mine/content_name.h>
 #include <mine/pointer_drag.h>
 #include <mine/world.h>
 
@@ -304,6 +305,42 @@ T2D_TEST(the_data_says_how_much_a_warehouse_holds) {
         read_one("floor::\n    dirt::\n        capacity:12\n", ContentKind::Floor, &error);
     T2D_REQUIRE(floor.has_value());
     T2D_CHECK_EQ(floor->capacity, 0u);
+}
+
+T2D_TEST(a_content_name_comes_from_the_text_table_and_falls_back_to_its_id) {
+    ContentRegistry registry;
+    const ContentId shed = registry.register_content(ContentKind::Warehouse, "stone");
+    const ContentId vein = registry.register_content(ContentKind::Ore, "stone");
+    const ContentId chunk = registry.register_content(ContentKind::Drop, "chunk");
+
+    // A table with nothing in it answers with the id it was asked for, which is exactly what
+    // t2d::Locale::text does - and how "no label" is told apart from a label that happens to be empty.
+    const TextLookup none = [](std::string_view id) { return id; };
+    T2D_CHECK_EQ(content_label(registry, ContentKind::Warehouse, shed, none), std::string("stone"));
+    T2D_CHECK_EQ(content_label(registry, ContentKind::Drop, chunk, none), std::string("chunk"));
+
+    // The kind-specific key wins over the plain one, and the plain one over the id: one id can be two
+    // kinds of thing, and a language may call them different things.
+    const TextLookup table = [](std::string_view id) -> std::string_view {
+        if (id == "content.name.warehouse.stone") return "STONE WAREHOUSE";
+        if (id == "content.name.stone") return "STONE";
+        return id;
+    };
+    T2D_CHECK_EQ(content_label(registry, ContentKind::Warehouse, shed, table), std::string("STONE WAREHOUSE"));
+    T2D_CHECK_EQ(content_label(registry, ContentKind::Ore, vein, table), std::string("STONE"));
+    T2D_CHECK_EQ(content_label(registry, ContentKind::Drop, chunk, table), std::string("chunk"));
+
+    // A caller that wants a fallback of its own is told whether the table had one (the warehouse panel
+    // shows the kind's own word when the designer has not named the content).
+    bool named = false;
+    (void)content_label(registry, ContentKind::Warehouse, shed, table, &named);
+    T2D_CHECK(named);
+    named = true;
+    (void)content_label(registry, ContentKind::Drop, chunk, table, &named);
+    T2D_CHECK_FALSE(named);
+
+    // Content that is gone has nothing but its id to show.
+    T2D_CHECK_EQ(content_label(registry, ContentKind::Drop, 99u, table), std::string("#99"));
 }
 
 T2D_TEST_MAIN

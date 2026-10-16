@@ -318,8 +318,11 @@ shed.container().slots();       // 里面有什么，按到达顺序：{kind, id
 * **拖动入库**在 `PointerDrag::end()` 里（`pointer_drag.h`）：看掉落物落在哪一格，**从最高瓦片层往下**找
   那一格上的仓库——与画面上看到的一致；进得去就进容器、地上那件随即消失，进不去就留在放开的地方，
   HUD 在错误色里说"满了"。
-* **面板画在地块的右下角**（`app.cpp` 的 `draw_warehouse_panel`）：标题 `WAREHOUSE 1 / 4`，然后一件一行。
-  画什么由容器说了算，怎么画是屏幕的事。
+* **面板画在地块的右下角**（`app.cpp` 的 `draw_warehouse_panel`）：标题是仓库自己的**本地化名称**
+  （`content.name.<种类>.<名字>` → `content.name.<名字>` → 都没有就用种类自己的词），每一行是
+  **[贴图][本地化名称][数量]**（`docs/GAME_DESIGN.md` §1.28）。名称的查找在 `mine/content_name.h`
+  （`content_label`）；贴图是内容自己的那一张，所以面板由**两趟**画——字在 overlay 里、图在自己的图片趟里，
+  两趟都问同一个 `warehouse_panel_layout()`，不会各画各的。
 
 ## 11. 数据怎么变成地块：定义器
 

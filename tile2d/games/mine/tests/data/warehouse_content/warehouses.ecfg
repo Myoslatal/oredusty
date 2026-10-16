@@ -1,8 +1,0 @@
-# 测试替身：仓库用 warehouse:: 表声明（docs/MODS.md §0）。
-#
-# 引擎为仓库读的字段只有 capacity（装得下多少件东西）。它不占额外的层、不会被更新、也不自己做什么：
-# 两件事都发生在有人对它做的时候——把掉落物拖到它上面，或者点击它看里面有什么。
-warehouse::
-    shed::
-        image:"art/warehouse.png"
-        capacity:4

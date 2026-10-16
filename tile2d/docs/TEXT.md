@@ -80,6 +80,24 @@ to another machine still has text instead of ids:
 * Unknown tables in a string file are reported, so a typo like `zn-Hans::` does not silently
   become an untranslated language.
 
+### Naming content
+
+Content names are the designer's **ids** — `stone`, `chunk`, `entrance` — and an id is what a save
+stores and what the data refers to, not a label. Where the interface shows a piece of content it shows a
+**localized name** when the string table has one, and the id when it does not:
+
+    en::
+        content.name.stone:"STONE"                 # the plain one, any kind of thing called stone
+        content.name.warehouse.stone:"STONE WAREHOUSE"   # the kind-specific one wins
+    zh-Hans::
+        content.name.stone:"石头"
+        content.name.warehouse.stone:"石头仓库"
+
+`mine/content_name.h` is the lookup (`content_label`): `content.name.<kind>.<name>` first, then
+`content.name.<name>`, then the name the registry knows it by. A missing entry is told apart from an
+empty one by the rule above — a table answers with the **id it was asked for** when it has no string —
+so nothing has to be listed twice to say "no label here".
+
 ## Adding a language
 
 1. Add the tag to `Language` and the names to `kNames` in `text/locale.cpp` (and, if it needs a

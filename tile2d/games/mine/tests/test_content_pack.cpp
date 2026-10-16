@@ -469,13 +469,13 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
     T2D_CHECK_EQ(report.base_packs, 1u);
     // One picture per content entry, in the order the pack's files are read - which is sorted, so the
-    // floor comes first, then the item, then the ore.
-    T2D_REQUIRE(report.images.size() == 3u);
+    // floor comes first, then the item, then the ore, then the warehouse.
+    T2D_REQUIRE(report.images.size() == 4u);
     T2D_CHECK(report.images[0].ok);
     T2D_CHECK_EQ(report.images[0].kind, ContentKind::Floor);
     T2D_CHECK_EQ(report.images[0].content, std::string("dirt"));
     T2D_CHECK(report.images[0].resolved.find("floor_dirt.png") != std::string::npos);
-    T2D_CHECK_EQ(report.base_images, 3u);
+    T2D_CHECK_EQ(report.base_images, 4u);
     T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
     T2D_CHECK(registry.find(ContentKind::Floor, "dirt") != kNoContent);
     // The item the designer asked for (docs/GAME_DESIGN.md section 1.23), with the picture the designer
@@ -498,7 +498,17 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_EQ(report.images[2].kind, ContentKind::Ore);
     T2D_CHECK_EQ(report.images[2].content, std::string("stone"));
     T2D_CHECK(report.images[2].resolved.find("ore_stone.png") != std::string::npos);
-    T2D_CHECK_EQ(report.definitions.size(), 2u);   // the two plots: the floor and the ore, no item
+    // The warehouse the designer asked for (docs/GAME_DESIGN.md section 1.28), with the picture the
+    // designer put into the pack themselves: it is a plot - scenery that holds things - and the one
+    // number its entry carries is its capacity.
+    T2D_CHECK_EQ(registry.count(ContentKind::Warehouse), 1u);
+    T2D_CHECK(registry.find(ContentKind::Warehouse, "stone") != kNoContent);
+    T2D_CHECK_EQ(report.images[3].kind, ContentKind::Warehouse);
+    T2D_CHECK_EQ(report.images[3].content, std::string("stone"));
+    T2D_CHECK(report.images[3].resolved.find("capacity_stone_warehouse.png") != std::string::npos);
+    T2D_REQUIRE(report.definitions.find_tile(ContentKind::Warehouse, "stone") != nullptr);
+    T2D_CHECK_EQ(report.definitions.find_tile(ContentKind::Warehouse, "stone")->capacity, 100u);
+    T2D_CHECK_EQ(report.definitions.size(), 3u);   // three plots: the floor, the ore and the warehouse
     // And it ships the story's **first layer**: how big it is, what its floor is made of, what is
     // scattered on it and how much. That is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8,
     // 7.10); what the engine owns is the format, and what this pins is the data as written.

@@ -235,9 +235,29 @@ private:
     /// what the pointer is over and what the passes did. Drawn after the layer, so a zoomed-in map
     /// cannot paint over the status bar (measured: it used to).
     void draw_world_overlay();
-    /// What a warehouse holds, drawn at the plot's **bottom-right corner** - the panel a click opens
-    /// (types/warehouse.h). One line per kind of thing inside, in the order it first arrived.
+    /// Where a warehouse's panel goes and what it says. **Two passes draw it** - the words in the
+    /// overlay and the pictures in their own image pass (a picture binds its own texture, the chrome is
+    /// drawn with the glyph atlas) - and both ask this, so they cannot disagree about where a row is
+    /// (the same reason the sandbox has one PaletteLayout for its two passes).
+    struct WarehousePanelLayout {
+        t2d::Aabb2 panel{};
+        f32 title_y = 0.0f;
+        f32 first_row_y = 0.0f;
+        f32 row_height = 0.0f;
+        f32 picture = 0.0f;   ///< the square each row's picture fills
+        f32 text_x = 0.0f;    ///< where a row's name starts, after the picture
+        std::string title;
+        std::vector<std::string> labels;   ///< one per kind of thing inside, localized (content_name.h)
+        bool empty = false;
+    };
+    [[nodiscard]] WarehousePanelLayout warehouse_panel_layout(const types::Warehouse& warehouse) const;
+    /// The panel's words, at the plot's **bottom-right corner** - what a click opens (types/warehouse.h):
+    /// the title, then one line per kind of thing inside, in the order it first arrived, each saying how
+    /// many there are.
     void draw_warehouse_panel(const types::Warehouse& warehouse);
+    /// The pictures on those lines: one per row, in the square the layout gave it. Their own pass,
+    /// because each one is a texture of its own and the chrome is drawn with the glyph atlas.
+    [[nodiscard]] ImagePassCost draw_warehouse_images(ore::RenderFrame& frame, const ore::Mat4& view_projection);
     /// Says what letting go of a dragged drop did: a box with no room has to say so
     /// (pointer_drag.h, types/drag_into.h).
     void report_release(ReleaseResult result);

@@ -1,0 +1,11 @@
+# 本体内容 —— 仓库（docs/GAME_DESIGN.md §1.27、§1.28）。
+#
+# 仓库用 warehouse:: 表声明：它是**场景地块**——不跑、不自动更新，有人把掉落物拖到它上面、或者点它一下，
+# 才有事情发生。引擎为它读的字段只有一个：capacity（装得下多少件东西）。
+#
+# 贴图 art/capacity_stone_warehouse.png 是设计者放进本体包的图（128×128；一块内容一张图，§1.18）。
+
+warehouse::
+    stone::
+        image:"art/capacity_stone_warehouse.png"
+        capacity:100

@@ -1,5 +1,7 @@
 #include <mine/app.h>
 
+#include <mine/content_name.h>
+
 #include <mine/content_search.h>
 
 #include <t2d/core/cli.h>
@@ -1134,48 +1136,109 @@ void MineApp::report_release(ReleaseResult result) {
     }
 }
 
-void MineApp::draw_warehouse_panel(const types::Warehouse& warehouse) {
-    const t2d::Aabb2 area = world_area();
+MineApp::WarehousePanelLayout MineApp::warehouse_panel_layout(const types::Warehouse& warehouse) const {
+    const TextLookup text = [this](std::string_view id) { return locale_.text(id); };
+    WarehousePanelLayout layout;
+
+    // The title is the warehouse's **own localized name** when the text file has one, and the kind's word
+    // when it does not (content_name.h): "石头仓库   1 / 100" is what a player reads, and a designer who
+    // has not written a label still gets a title rather than an id.
+    bool named = false;
+    const std::string label = content_label(registry_, warehouse.kind(), warehouse.id(), text, &named);
+    layout.title = format_localized(locale_.text("world.warehouse.title"),
+                                    named ? label : std::string(locale_.text("world.warehouse.name")),
+                                    warehouse.container().total(), warehouse.container().capacity());
+
+    const std::vector<types::ContainerSlot>& slots = warehouse.container().slots();
+    layout.labels.reserve(slots.size());
+    for (const types::ContainerSlot& slot : slots) {
+        layout.labels.push_back(content_label(registry_, slot.kind, slot.id, text));
+    }
+    layout.empty = slots.empty();
+
     const f32 padding = 8.0f * unit_;
-    const f32 line = line_for(body_px_);
     const f32 inset = 4.0f * unit_;
+    layout.row_height = line_for(body_px_);
+    layout.picture = layout.row_height - inset;   // the square a row's picture fills
+
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    f32 width = text_->measure(layout.title, fonts_, style).width;
+    for (const std::string& row : layout.labels) {
+        width = std::max(width, text_->measure(row, fonts_, style).width + layout.picture + padding);
+    }
+    if (layout.empty) {
+        width = std::max(width, text_->measure(locale_.text("world.warehouse.empty"), fonts_, style).width);
+    }
 
     // The panel hangs off the plot's **bottom-right corner**, which is what the designer asked for
     // (docs/GAME_DESIGN.md section 1.27): the corner of the plot, in screen pixels.
     const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{
         static_cast<f32>(warehouse.anchor().x + warehouse.width()),
         static_cast<f32>(warehouse.anchor().y + warehouse.height())});
-
-    std::vector<std::string> lines;
-    lines.push_back(format_localized(locale_.text("world.warehouse.title"), warehouse.container().total(),
-                                     warehouse.container().capacity()));
-    for (const types::ContainerSlot& slot : warehouse.container().slots()) {
-        const ContentEntry* entry = registry_.find(slot.kind, slot.id);
-        const std::string name = entry != nullptr ? entry->name : std::format("#{}", slot.id);
-        lines.push_back(format_localized(locale_.text("world.warehouse.slot"), content_kind_name(slot.kind),
-                                         slot.id, name, slot.count));
-    }
-    if (warehouse.container().empty()) lines.push_back(std::string(locale_.text("world.warehouse.empty")));
-
-    t2d::TextStyle style;
-    style.size_px = body_px_;
-    f32 width = 0.0f;
-    for (const std::string& text : lines) {
-        width = std::max(width, text_->measure(text, fonts_, style).width);
-    }
-    const t2d::Aabb2 panel{
+    const usize rows = layout.empty ? 1u : slots.size();
+    layout.panel = t2d::Aabb2{
         t2d::Vec2{corner.x + inset, corner.y + inset},
         t2d::Vec2{corner.x + inset + width + padding * 2.0f,
-                  corner.y + inset + line * static_cast<f32>(lines.size()) + padding}};
-    batch_->draw_rect(panel, kPalette.panel_fill);
-    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{panel.min.x, panel.min.y}, t2d::Vec2{panel.max.x, panel.min.y + 2.0f}},
+                  corner.y + inset + layout.row_height * static_cast<f32>(rows + 1) + padding}};
+    layout.title_y = layout.panel.min.y + padding * 0.5f;
+    layout.first_row_y = layout.title_y + layout.row_height;
+    layout.text_x = layout.panel.min.x + padding + layout.picture + padding * 0.5f;
+    return layout;
+}
+
+void MineApp::draw_warehouse_panel(const types::Warehouse& warehouse) {
+    const WarehousePanelLayout layout = warehouse_panel_layout(warehouse);
+    batch_->draw_rect(layout.panel, kPalette.panel_fill);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{layout.panel.min.x, layout.panel.min.y},
+                                 t2d::Vec2{layout.panel.max.x, layout.panel.min.y + 2.0f}},
                       kPalette.panel_edge);
-    f32 y = panel.min.y + padding * 0.5f;
-    for (usize index = 0; index < lines.size(); ++index) {
-        draw_line(panel.min.x + padding, y, body_px_, index == 0 ? kPalette.accent : kPalette.text, lines[index]);
-        y += line;
+    draw_line(layout.panel.min.x + 8.0f * unit_, layout.title_y, body_px_, kPalette.accent, layout.title);
+    if (layout.empty) {
+        draw_line(layout.text_x, layout.first_row_y, body_px_, kPalette.text_dim,
+                  locale_.text("world.warehouse.empty"));
+        return;
     }
-    (void)area;
+    const std::vector<types::ContainerSlot>& slots = warehouse.container().slots();
+    for (usize index = 0; index < slots.size(); ++index) {
+        // [picture][name][count]: the picture is the image pass's, so the words start after its square
+        // (docs/GAME_DESIGN.md section 1.28).
+        draw_line(layout.text_x, layout.first_row_y + static_cast<f32>(index) * layout.row_height, body_px_,
+                  kPalette.text,
+                  format_localized(locale_.text("world.warehouse.slot"), layout.labels[index], slots[index].count));
+    }
+}
+
+MineApp::ImagePassCost MineApp::draw_warehouse_images(ore::RenderFrame& frame, const ore::Mat4& view_projection) {
+    ImagePassCost cost;
+    if (!world_.has_layer()) return cost;
+    const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
+    for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
+        const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
+        if (warehouse == nullptr || !warehouse->click().open()) continue;
+        const WarehousePanelLayout layout = warehouse_panel_layout(*warehouse);
+        if (layout.empty) continue;
+        const std::vector<types::ContainerSlot>& slots = warehouse->container().slots();
+        for (usize index = 0; index < slots.size(); ++index) {
+            const ContentEntry* entry = registry_.find(slots[index].kind, slots[index].id);
+            if (entry == nullptr) continue;
+            const auto texture = content_textures_.find(image_key(slots[index].kind, entry->name));
+            if (texture == content_textures_.end()) continue;   // no picture: the name alone says it
+            const f32 x = layout.panel.min.x + 8.0f * unit_;
+            const f32 y = layout.first_row_y + static_cast<f32>(index) * layout.row_height +
+                          (layout.row_height - layout.picture) * 0.5f;
+            // One batch per picture, the way every other picture in the game is drawn: a content entry
+            // has a texture of its own (docs/MODS.md section 0).
+            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+            batch_->draw_quad(t2d::Aabb2{t2d::Vec2{x, y}, t2d::Vec2{x + layout.picture, y + layout.picture}},
+                              full_uv, 0xFFFFFFFFu);
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
+    }
+    return cost;
 }
 
 void MineApp::point_world_at(t2d::Vec2 screen) {
@@ -2361,6 +2424,12 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         draw_calls += batch_->draw_calls();
         quads += batch_->quads();
         dropped_quads_ += batch_->dropped_quads();
+        // And the pictures on a warehouse's panel, after the panel itself: each one is a texture of its
+        // own, so it cannot ride in the pass that draws the chrome with the glyph atlas.
+        const ImagePassCost panels = draw_warehouse_images(frame, view_projection);
+        draw_calls += panels.draw_calls;
+        quads += panels.quads;
+        dropped_quads_ += panels.dropped;
     }
 
     frame.counters.draw_calls = draw_calls;
