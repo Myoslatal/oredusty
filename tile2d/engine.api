@@ -84,6 +84,7 @@ B _ZN3t2d6ModuleC1EOS0_ t2d/net   # t2d::Module::Module
 B _ZN3t2d6ModuleD1Ev t2d/net   # t2d::Module::~Module
 B _ZN3t2d6ModuleaSEOS0_ t2d/net   # t2d::Module::operator=
 B _ZNK3ore10InputState10mouse_downENS_11MouseButtonE ore/platform   # ore::InputState::mouse_down
+B _ZNK3ore10InputState13mouse_pressedENS_11MouseButtonE ore/platform   # ore::InputState::mouse_pressed
 B _ZNK3ore10InputState10shift_downEv ore/platform   # ore::InputState::shift_down
 B _ZNK3ore10InputState11key_pressedENS_3KeyE ore/platform   # ore::InputState::key_pressed
 B _ZNK3ore10InputState8key_downENS_3KeyE ore/platform   # ore::InputState::key_down

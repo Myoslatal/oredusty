@@ -524,8 +524,8 @@ What that buys, measured on real compiler output (`test_code_table`, 33 cases / 
   refused — and a different major version is refused whatever it used. The check happens before anything
   of the module is placed.
 
-**The published surface** is `engine.api`: 82 symbols, 38 in tier A (`t2d/core`, `t2d/text` — frozen) and
-44 in B (`t2d/render`, `t2d/net`, `ore/*` — provided, and allowed to change). `codetab build|pack --api
+**The published surface** is `engine.api`: 83 symbols, 38 in tier A (`t2d/core`, `t2d/text` — frozen) and
+45 in B (`t2d/render`, `t2d/net`, `ore/*` — provided, and allowed to change). `codetab build|pack --api
 engine.api` checks a table **before it is written** — the game's own table is packed that way, and a
 symbol outside the surface fails the build where its author can still do something about it —
 `codetab api --surface engine.api` checks a table that already exists, and the launcher repeats the check

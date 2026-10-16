@@ -304,7 +304,7 @@ warehouse::
 
 ```sh
 # 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的 5 项（泥地、石头、第 1 层、
-# 物品石头、石头仓库）+ 模组 6 项 = 17 项，bands 填充（M2.13 重出：这一屏的状态栏写着 17 CONTENT）
+# 物品石头、石头仓库）+ 模组 6 项 = 17 项，bands 填充（M2.16 重出：这一屏的状态栏写着 17 CONTENT）
 ./build/debug/games/mine/mine_game --world sandbox --start 1 \
     --content games/mine/tests/data/placeholder_content \
     --mods build/debug/games/mine/tests/mods --fill bands

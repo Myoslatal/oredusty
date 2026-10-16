@@ -24,7 +24,7 @@ Release 表（822 节 / 2602 符号，由 `codetab build` 编——工具链先�
 | 层 | 模块 | 个数 | 政策 |
 |---|---|---|---|
 | **A 常用 + 稳定** | `t2d/core` 28、`t2d/text` 10 | **38** | **冻结**：改动 = 显式决定 + 引擎版本号 +1 |
-| **B 常用但会变** | `t2d/render` 14、`ore/app` 9、`ore/platform` 6、`ore/rhi` 5、`t2d/net` 5、`ore/renderer` 4、`ore/debug` 1 | **44** | **提供，但会随渲染器/网络/加载机制改**；加载时照常校验 |
+| **B 常用但会变** | `t2d/render` 14、`ore/app` 9、`ore/platform` 7、`ore/rhi` 5、`t2d/net` 5、`ore/renderer` 4、`ore/debug` 1 | **45** | **提供，但会随渲染器/网络/加载机制改**；加载时照常校验 |
 | **C 不提供** | `mine/app.h`（应用外壳）、`mine/sandbox.h`（开发工具）、各 `.cpp` 内部、模组宿主内部 | — | **拒绝**并指名符号；要改行为就覆盖本体表里的符号 |
 | **平台层** | libc、libstdc++、Vulkan、GLFW | — | 不是我们的 API；校验时**不要求**在清单里 |
 

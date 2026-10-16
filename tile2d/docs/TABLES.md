@@ -159,8 +159,8 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 * 启动器 `declare_host("engine", <engine.api 里的版本>)`，并在**放置任何模块之前**校验 `requires`：没人提供、
   或版本对不上，这个模块被拒绝，报告写明"它按 X 版本编的，这里的是 Y"，它的符号一个都不进符号表。
 * 越界与否是**实测**的，不是猜的：加载后看每个模块真正向宿主索取的符号（`host_symbols`），逐个查清单。
-  实测本体自己的表要宿主 **82** 个引擎符号（`t2d::` 57 + `ore::` 25），**全部**在清单内（启动器报告 0 个越界），
-  另有 **77** 个平台符号（`-fno-exceptions` 之后不再有异常机制那批，原来是 92）。
+  实测本体自己的表要宿主 **83** 个引擎符号（`t2d::` 57 + `ore::` 26），**全部**在清单内（启动器报告 0 个越界），
+  另有 **79** 个平台符号（`-fno-exceptions` 之后不再有异常机制那批，原来是 92）。
 * 三处执行同一个规则：`codetab build|pack --api engine.api` 在**写表之前**拒绝越界（本体自己的表就是这么
   打的，越界即构建失败）；`codetab api --surface engine.api <表>` 检查已经存在的表；启动器在加载时再查一遍，
   并逐个指名越界的符号。
@@ -213,7 +213,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
   `ApiSurface` / `api_verdict`（公开面与版本规则）。
 * `t2d/tools/codetab`：工具链——`build`（驱动编译器、链接、再打包）、`pack`（只打包）、`dump`、`api`（查公开面）、
   `dumphead`（把表定义的东西导成给编辑器看的索引）。
-* `engine.api`：公开面清单（82 个符号：A 层 38 / B 层 44），随可执行文件走。
+* `engine.api`：公开面清单（83 个符号：A 层 38 / B 层 45），随可执行文件走。
 * `games/mine/src/main.cpp`：**启动器**——收集表（`mine.codetab`、`--table`、`packs/*.codetab`）、合并、
   校验公开面与版本、调用入口符号 `mine_game_main`。
 * 测试 `t2d/tests/test_code_table.cpp`：**33 用例 / 333 断言**，fixture 由构建过程用真实编译器编出目标文件；
@@ -245,7 +245,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 | **构建时统一 ABI** | 本体表与启动器记录同指纹（`bdcb9b070ab30e78`）；`-O0`/`-O2`/`-O3 -DNDEBUG` 三种构建指纹相同、完全合并；另一个 `std::string` ABI、头文件改动、CPU 缺特性三种情形**拒绝并指名**（§5.6、[`ABI.md`](ABI.md)） |
 | **一份定义两个函数体：构建期折叠，加载期报告** | 同一个 vague linkage 函数在 `-O3` 下可以有两份不同机器码（实测 253 / 744 字节）。`codetab build` 先链接，表里只剩一份（9 个函数少掉 55 份死拷贝，渲染逐像素相同）；`codetab pack` 原样打包的仍会在加载时报出来，被丢掉的拷贝连同它的重定位一起丢，越界即构建失败 |
 | **模组表端到端** | `--table mods/demo_mod/mod.codetab`：`mine_game_banner` 被 `demo_mod` 顶掉（报告 1 条覆盖），游戏自己的调用改道，输出从 `Mine, unmodified` 变成 `Mine, modded` |
-| **公开面执行** | 本体表向宿主索取 82 个引擎符号（`t2d::` 57 + `ore::` 25）+ 78 个平台符号，越界 0 个；`codetab build --api engine.api` 在构建期就拒绝越界 |
+| **公开面执行** | 本体表向宿主索取 83 个引擎符号（`t2d::` 57 + `ore::` 26）+ 79 个平台符号，越界 0 个；`codetab build --api engine.api` 在构建期就拒绝越界 |
 
 打包（同一个构建出两个 zip）：release 包 = 启动器 + 表 + `engine.api` + 界面文本 + 本体内容包 + 着色器 + `packs/` 模板，
 `--strip-all` 之后约 0.9 MiB；dev 包 = 头文件（含生成的 `config.h`）+ `engine.api` + 本体表 + `codetab` 工具 + 模板 + 文档。
