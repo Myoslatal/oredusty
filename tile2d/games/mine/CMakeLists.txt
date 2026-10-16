@@ -16,8 +16,11 @@ add_library(mine_core STATIC
     src/layer_rules.cpp
     src/menu.cpp
     src/mod_package.cpp
+    src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/drop.cpp
+    src/types/drop_definition.cpp
     src/types/entity.cpp
     src/types/entity_tile.cpp
     src/types/floor.cpp
@@ -69,8 +72,11 @@ set(MINE_TABLE_SOURCES
     src/layer_rules.cpp
     src/menu.cpp
     src/mod_package.cpp
+    src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/types/drop.cpp
+    src/types/drop_definition.cpp
     src/types/entity.cpp
     src/types/entity_tile.cpp
     src/types/floor.cpp

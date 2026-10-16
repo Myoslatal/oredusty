@@ -1,0 +1,9 @@
+# 测试替身：掉落物用 drop:: 表声明（docs/MODS.md §0）。
+#
+# 引擎为掉落物读的字段只有一个：image（它躺在地上长什么样）。它不占格子、不会被层更新、可以被指针
+# 拖着走——这三件事是"掉落物"这个东西本身的性质，不是文件里的开关。
+drop::
+    scrap::
+        image:"art/drop_scrap.png"
+    bolt::
+        image:"art/drop_bolt.png"

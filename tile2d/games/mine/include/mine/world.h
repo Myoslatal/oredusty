@@ -115,6 +115,14 @@ using LayerGenerator = std::function<LayerSpec(u64 seed, i32 index)>;
 [[nodiscard]] LayerGenerator debug_scatter_generator(const ContentRegistry& registry, LayerShape shape,
                                                      u32 percent = 25);
 
+/// Lays out one of every registered **drop** in the layer, spread across it, and returns how many. This
+/// is a **debug fill for entities**, the same idea as the plot fills above: it names no content, it lays
+/// out whatever the registry holds under the drop table, so a designer can see and drag them before the
+/// data that places drops exists (docs/GAME_DESIGN.md sections 1.25, 7.7). The positions are deliberately
+/// not on whole cells: a drop's position is a point, and a layout that landed on cell corners would hide
+/// that. The registry must outlive the layer's use of what it names, the way every other fill's must.
+[[nodiscard]] usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry);
+
 /// What building a layer did. A description that names content the registry does not have, puts a
 /// footprint outside the map, or puts it on top of something already on that tile layer is **refused
 /// with a reason**: a layer that quietly loses a structure is a bug report nobody can act on.
@@ -365,6 +373,9 @@ public:
     const MineLayer& enter(i32 index, const ContentRegistry& registry, const ContentDefinitions& definitions);
     [[nodiscard]] bool has_layer() const { return layer_ != nullptr; }
     [[nodiscard]] const MineLayer& layer() const { return *layer_; }
+    /// The same layer, for the one screen that **acts** on it: the world view moves a drop the pointer
+    /// dragged (pointer_drag.h). Everything that only reads the mine keeps taking the const one.
+    [[nodiscard]] MineLayer& layer() { return *layer_; }
     [[nodiscard]] i32 layer_index() const { return layer_ != nullptr ? layer_->index() : 0; }
     /// What building the layer in force did, including everything the generator asked for that was
     /// refused.

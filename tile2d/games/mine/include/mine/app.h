@@ -17,6 +17,7 @@
 #include <mine/content_pack.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
+#include <mine/pointer_drag.h>
 #include <mine/registry.h>
 #include <mine/sandbox.h>
 #include <mine/session.h>
@@ -98,6 +99,10 @@ struct MineOptions {
     /// empty layer, which is what a session enters until then), or "bands" / "scatter" - the debug
     /// generators of world.h, a view of the registry rather than content of its own.
     std::string layer_fill;
+    /// Lay out one of every registered drop in the layer the world view enters (world.h): the same idea
+    /// as --layer-fill, for the things that are not on a cell - so a designer can see a drop and drag it
+    /// before the data that places drops exists (docs/GAME_DESIGN.md section 1.25).
+    bool layer_drops = false;
 };
 
 class MineApp final : public ore::Application {
@@ -290,6 +295,10 @@ private:
     /// What the game's pointer is over, if anything. Not the sandbox's cursor: the two are different
     /// views with different pointers, and neither moves the other.
     std::optional<GridPos> world_pointer_{};
+    /// What the game's pointer is **doing**: a drop it picked up, and where inside it the pointer took
+    /// hold (pointer_drag.h). The first thing the pointer does to the mine - what else it may do to a
+    /// cell is the action table the designer has not given yet (docs/GAME_DESIGN.md section 7.14).
+    PointerDrag world_drag_{};
     /// What the two passes did in the frame that was last drawn: scenery brought up to date, and plots
     /// that took their turn. The HUD says so, because "the mine runs" has to be visible somewhere.
     usize world_refreshed_ = 0;

@@ -107,6 +107,12 @@ public:
     /// designer's (docs/GAME_DESIGN.md section 7.14).
     [[nodiscard]] virtual bool on_interact(Entity& other);
 
+    /// True for something the pointer may pick up and put down somewhere else (types/drop.h). The same
+    /// shape of question as is_floor() on a plot: being draggable is a **kind of thing**, not a property
+    /// a data file hands out - so a caller asks this instead of comparing content names, and no entry in
+    /// a designer's file can make a machine draggable by writing a field.
+    [[nodiscard]] virtual bool draggable() const { return false; }
+
 protected:
     /// What it does when its turn comes. \p elapsed is how much time this run accounts for: the
     /// period, or more when the frame was long (types/update_cadence.h). The default does nothing.

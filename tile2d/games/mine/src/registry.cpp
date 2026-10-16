@@ -31,6 +31,7 @@ const char* content_kind_name(ContentKind kind) {
         case ContentKind::Channel: return "channel";
         case ContentKind::Floor: return "floor";
         case ContentKind::Ore: return "ore";
+        case ContentKind::Drop: return "drop";
         case ContentKind::Count: break;
     }
     return "?";

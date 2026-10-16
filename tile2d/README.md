@@ -67,6 +67,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_world          12 cases / 130 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
     games/mine/tests/test_layer_rules    23 cases / 807 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
+    games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   14 cases / 239 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -410,6 +411,21 @@ walks 21 nodes and tests **31 entries** instead of ten thousand. Moving tells th
 the one it is in), so the index cannot go stale. Nothing spawns entities yet — the class and the index
 are here, and which entities exist is the designer's to say.
 
+A **drop** (`types/drop.h`) is the first kind of entity that is also content: something lying in the
+layer that the layer never updates and the **pointer can drag**. It is declared in a `drop::` table
+(its own `image`, and that is the only field the engine reads), it is an entity in every other way —
+free position, in the quadtree, identity from the registry — and it is **not a plot**: a plot is cells,
+a drop is a point, so it is drawn one cell wide *centred on its position* and lies across the four
+cells around it. The drag itself is game logic and not screen code (`mine/pointer_drag.h`): the
+nearest draggable thing within 0.75 of a cell is picked up, the offset it was grabbed at is kept so it
+does not jump, the move is clamped to the layer, and letting go leaves it there. Measured end to end
+over the debug input server: a drop held at (635, 352) and moved +288/+96 pixels ended up
+288.1/96.7 pixels away — **9.00 × 3.02 cells** at 32 pixels per cell, exactly the pointer's own
+movement. `--layer-drops 1` lays out one of every registered drop so there is something to drag;
+**no data places drops yet**, and which things drop what is the designer's to say.
+
+![A drop being dragged: the HUD says what the pointer is holding](games/mine/docs/images/world_drop_drag_en.png)
+
 Guide: [docs/TYPES.md](docs/TYPES.md).
 
 ## Code tables: code that can replace the code it was loaded by
@@ -436,7 +452,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 734 sections, 2 330 symbols, 8 974 relocations (release)
+        mine.codetab         the game: 760 sections, 2 413 symbols, 9 203 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -686,12 +702,12 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 27/27 tests green |
-| `release` | 27/27 tests green |
-| `asan` (Address + UB sanitizers) | 27/27 tests green |
-| `tsan` (ThreadSanitizer) | 27/27 tests green |
+| `debug` | 28/28 tests green |
+| `release` | 28/28 tests green |
+| `asan` (Address + UB sanitizers) | 28/28 tests green |
+| `tsan` (ThreadSanitizer) | 28/28 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
-| `server-only` | 27/27 tests green |
+| `server-only` | 28/28 tests green |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

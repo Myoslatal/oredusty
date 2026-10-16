@@ -98,6 +98,23 @@ LayerGenerator debug_scatter_generator(const ContentRegistry& registry, LayerSha
     };
 }
 
+usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry) {
+    const ConstSpan<ContentEntry> drops = registry.entries(ContentKind::Drop);
+    if (drops.empty()) return 0;
+    // Evenly spaced across the middle of the layer, alternating slightly above and below the middle row -
+    // and deliberately not on whole cells, because a drop's position is a point rather than a cell.
+    const f32 middle = static_cast<f32>(layer.height()) * 0.5f;
+    usize placed = 0;
+    for (usize index = 0; index < drops.size(); ++index) {
+        const f32 across = (static_cast<f32>(index) + 1.0f) / (static_cast<f32>(drops.size()) + 1.0f);
+        const t2d::Vec2 where{static_cast<f32>(layer.width()) * across,
+                              middle + (index % 2 == 0 ? 0.25f : -0.25f)};
+        layer.adopt(std::make_unique<types::Drop>(drops[index].kind, drops[index].id, where));
+        ++placed;
+    }
+    return placed;
+}
+
 // ----------------------------------------------------------------------- the layer ---
 
 void LayerBuildReport::refuse(std::string message) {

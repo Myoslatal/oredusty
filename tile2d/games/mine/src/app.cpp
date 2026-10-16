@@ -203,6 +203,7 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"world-view", "<0|1>", "open the world view at startup: into the mine, on --mine-layer"},
         {"mine-layer", "<n>", "which layer of the mine the world view opens on (default 0)"},
         {"layer-fill", "<none|bands|scatter>", "world view debug fill: the registry laid out in the layer"},
+        {"layer-drops", "<0|1>", "world view debug fill: one of every registered drop, laid out in the layer"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
@@ -1080,6 +1081,12 @@ void MineApp::enter_mine_layer(i32 index) {
         T2D_WARN("world: {} placement(s) refused in all, {} reason(s) listed above", report.refused,
                  report.errors.size());
     }
+    // The debug fill for entities, when it was asked for: one of every registered drop, spread across the
+    // layer, so a designer can see and drag them before the data that places drops exists (world.h).
+    if (options_.layer_drops) {
+        const usize placed = lay_out_drops(world_.layer(), registry_);
+        T2D_INFO("world: laid out {} drop(s) for the debug fill", placed);
+    }
     fit_world_view();
 }
 
@@ -1117,6 +1124,13 @@ void MineApp::point_world_at(t2d::Vec2 screen) {
 }
 
 std::string MineApp::world_cell_text(GridPos cell) const {
+    // What the pointer is holding takes the line over what is under it: while something is being dragged,
+    // that is what the pointer is doing (docs/GAME_DESIGN.md section 1.25). A drop is not a plot, so the
+    // cell's own description would say nothing about it.
+    if (const types::Entity* held = world_drag_.held(); held != nullptr) {
+        return format_localized(locale_.text("world.dragging"), content_kind_name(held->kind()), held->id(),
+                                held->name(registry_));
+    }
     const types::SceneTile* plot = world_.layer().top_plot_at(cell);
     if (plot == nullptr) return std::string{locale_.text("sandbox.cell.empty")};
     std::string text = format_localized(locale_.text("world.cell.plot"), content_kind_name(plot->kind()),
@@ -1174,6 +1188,21 @@ void MineApp::handle_world_input(f32 delta_seconds) {
         world_camera_.zoom_at(mouse, input.scroll_y() > 0.0f ? 1.15f : 1.0f / 1.15f);
     }
     clamp_world_view();
+
+    // The first thing the pointer **does** to the mine (docs/GAME_DESIGN.md section 1.25): a drop lying
+    // in the layer is picked up by pressing on it and put down by letting go. The camera is settled by
+    // now, so the press and every move after it are measured against the same view. What else a pointer
+    // may do to a cell is still the action table the designer has not given (section 7.14).
+    if (world_.has_layer() && area.contains(mouse) && input.mouse_pressed(ore::MouseButton::Left)) {
+        world_drag_.begin(world_.layer(), world_camera_.world_of(mouse));
+    }
+    if (world_drag_.holding()) {
+        if (input.mouse_down(ore::MouseButton::Left)) {
+            world_drag_.move_to(world_camera_.world_of(mouse));
+        } else {
+            world_drag_.end();
+        }
+    }
 
     // The layers of the mine: entering one builds it, and only the one being played is held (world.h).
     if (input.key_pressed(ore::Key::LeftBracket) || input.key_pressed(ore::Key::PageDown)) {
@@ -2038,7 +2067,9 @@ MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
 MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const ore::Mat4& view_projection,
                                                  const MineLayer& layer, const t2d::Camera2D& camera) {
     ImagePassCost cost;
-    if (layer.plot_count() == 0) return cost;
+    // A layer with nothing in it draws nothing - and "nothing" includes what is not on a cell, so a layer
+    // whose only content is a drop still has something to draw (types/drop.h).
+    if (layer.plot_count() == 0 && layer.entity_count() == 0) return cost;
     const t2d::TileRect visible = camera.visible_cells();
     if (visible.empty()) return cost;
     const f32 cell = camera.zoom();
@@ -2119,6 +2150,62 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             cost.dropped += batch_->dropped_quads();
         }
         for (const std::pair<std::string, std::vector<Quad>>& group : here.groups) {
+            const auto texture = content_textures_.find(group.first);
+            if (texture == content_textures_.end()) continue;
+            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+            for (const Quad& quad : group.second) batch_->draw_quad(quad.rect, quad.uv, 0xFFFFFFFFu);
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
+    }
+
+    // What is in the layer without being on a cell, drawn **after** the plots of every tile layer: that
+    // is where a thing lying on the ground is (types/entity.h). Each one is one cell wide, **centred on
+    // its position** - so a drop lying between four cells straddles them, which is what a position that
+    // is not a cell looks like (docs/GAME_DESIGN.md section 1.24). What is off screen is skipped, and
+    // entities are few, so this is a walk over the layer's entities rather than a query.
+    {
+        const t2d::Aabb2 area{t2d::Vec2{static_cast<f32>(visible.x), static_cast<f32>(visible.y)},
+                              t2d::Vec2{static_cast<f32>(visible.right()), static_cast<f32>(visible.bottom())}};
+        std::vector<std::pair<std::string, std::vector<Quad>>> groups;
+        std::unordered_map<std::string, usize> group_of;
+        std::vector<std::pair<t2d::Aabb2, u32>> colours;
+        for (const std::unique_ptr<types::Entity>& entity : layer.entities()) {
+            if (!entity->alive() || !area.contains(entity->position())) continue;
+            const ContentEntry* entry = registry_.find(entity->kind(), entity->id());
+            if (entry == nullptr) continue;   // the content is gone: there is nothing to draw it with
+            const t2d::Vec2 centre = camera.screen_of(entity->position());
+            const t2d::Aabb2 rect{t2d::Vec2{centre.x - cell * 0.5f, centre.y - cell * 0.5f},
+                                  t2d::Vec2{centre.x + cell * 0.5f, centre.y + cell * 0.5f}};
+            const std::string key = image_key(entity->kind(), entry->name);
+            if (content_textures_.find(key) == content_textures_.end()) {
+                // Content with no picture gets the colour its name derives, the way a plot without one
+                // does: the world view is a developer's view until the game's own interface is designed.
+                colours.emplace_back(rect, debug_color_for(entry->name));
+                continue;
+            }
+            const auto found = group_of.find(key);
+            if (found == group_of.end()) {
+                group_of.emplace(key, groups.size());
+                groups.emplace_back(key, std::vector<Quad>{});
+                groups.back().second.push_back(Quad{key, rect, full_uv});
+                continue;
+            }
+            groups[found->second].second.push_back(Quad{key, rect, full_uv});
+        }
+        if (!colours.empty()) {
+            batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+            for (const std::pair<t2d::Aabb2, u32>& colour : colours) {
+                batch_->draw_rect(colour.first, colour.second);
+            }
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
+        for (const std::pair<std::string, std::vector<Quad>>& group : groups) {
             const auto texture = content_textures_.find(group.first);
             if (texture == content_textures_.end()) continue;
             batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());

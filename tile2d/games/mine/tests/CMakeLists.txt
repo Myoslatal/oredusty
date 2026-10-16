@@ -96,6 +96,10 @@ target_link_libraries(test_layer_rules PRIVATE mine_core)
 t2d_add_test(test_entities test_entities.cpp)
 target_link_libraries(test_entities PRIVATE mine_core)
 
+# Drops: the class that is not updated by the layer and can be dragged, its definer, and the drag.
+t2d_add_test(test_drops test_drops.cpp)
+target_link_libraries(test_drops PRIVATE mine_core)
+
 
 # --- the game's own code in a code table --------------------------------------------------------------
 # mine_core's registry is compiled into a table and *not* linked into the test: what the test loads is
