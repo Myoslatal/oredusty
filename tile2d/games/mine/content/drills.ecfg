@@ -15,4 +15,5 @@ drill::
         dig_power:1
         building::
             materials:["stone",10]
+            time:5
             category:"extraction"

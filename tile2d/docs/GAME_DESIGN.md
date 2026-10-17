@@ -1410,36 +1410,31 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
   的两条分支；层构建时对钻头强制、报告里点名）；套件 **31 个测试**全绿（release / debug / asan / tsan / server-only
   31/31、no-renderer 11/11、Ore 13/13）。
 
-### M2 交付状态（二十二）：设计者的石头钻头（本体内容）
+### M2 交付状态（二十三）：石头的硬度与掉落、钻头的建造时间（本体内容）
 
-设计者的话："创建石头钻头，挖掘能力为1,材料10石头"。
+设计者的话："设置好石头的hardness(=1)和drop，设置钻头建造时间为5s"。
 
-* **新增本体内容文件 `games/mine/content/drills.ecfg`**（设计者已经把两张图放进包里了：
-  `art/drill_stone_drill_base.png` 与 `art/drill_stone_drill_top.png`，各 128×128）：
+* **`content/ores.ecfg`**：`ore:: stone::` 加上 `hardness:1` 与 `drop:"stone"`——石头硬度 1，挖出来的是石头。
+* **`content/drops.ecfg`（新）**：`drop:: stone::`，用 `art/item_stone.png`。掉落物是设计者自己的种类（§1.25：
+  "躺在地上、自己不变化、能被指针拖着走"），石头矿石的 `drop` 指的就是它；**图沿用了石头物品那张**（同一块石头，
+  在地上和在被搬着的时候长得一样）——要单独画一张，换掉它的 `image` 即可。
+* **`content/drills.ecfg`**：`building:: time:5`——石头钻头现在要**建 5 秒**，所以放下之后会走那条扫描线。
+* **实测**（真机无头）：双击选中仓库 → 建造栏 `EXTRACTION` → 选 `STONE` 钻头 → 点地图一格，日志：
 
 ```
-drill::
-    stone::
-        image:"art/drill_stone_drill_base.png"      # 底座
-        top_image:"art/drill_stone_drill_top.png"   # 可以旋转的顶部
-        dig_power:1                                 # 挖掘能力 1
-        building::
-            materials:["stone",10]                  # 造价 10 石头
-            category:"extraction"                   # 建筑分类：开采
+world: selected warehouse #1 at 4,4
+world: the drill 'stone' at 1,2 mines ore 'stone' (hardness 1.00 / power 1.00 = 1.00s per drop of 'stone')
+world: built stone at 1,2
 ```
 
-* **没有写的两个字段**（设计者没说，我不替他定）：`spin` 与 `spin_origin`——所以这颗钻头的顶部**现在不转**（§1.38 里
-  "不写就是不转"）。给一个"每几秒一圈"和"绕贴图哪一点"，我就补上；顺带，`building::` 里也没写 `time`，所以它**瞬间
-  建成、没有扫描线动画**（不写就是 0 秒）。
-* **实测**：把它放进游戏，双击选中仓库（10 石头）→ 打开建造栏 → 分类 `EXTRACTION` → 选中 `STONE` 钻头 → 点地图上一格
-  ——日志 `world: built stone at 1,2`，上方面板随即变成 `STONE WAREHOUSE 0 / 100 EMPTY`（10 块石头付掉了）。
-  放到没有矿的格子上会被拒：`world: stone cannot stand there: at 1,2 and there is no ore under it on tile layers 0..0`
-  （§1.34 的规则）。
-* **单测**：`test_content_pack` 18 用例 / 210 → **278 断言**——本体包现在是 **6 张图 / 4 个地块定义**（钻头两张图，
-  base 在前、top 在后，同一条目挨着），并逐项钉住这颗钻头：`dig_power == 1`、两张图的路径、`top_image` 的来源、
-  建筑分类是 `extraction`、材料是 10 个 `stone`。套件 **32 个测试**全绿。
+  也就是说这颗钻头**不再是空转的**：每 1 秒往外丢一块石头（hardness ÷ dig_power = 1 ÷ 1）。放下去 2 秒时抓的一张
+  图能看到扫描线走到一半，8 秒时抓的图里钻头旁边的格子之间躺着几块石头掉落物。
+* **单测**：`test_content_pack` 18 用例 / 278 → **285 断言**——本体包现在是 **7 张图**（drills 的两张在最前、接着是
+  drops、floors、items、ores、warehouses），并钉住：石头矿石 `hardness == 1`、`drop == "stone"`、**且这个名字在
+  注册表里真的有对应的掉落物**（§1.26 的规则就是按名字找 `drop::`）、石头钻头 `building.seconds == 5`。
+  套件 **32 个测试**全绿。
 
-![设计者的石头钻头立在地图上的样子（右下那格是选中的仓库，上方是它的面板）](../games/mine/docs/images/world_stone_drill_en.png)
+![石头钻头在挖矿：旁边的格子之间躺着它丢出来的石头掉落物](../games/mine/docs/images/world_stone_drill_mining_en.png)
 
 ### M1 验收标准（已满足）
 
@@ -1662,6 +1657,13 @@ drill::
 
 | 版本 | 变更 |
 |---|---|
+| M2.26 | **石头的硬度与掉落、钻头的建造时间**（本体内容）：`ore:: stone::` 加 `hardness:1` + `drop:"stone"`；新增
+  `content/drops.ecfg`（`drop:: stone::`，图沿用 `art/item_stone.png`——同一块石头在地上与在手里长得一样）；
+  `drill:: stone::` 的 `building::` 加 `time:5`（放下后走扫描线）。实测日志：
+  `the drill 'stone' at 1,2 mines ore 'stone' (hardness 1.00 / power 1.00 = 1.00s per drop of 'stone')`——钻头不再空转，
+  每 1 秒丢一块石头。`test_content_pack` 18 用例 / 278 → **285 断言**（本体包 7 张图，顺序 drills→drops→floors→items→
+  ores→warehouses；钉住 hardness / drop / 该名字在注册表里真有掉落物 / building.seconds == 5）。内容不进代码表，本体表
+  仍是 **927 节 / 2923 符号 / 11273 重定位 / 1.44 MiB**；套件 **32 个测试**全绿 |
 | M2.25 | **设计者的石头钻头**（本体内容）：新增 `games/mine/content/drills.ecfg`——`drill:: stone::` 用设计者已放进包里的
   两张图（`art/drill_stone_drill_base.png` 底座、`art/drill_stone_drill_top.png` 顶部），`dig_power:1`，
   `building:: materials:["stone",10] category:"extraction"`。**没写** `spin`/`spin_origin`（设计者没说，不替他定：顶部

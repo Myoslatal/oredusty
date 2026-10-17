@@ -360,6 +360,7 @@ it is not in the palette.
         floors.ecfg          floor:: dirt::   with image:"art/floor_dirt.png"
         items.ecfg           item:: stone::   with image:"art/item_stone.png"
         ores.ecfg            ore:: stone::    with image:"art/ore_stone.png"
+        drops.ecfg           drop:: stone::   what the stone ore throws out (image: art/item_stone.png)
         drills.ecfg          drill:: stone::  base + top, dig_power:1, costs 10 stone (building:: extraction)
         warehouses.ecfg      warehouse:: stone::   capacity:100
         layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35
