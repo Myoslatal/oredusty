@@ -360,7 +360,6 @@ it is not in the palette.
         floors.ecfg          floor:: dirt::   with image:"art/floor_dirt.png"
         items.ecfg           item:: stone::   with image:"art/item_stone.png"
         ores.ecfg            ore:: stone::    with image:"art/ore_stone.png"
-        drops.ecfg           drop:: stone::   what the stone ore throws out (image: art/item_stone.png)
         drills.ecfg          drill:: stone::  base + top, dig_power:1, costs 10 stone (building:: extraction)
         warehouses.ecfg      warehouse:: stone::   capacity:100
         layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35
@@ -506,7 +505,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 930 sections, 2 934 symbols, 11 316 relocations (release)
+        mine.codetab         the game: 929 sections, 2 932 symbols, 11 311 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings

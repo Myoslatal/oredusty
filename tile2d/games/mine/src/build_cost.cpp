@@ -6,24 +6,13 @@ namespace mine {
 
 namespace {
 
-/// What a price is paid in: the **item** of that name and any **drop** of that name.
-///
-/// A drop is what an ore throws out and an item is what a machine makes, a recipe moves and a demand asks
-/// for (docs/GAME_DESIGN.md sections 1.23, 1.25) - and a stone lying on the ground and a stone in a box are
-/// the same stone. A player who dragged a drill's output into the warehouse **has** stone, so a price that
-/// only counted items would tell them they have none: which is exactly the report "the warehouse clearly has
-/// stone in it and it still says stone 0/10". Both kinds are counted, and both are spent.
-constexpr ContentKind kPays[] = {ContentKind::Item, ContentKind::Drop};
-
-/// How much of \p name the stock holds, over both kinds that count as paying for it.
+/// How much of \p name the stock holds. It is an **item** and nothing else: the drop lying on the ground
+/// is made out of the item its ore drops (types/drill.cpp), so a stone carried into a warehouse is the
+/// stone item, and a price counts items (docs/GAME_DESIGN.md sections 1.23, 1.25).
 [[nodiscard]] usize held(const types::Container& stock, const ContentRegistry& registry,
                          std::string_view name) {
-    usize have = 0;
-    for (const ContentKind kind : kPays) {
-        const ContentId id = registry.find(kind, name);
-        if (id != kNoContent) have += stock.count_of(kind, id);
-    }
-    return have;
+    const ContentId id = registry.find(ContentKind::Item, name);
+    return id == kNoContent ? 0 : stock.count_of(ContentKind::Item, id);
 }
 
 } // namespace
@@ -46,14 +35,9 @@ bool can_afford(const types::Container& stock, const ContentRegistry& registry,
 void pay_for(types::Container& stock, const ContentRegistry& registry,
              const std::vector<ContentStack>& materials) {
     for (const ContentStack& stack : materials) {
-        usize left = static_cast<usize>(stack.count);
-        for (const ContentKind kind : kPays) {
-            const ContentId id = registry.find(kind, stack.name);
-            if (id == kNoContent || left == 0) continue;
-            // Items first, then drops: what a machine made goes into the machine before what was picked up
-            // off the floor. can_afford() said the two together are enough, so this cannot come up short.
-            left -= stock.take(kind, id, left);
-        }
+        const ContentId id = registry.find(ContentKind::Item, stack.name);
+        if (id == kNoContent) continue;   // can_afford() would have said no; paying nothing is the safe half
+        (void)stock.take(ContentKind::Item, id, static_cast<usize>(stack.count));
     }
 }
 

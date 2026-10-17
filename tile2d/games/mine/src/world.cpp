@@ -174,9 +174,12 @@ void MineLayer::configure_drill(types::Drill& drill, const ContentRegistry& regi
                            ore_name, what));
         return;
     }
-    const ContentId drop = registry.find(ContentKind::Drop, definition->drop);
+    // What it drops is an **item** (docs/GAME_DESIGN.md sections 1.23, 1.25): the thing that lands on the
+    // ground is **made out of that item** - same name, same picture, same id - rather than declared a
+    // second time in a table of its own. A drop:: table is not what says what a thing is; the item is.
+    const ContentId drop = registry.find(ContentKind::Item, definition->drop);
     if (drop == kNoContent) {
-        refuse(std::format("layer {}: the ore '{}' under {} drops '{}', and no drop named '{}' is registered",
+        refuse(std::format("layer {}: the ore '{}' under {} drops '{}', and no item named '{}' is registered",
                            index_, ore_name, what, definition->drop, definition->drop));
         return;
     }

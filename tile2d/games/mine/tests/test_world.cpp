@@ -688,43 +688,5 @@ T2D_TEST(paying_for_a_build_that_cannot_be_paid_for_leaves_the_stock_alone) {
 }
 
 
-T2D_TEST(stone_on_the_ground_pays_for_a_building_like_stone_in_a_box) {
-    // A drill's output dragged into a warehouse is stored as a **drop** - the thing that was lying on the
-    // ground - and an item is what a machine makes (docs/GAME_DESIGN.md sections 1.23, 1.25). A price that
-    // only counted items told the player they had none: "the warehouse clearly has stone in it and it still
-    // says stone 0/10". Both kinds pay, and both are spent.
-    Fixture content;
-    content.add(ContentKind::Warehouse, "bin", /*random_reverse=*/false, /*capacity=*/16);
-    content.add(ContentKind::Item, "stone");
-    content.add(ContentKind::Drop, "stone");
-    const ContentId bin = content.registry.find(ContentKind::Warehouse, "bin");
-    const ContentId drop = content.registry.find(ContentKind::Drop, "stone");
-    T2D_REQUIRE(drop != kNoContent);
-    const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
-    T2D_REQUIRE(definition != nullptr);
-    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
-    T2D_REQUIRE(plot != nullptr && plot->container() != nullptr);
-    types::Container& stock = *plot->container();
-    T2D_REQUIRE(stock.add(ContentKind::Drop, drop, 10) == 10u);
-
-    const std::vector<ContentStack> price{{std::string("stone"), 10}};
-    std::string missing;
-    T2D_CHECK(can_afford(stock, content.registry, price, &missing));
-    pay_for(stock, content.registry, price);
-    T2D_CHECK_EQ(stock.count_of(ContentKind::Drop, drop), 0u);
-    T2D_CHECK_EQ(stock.total(), 0u);
-    T2D_CHECK_FALSE(can_afford(stock, content.registry, price, &missing));
-    T2D_CHECK_MSG(missing.find("stone") != std::string::npos, "{}", missing);
-
-    // Half and half works too: five items and five drops are ten stone, and the items go first.
-    const ContentId item = content.registry.find(ContentKind::Item, "stone");
-    T2D_REQUIRE(stock.add(ContentKind::Item, item, 5) == 5u);
-    T2D_REQUIRE(stock.add(ContentKind::Drop, drop, 5) == 5u);
-    T2D_CHECK(can_afford(stock, content.registry, price, &missing));
-    pay_for(stock, content.registry, price);
-    T2D_CHECK_EQ(stock.count_of(ContentKind::Item, item), 0u);
-    T2D_CHECK_EQ(stock.count_of(ContentKind::Drop, drop), 0u);
-}
-
 T2D_TEST_MAIN
 

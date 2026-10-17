@@ -54,10 +54,12 @@ struct Fixture {
         return id;
     }
 
-    ContentId add_drop(std::string_view name) {
-        const ContentId id = registry.register_content(ContentKind::Drop, name);
-        DropDefinition definition;
-        definition.kind = ContentKind::Drop;
+    /// What an ore drops is an **item** (docs/GAME_DESIGN.md sections 1.23, 1.25): the thing that lands on
+    /// the ground is made out of it, so this registers the item and nothing else.
+    ContentId add_item(std::string_view name) {
+        const ContentId id = registry.register_content(ContentKind::Item, name);
+        TileDefinition definition;
+        definition.kind = ContentKind::Item;
         definition.name = std::string(name);
         definitions.add(std::move(definition));
         return id;
@@ -82,7 +84,7 @@ struct Rig {
     ContentId chunk = kNoContent;
 
     Rig(f32 hardness, f32 power, std::string drop_name) {
-        chunk = fixture.add_drop("chunk");
+        chunk = fixture.add_item("chunk");
         fixture.add_floor("dirt");
         fixture.add_ore("vein", hardness, std::move(drop_name));
         fixture.add_drill("rig", power);
@@ -141,7 +143,9 @@ T2D_TEST(a_drill_is_an_entity_plot_that_mines_what_is_under_it) {
     T2D_REQUIRE(rig.layer.entity_count() == 1u);
     T2D_CHECK_EQ(rig.drill->produced(), 1u);
     const Entity& first = *rig.layer.entities()[0];
-    T2D_CHECK_EQ(first.kind(), ContentKind::Drop);
+    // The thing on the ground **is** the item its ore drops: same id, same name, same picture
+    // (sections 1.23, 1.25) - which is why carrying it into a warehouse stores the item.
+    T2D_CHECK_EQ(first.kind(), ContentKind::Item);
     T2D_CHECK_EQ(first.id(), rig.chunk);
     T2D_CHECK(first.draggable());   // what it throws out is a drop: the pointer can drag it (types/drop.h)
     // It lands **one cell away at a random angle**: anywhere on the circle around the drill's middle, not
@@ -215,7 +219,7 @@ T2D_TEST(a_drill_with_nothing_to_mine_is_reported_and_idle) {
         fixture.add_floor("dirt");
         fixture.add_ore("vein", 2.0f, "chunk");
         fixture.add_drill("rig", 1.0f);
-        fixture.add_drop("chunk");
+        fixture.add_item("chunk");
         MineLayer layer(0, LayerShape{16, 16, 3}, 1);
         LayerBuildReport report;
         (void)layer.place(fixture.registry, fixture.definitions, at(ContentKind::Floor, "dirt", 0, 4, 4), &report);
@@ -236,7 +240,7 @@ T2D_TEST(a_drill_with_nothing_to_mine_is_reported_and_idle) {
         fixture.add_floor("dirt");
         fixture.add_ore("vein", hardness, std::move(drop_name));
         fixture.add_drill("rig", power);
-        if (power > 0.0f) fixture.add_drop("chunk");
+        if (power > 0.0f) fixture.add_item("chunk");
         MineLayer layer(0, LayerShape{16, 16, 3}, 1);
         LayerBuildReport report;
         (void)layer.place(fixture.registry, fixture.definitions, at(ContentKind::Floor, "dirt", 0, 4, 4), &report);
@@ -250,7 +254,7 @@ T2D_TEST(a_drill_with_nothing_to_mine_is_reported_and_idle) {
     };
     T2D_CHECK(refuses(0.0f, "chunk", 1.0f, "says nothing about its hardness"));
     T2D_CHECK(refuses(2.0f, "", 1.0f, "says nothing about what it drops"));
-    T2D_CHECK(refuses(2.0f, "nothing_like_that", 1.0f, "no drop named 'nothing_like_that' is registered"));
+    T2D_CHECK(refuses(2.0f, "nothing_like_that", 1.0f, "no item named 'nothing_like_that' is registered"));
     // A drill with no power: the ore is fine, the machine is not.
     {
         Fixture fixture;
@@ -316,7 +320,7 @@ T2D_TEST(the_debug_fill_puts_a_drill_on_a_cell_that_has_ore) {
     fixture.add_floor("dirt");
     fixture.add_ore("vein", 2.0f, "chunk");
     fixture.add_drill("rig", 1.0f);
-    fixture.add_drop("chunk");
+    fixture.add_item("chunk");
     MineLayer layer(0, LayerShape{24, 16, 3}, 1);
     LayerBuildReport report;
     (void)layer.place(fixture.registry, fixture.definitions, at(ContentKind::Floor, "dirt", 0, 5, 5), &report);

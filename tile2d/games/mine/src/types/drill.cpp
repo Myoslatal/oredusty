@@ -85,7 +85,10 @@ void Drill::throw_one() {
         t2d::clamp(static_cast<f32>(anchor().y) + 0.5f + std::sin(angle), 0.0f,
                    static_cast<f32>(layer->height())),
     };
-    layer->adopt(std::make_unique<Drop>(ContentKind::Drop, job_.drop_id, where));
+    // The thing on the ground **is** the item its ore drops: same name, same picture, same id - made out
+    // of the item rather than declared beside it (docs/GAME_DESIGN.md sections 1.23, 1.25). That is also
+    // why carrying one into a warehouse stores the item, and why a price can be paid with it.
+    layer->adopt(std::make_unique<Drop>(ContentKind::Item, job_.drop_id, where));
     ++thrown_;
 }
 

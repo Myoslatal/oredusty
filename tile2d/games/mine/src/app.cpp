@@ -1263,9 +1263,11 @@ const types::SceneTile* MineApp::selected_plot() const {
 void MineApp::select_at(GridPos cell) {
     const types::SceneTile* plot = world_.layer().top_plot_at(cell);
     if (plot == nullptr || plot->container() == nullptr) {
-        // A double click on scenery, or on ground, selects nothing: there is nothing to show, and a panel
-        // that stayed up would be describing something else (types/click.h's rule, said again).
-        clear_selection();
+        // A double click on scenery, or on ground, selects nothing - and it does **not** put down what is
+        // selected either: the designer asked for the selection to stay when the pointer looks elsewhere,
+        // and the way to put a plot down is to double click **it** (docs/GAME_DESIGN.md section 1.31).
+        // Clearing here would make a stray double click on the floor lose the warehouse the player is
+        // building out of.
         return;
     }
     selected_cell_ = cell;
