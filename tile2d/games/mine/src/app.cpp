@@ -876,8 +876,11 @@ void MineApp::draw_content_screen() {
 void MineApp::set_status(std::string_view text, bool error) {
     status_ = text;
     status_is_error_ = error;
-    if (error) T2D_WARN("sandbox: {}", status_);
-    else T2D_INFO("sandbox: {}", status_);
+    // The line the player sees has no prefix; the log line says which screen it came from, because the
+    // same status line serves the sandbox and the world view (docs/GAME_DESIGN.md sections 1.36, 7.14).
+    const char* where = screen_ == Screen::World ? "world" : "sandbox";
+    if (error) T2D_WARN("{}: {}", where, status_);
+    else T2D_INFO("{}: {}", where, status_);
 }
 
 std::string MineApp::cell_text(GridPos pos) const {
@@ -1503,11 +1506,17 @@ void MineApp::handle_world_input(f32 delta_seconds) {
             // The sidebar is over the map, so it is offered the click first: a click that landed on it is the
         // panel's, not the map's (docs/GAME_DESIGN.md section 1.36).
         if (sidebar_click(t2d::Vec2{input.mouse_x(), input.mouse_y()})) return;
-        // A building picked in the sidebar and a click on the map: the building goes on the first free tile
-        // layer of that cell - above the floor, above the ore in the ground - when the layer says it may
-        // stand there, and the reason it may not is logged either way (docs/GAME_DESIGN.md sections 1.34,
-        // 1.36). The pointer does one thing at a time: this click is the placement, not the corner panel.
-        if (const BuildEntry* picked = sidebar_.selected(); picked != nullptr) {
+        // **One gesture, one thing.** The double click is asked about **once**, here, and its answer is used
+        // by both the placement below and the selection further down: the second press of a double click is
+        // the **selection's**, never the placement's. Asking twice would make one press count as two, and a
+        // player who wants to put the warehouse down would find every click trying to build instead - which
+        // is exactly what "I cannot build another one and I cannot deselect the warehouse" was.
+        const bool double_clicked = double_click_.press(cell);
+        // A building picked in the sidebar and a **single** click on the map: the building goes on the first
+        // free tile layer of that cell - above the floor, above the ore in the ground - when the layer says
+        // it may stand there, and the reason it may not is logged either way (docs/GAME_DESIGN.md sections
+        // 1.34, 1.36). The pointer does one thing at a time: this click is the placement, not the panel.
+        if (const BuildEntry* picked = sidebar_.selected(); picked != nullptr && !double_clicked) {
             MineLayer& layer = world_.layer();
             PlacedContent where;
             where.kind = picked->kind;
@@ -1517,6 +1526,7 @@ void MineApp::handle_world_input(f32 delta_seconds) {
             std::string why;
             if (!layer.can_place(where, &why)) {
                 T2D_INFO("world: {} cannot stand there: {}", picked->name, why);
+                set_status(format_localized(locale_.text("world.build.refused"), picked->name, why), true);
             } else {
                 // The price comes out of the **selected warehouse**: the player builds with what is in the box
                 // they picked, and a plot with no warehouse picked (or not enough in it) is not built at all
@@ -1526,8 +1536,10 @@ void MineApp::handle_world_input(f32 delta_seconds) {
                 std::string short_of;
                 if (stock == nullptr) {
                     T2D_INFO("world: {} costs {} and no warehouse is selected", picked->name, picked->materials.size());
+                    set_status(format_localized(locale_.text("world.build.no_stock"), picked->name), true);
                 } else if (!can_afford(*stock, registry_, picked->materials, &short_of)) {
                     T2D_INFO("world: {} cannot be paid for: {}", picked->name, short_of);
+                    set_status(format_localized(locale_.text("world.build.short"), picked->name, short_of), true);
                 } else if (types::SceneTile* plot = layer.place(registry_, content_.report().definitions, where,
                                                                nullptr);
                            plot != nullptr) {
@@ -1538,10 +1550,9 @@ void MineApp::handle_world_input(f32 delta_seconds) {
                     sidebar_.clear_selection();
                 }
             }
-            double_click_.reset();
             return;
         }
-        if (double_click_.press(cell)) {
+        if (double_clicked) {
                 // The **second** press of a double click selects instead of clicking. One gesture then
                 // does one of each: the first press was the click (the plot's panel at its corner,
                 // types/click.h), and this one says "show me what it is holding", at the top of the
