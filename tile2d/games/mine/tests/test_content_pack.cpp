@@ -1,5 +1,6 @@
 // Content packs: a directory per pack, an optional header that says who it is, and a pipeline that
 // puts the game's own content, the packs and the mods into one registry in a defined order.
+#include <mine/types/tile_definition.h>
 #include <mine/content_pack.h>
 #include <mine/content_loader.h>
 #include <mine/registry.h>
@@ -468,14 +469,21 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     const ContentPipelineReport& report = pipeline.load(registry);
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
     T2D_CHECK_EQ(report.base_packs, 1u);
-    // One picture per content entry, in the order the pack's files are read - which is sorted, so the
-    // floor comes first, then the item, then the ore, then the warehouse.
-    T2D_REQUIRE(report.images.size() == 4u);
+    // One picture per content entry, in the order the pack's files are read - which is sorted, so
+    // drills.ecfg comes first, then floors, items, ores and warehouses. A drill has **two** pictures
+    // (docs/GAME_DESIGN.md section 1.38), and they come out next to each other, base then top.
+    T2D_REQUIRE(report.images.size() == 6u);
     T2D_CHECK(report.images[0].ok);
-    T2D_CHECK_EQ(report.images[0].kind, ContentKind::Floor);
-    T2D_CHECK_EQ(report.images[0].content, std::string("dirt"));
-    T2D_CHECK(report.images[0].resolved.find("floor_dirt.png") != std::string::npos);
-    T2D_CHECK_EQ(report.base_images, 4u);
+    T2D_CHECK_EQ(report.images[0].kind, ContentKind::Drill);
+    T2D_CHECK_EQ(report.images[0].content, std::string("stone"));
+    T2D_CHECK_EQ(report.images[0].part, std::string());   // the base is the entry's own picture
+    T2D_CHECK(report.images[0].resolved.find("drill_stone_drill_base.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[1].part, std::string("top"));   // and the top is the second
+    T2D_CHECK(report.images[1].resolved.find("drill_stone_drill_top.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[2].kind, ContentKind::Floor);
+    T2D_CHECK_EQ(report.images[2].content, std::string("dirt"));
+    T2D_CHECK(report.images[2].resolved.find("floor_dirt.png") != std::string::npos);
+    T2D_CHECK_EQ(report.base_images, 6u);
     T2D_CHECK_EQ(registry.count(ContentKind::Floor), 1u);
     T2D_CHECK(registry.find(ContentKind::Floor, "dirt") != kNoContent);
     // The item the designer asked for (docs/GAME_DESIGN.md section 1.23), with the picture the designer
@@ -483,9 +491,9 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     // shown needs more than a name - and it is **not** a plot: the lookup by kind cannot hand it out.
     T2D_CHECK_EQ(registry.count(ContentKind::Item), 1u);
     T2D_CHECK(registry.find(ContentKind::Item, "stone") != kNoContent);
-    T2D_CHECK_EQ(report.images[1].kind, ContentKind::Item);
-    T2D_CHECK_EQ(report.images[1].content, std::string("stone"));
-    T2D_CHECK(report.images[1].resolved.find("item_stone.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[3].kind, ContentKind::Item);
+    T2D_CHECK_EQ(report.images[3].content, std::string("stone"));
+    T2D_CHECK(report.images[3].resolved.find("item_stone.png") != std::string::npos);
     T2D_REQUIRE(report.definitions.item_count() == 1u);
     T2D_REQUIRE(report.definitions.find_item("stone") != nullptr);
     T2D_CHECK_EQ(report.definitions.find_item("stone")->image, std::string("art/item_stone.png"));
@@ -495,20 +503,32 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     // item share the name "stone" and that is not a clash: ids are handed out per kind.
     T2D_CHECK_EQ(registry.count(ContentKind::Ore), 1u);
     T2D_CHECK(registry.find(ContentKind::Ore, "stone") != kNoContent);
-    T2D_CHECK_EQ(report.images[2].kind, ContentKind::Ore);
-    T2D_CHECK_EQ(report.images[2].content, std::string("stone"));
-    T2D_CHECK(report.images[2].resolved.find("ore_stone.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[4].kind, ContentKind::Ore);
+    T2D_CHECK_EQ(report.images[4].content, std::string("stone"));
+    T2D_CHECK(report.images[4].resolved.find("ore_stone.png") != std::string::npos);
     // The warehouse the designer asked for (docs/GAME_DESIGN.md section 1.28), with the picture the
     // designer put into the pack themselves: it is a plot - scenery that holds things - and the one
     // number its entry carries is its capacity.
     T2D_CHECK_EQ(registry.count(ContentKind::Warehouse), 1u);
     T2D_CHECK(registry.find(ContentKind::Warehouse, "stone") != kNoContent);
-    T2D_CHECK_EQ(report.images[3].kind, ContentKind::Warehouse);
-    T2D_CHECK_EQ(report.images[3].content, std::string("stone"));
-    T2D_CHECK(report.images[3].resolved.find("capacity_stone_warehouse.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[5].kind, ContentKind::Warehouse);
+    T2D_CHECK_EQ(report.images[5].content, std::string("stone"));
+    T2D_CHECK(report.images[5].resolved.find("capacity_stone_warehouse.png") != std::string::npos);
     T2D_REQUIRE(report.definitions.find_tile(ContentKind::Warehouse, "stone") != nullptr);
     T2D_CHECK_EQ(report.definitions.find_tile(ContentKind::Warehouse, "stone")->capacity, 100u);
-    T2D_CHECK_EQ(report.definitions.size(), 3u);   // three plots: the floor, the ore and the warehouse
+    // The drill the designer asked for ("创建石头钻头，挖掘能力为1,材料10石头"): digging power 1, a base
+    // and a top, and what it costs to build (docs/GAME_DESIGN.md sections 1.34, 1.38).
+    T2D_CHECK_EQ(registry.count(ContentKind::Drill), 1u);
+    T2D_REQUIRE(report.definitions.find_tile(ContentKind::Drill, "stone") != nullptr);
+    const types::TileDefinition& drill = *report.definitions.find_tile(ContentKind::Drill, "stone");
+    T2D_CHECK_EQ(drill.dig_power, 1.0f);
+    T2D_CHECK_EQ(drill.image, std::string("art/drill_stone_drill_base.png"));
+    T2D_CHECK_EQ(drill.top_image, std::string("art/drill_stone_drill_top.png"));
+    T2D_CHECK(drill.building.category == types::BuildingCategory::Extraction);
+    T2D_REQUIRE(drill.building.materials.size() == 1u);
+    T2D_CHECK_EQ(drill.building.materials[0].name, std::string("stone"));
+    T2D_CHECK_EQ(drill.building.materials[0].count, 10);
+    T2D_CHECK_EQ(report.definitions.size(), 4u);   // four plots: the floor, the ore, the warehouse, the drill
     // And it ships the story's **first layer**: how big it is, what its floor is made of, what is
     // scattered on it and how much. That is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8,
     // 7.10); what the engine owns is the format, and what this pins is the data as written.

@@ -1,0 +1,18 @@
+# 本体内容 —— 钻头（docs/GAME_DESIGN.md §1.26、§1.34、§1.38）。
+#
+# 钻头用 drill:: 表声明：它是**实体地块**——占着它被放下的那一格，按节奏跑。引擎为它读的字段有：
+# dig_power（挖掘能力：挖穿矿物的快慢，矿石的 hardness 除以它就是一次掉落的间隔）、image（**底座**）、
+# top_image（**可以旋转的顶部**，画在底座之上）、spin（顶部每多少秒转一圈）、spin_origin（顶部绕**贴图的**
+# 哪一点转，坐标是贴图自己的 (0,0) 左下到 (1,1) 右上，不写就是正中），以及 building::（造价、建造时间、
+# 建筑分类——分类决定它在建造栏的哪一列）。
+#
+# 贴图 art/drill_stone_drill_base.png 与 art/drill_stone_drill_top.png 是设计者放进本体包的图。
+
+drill::
+    stone::
+        image:"art/drill_stone_drill_base.png"
+        top_image:"art/drill_stone_drill_top.png"
+        dig_power:1
+        building::
+            materials:["stone",10]
+            category:"extraction"
