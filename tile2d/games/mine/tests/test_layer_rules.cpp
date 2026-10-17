@@ -1138,7 +1138,8 @@ T2D_TEST(the_games_own_story_layer_is_the_first_one_and_the_fixture_follows_it) 
     T2D_CHECK_EQ(report.layers.at(0)->name, std::string("entrance"));
     T2D_CHECK_EQ(report.layers.at(0)->width, 100u);
     T2D_CHECK_EQ(report.layers.at(0)->height, 100u);
-    T2D_CHECK_EQ(report.layers.at(0)->tile_layers, 2);
+    // Three tile layers: the floor, the ore in the ground, and the buildings on top of both.
+    T2D_CHECK_EQ(report.layers.at(0)->tile_layers, 3);
     T2D_REQUIRE(report.layers.at(1) != nullptr);
     T2D_CHECK_EQ(report.layers.at(1)->name, std::string("fixture_shallow"));
     T2D_CHECK_EQ(report.layers.at(1)->width, 48u);
@@ -1156,7 +1157,15 @@ T2D_TEST(the_games_own_story_layer_is_the_first_one_and_the_fixture_follows_it) 
     T2D_CHECK_MSG(world.build_report().clean(), "the build refused {} placement(s)",
                   world.build_report().refused);
     const std::vector<GridPos> stone = ore_cells(first);
-    T2D_CHECK_EQ(first.plot_count(), 10000u + stone.size());
+    // The floor, the ore, and the one block the designer placed: a stone warehouse in the middle of the
+    // map (content/layers.ecfg), on tile layer 2 - the layer for buildings, above the floor (0) and above
+    // the ore in the ground (1) - holding the ten stone it starts with.
+    T2D_CHECK_EQ(first.plot_count(), 10000u + stone.size() + 1u);
+    const SceneTile* building = first.plot_at(2, GridPos{50, 50});
+    T2D_REQUIRE(building != nullptr);
+    T2D_REQUIRE(building->container() != nullptr);
+    T2D_CHECK_EQ(building->container()->total(), 10u);
+    T2D_CHECK(first.plot_at(0, GridPos{50, 50}) != nullptr);   // the floor is still under it
     T2D_CHECK_GE(stone.size(), 20u);
     T2D_CHECK(stone.size() <= 35u);
     for (const GridPos cell : stone) {

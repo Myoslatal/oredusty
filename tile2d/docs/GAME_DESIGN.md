@@ -1319,6 +1319,16 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
 
 ![place_block 放下的仓库，装着一百块石头：面板上是真的 100 / 100](../games/mine/docs/images/world_place_block_en.png)
 
+* **设计者随后给了第一层的内容**："设置故事模式第一层在地图中间放置包含10石头的石头仓库"——`games/mine/content/layers.ecfg`
+  的 `entrance` 里因此多了一段 `place_block`：`kind:"warehouse" content:"stone" layer:2 x:50 y:50`，
+  `subobject:: container:: items:["stone",10]`。**中间**取的是 100×100 的第 50 列第 50 行（0..99 的中点在 49 与 50
+  之间，取右边那一格），放在**瓦片层 2**——设计者随后纠正："仓库作为一个建筑应该在地板层之上"，所以这一层从
+  也不会落在它身上。实测：日志 `world: layer 0 is 100x100 with 2 tile layer(s): 10021 plot(s)`（10000 块地板 +
+  20 块矿石 + **1 座仓库**，`3 TILE LAYER(S)`），HUD 同步；双击地图正中那一格，面板写着 `STONE WAREHOUSE   10 / 100` 与
+  `[石头贴图] STONE   x10`。
+
+![故事模式第一层：地图正中一座装着 10 块石头的石头仓库](../games/mine/docs/images/world_story_first_layer_en.png)
+
 ### M1 验收标准（已满足）
 
 1. 本文档存在，且代码中**没有任何预设的游戏内容**（资源/结构/配方/建筑清单均无硬编码）。
@@ -1548,7 +1558,9 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
   物品名字在世界建层时才对注册表解析：查不到、容器装不下、格子在地图外、瓦片层不存在，都在构建报告里成句说明
   （`LayerBuildReport::refuse`），而不是让地图悄悄少一块。实测：一个 20×12 的层 240 块地板 + 1 块放上去的仓库
   （`241 plot(s)`，0 错误），双击它显示 `STONE WAREHOUSE   100 / 100` + `STONE   x100`。`test_layer_rules` 23 →
-  **25 用例 / 807 → 828 断言**、`test_world` 13 → **15 用例 / 146 → 153 断言**；套件 **31 个测试**全绿 |
+  **25 用例 / 807 → 828 断言**、`test_world` 13 → **15 用例 / 146 → 153 断言**；套件 **31 个测试**全绿。设计者随后
+  给了第一层的内容：地图正中（`x:50 y:50`）一座装着 10 块石头的石头仓库，落在 `content/layers.ecfg` 里；设计者
+  随后纠正"仓库作为一个建筑应该在地板层之上"，于是这一层改成三层瓦片层（0 地板、1 矿、2 建筑），仓库在 2 上 |
 | M2.18 | **`.ecfg` 的 `__include: #<路径>`**（设计者新要求，§1.32）：一行 `__include` 被那个文件的内容**替换**
   掉，然后才解析——展开在解析之前，所以 include 出来的内容与写在那儿完全一样。路径相对**写它的那个文件**
   （与美术资源同一条规则），被包含的文件顶格写、落进来时缩进到 `__include` 那一行的缩进，于是同一份片段

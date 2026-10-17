@@ -1,22 +1,37 @@
-# 故事模式的层 —— 设计者的数据（docs/GAME_DESIGN.md §1.21、§7.3、§7.8）。
+# 故事模式的层 —— 设计者的数据（docs/GAME_DESIGN.md §1.21、§1.33、§7.3、§7.8）。
 #
 # 层的顺序就是**挖下去的顺序**：写在前面的就是第 1 层（玩家看到的"层1/N"）。size:: 说一层多大，
-# floor:: 是地板创建器（full_flash 把每个格子设成给定的地板），scatter:: 是散点生成器（在指定的瓦片层
-# 上按密度撒指定的东西，min/max 夹住数量，floor: 限制它只落在某种地板上）。
+# floor:: 是地板创建器（full_flash 把每个格子设成给定的地板），place_block:: 是放置（在说好的那一格
+# 放一块指定的东西，subobject:: 说它一开始装着什么），scatter:: 是散点生成器（在指定的瓦片层上按密度
+# 撒指定的东西，min/max 夹住数量，floor: 限制它只落在某种地板上）。
 #
-# 地板与矿物都是本体自己的内容（content/floors.ecfg、content/ores.ecfg）：这一层只说"多大、铺什么、
-# 撒什么、撒多少"。数量是规则：每个可用格子以 density 为概率被选中，再夹到 [min, max]——所以石头
-# 一定在 20 到 35 块之间，位置由这一层的骰子决定（同一个种子给同一张图）。
+# 地板、矿物与仓库都是本体自己的内容（content/floors.ecfg、content/ores.ecfg、content/warehouses.ecfg）：
+# 这一层只说"多大、铺什么、放什么、撒什么、撒多少"。数量是规则：每个可用格子以 density 为概率被选中，
+# 再夹到 [min, max]——所以石头一定在 20 到 35 块之间，位置由这一层的骰子决定（同一个种子给同一张图）。
+#
+# 瓦片层是**从下往上**的：0 是地板，1 是长在地里的矿，2 是**建筑**。仓库是建筑，所以它在 2 上——
+# 在地板之上、也在矿之上，站得比两者都高。第 1 层正中间（100x100 的第 50 列第 50 行）有一座石头仓库，
+# 一开始装着 10 块石头：入口处就有一个能存东西的地方，玩家不用先自己攒一个。
 
 layer::
     entrance::
         size::
             width:100
             height:100
-            tile_layers:2
+            tile_layers:3
         floor::
             layer:0
             full_flash:"dirt"
+        place_block::
+            start::
+                kind:"warehouse"
+                content:"stone"
+                layer:2
+                x:50
+                y:50
+                subobject::
+                    container::
+                        items:["stone",10]
         scatter::
             stone::
                 kind:"ore"

@@ -72,14 +72,14 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     15 cases / 211 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          15 cases / 153 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index, placed blocks
-    games/mine/tests/test_layer_rules    25 cases / 828 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
+    games/mine/tests/test_layer_rules    25 cases / 830 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
     games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
     games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_sandbox        28 cases / 719 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   18 cases / 261 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
+    games/mine/tests/test_content_pack   18 cases / 265 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included

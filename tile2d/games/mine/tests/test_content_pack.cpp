@@ -518,7 +518,13 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_EQ(first.name, std::string("entrance"));
     T2D_CHECK_EQ(first.width, 100u);
     T2D_CHECK_EQ(first.height, 100u);
-    T2D_CHECK_EQ(first.tile_layers, 2);
+    T2D_CHECK_EQ(first.tile_layers, 3);   // floor, ore in the ground, buildings on top of both
+    T2D_REQUIRE(first.blocks.size() == 1u);   // the warehouse the layer places in the middle
+    T2D_CHECK_EQ(first.blocks[0].at.x, 50);
+    T2D_CHECK_EQ(first.blocks[0].at.y, 50);
+    T2D_CHECK_EQ(first.blocks[0].layer, 2);
+    T2D_REQUIRE(first.blocks[0].holds.size() == 1u);
+    T2D_CHECK_EQ(first.blocks[0].holds[0].count, 10);
     T2D_REQUIRE(first.floor.rules.size() == 1u);
     T2D_CHECK_EQ(first.floor.rules[0].kind, FloorRule::Kind::FullFlash);
     T2D_CHECK_EQ(first.floor.rules[0].floor, std::string("dirt"));
