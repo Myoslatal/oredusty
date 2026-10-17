@@ -39,7 +39,13 @@ constexpr t2d::Vec2 kThrowSides[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f},
 } // namespace
 
 Drill::Drill(ContentKind kind, ContentId id, i32 layer, GridPos anchor, i32 width, i32 height)
-    : EntityTile(kind, id, layer, anchor, width, height) {}
+    : EntityTile(kind, id, layer, anchor, width, height) {
+    // Its own dice, seeded from what it is and where it stands: the same map throws the same way every
+    // time it is built, and two drills of the same entry on one layer do not throw alike.
+    const u64 where = static_cast<u64>(static_cast<u32>(anchor.x)) << 32u |
+                      static_cast<u64>(static_cast<u32>(anchor.y));
+    rng_.seed(where ^ (static_cast<u64>(id) * 0x9E3779B97F4A7C15ull));
+}
 
 void Drill::set_job(DrillJob job) {
     job_ = std::move(job);
@@ -60,7 +66,12 @@ void Drill::on_update(f32 elapsed_seconds) {
 void Drill::throw_one() {
     MineLayer* layer = owner();
     if (layer == nullptr) return;
-    const t2d::Vec2 side = kThrowSides[thrown_ % 4u];
+    // **Any** of the four sides, not the next one round: the designer asked for a random direction, so a
+    // drill's drops spread over its neighbours instead of walking clockwise. The stream is the drill's own
+    // and is seeded from what it is and where it stands (drill.h), so the same map throws the same way
+    // every time it is built - the dice of a layer are reproducible (docs/GAME_DESIGN.md sections 1.21,
+    // 1.26), and a drill does not draw from the layer's stream, where its own ticks would move the map's.
+    const t2d::Vec2 side = kThrowSides[rng_.next_bounded(4)];
     // The middle of the neighbouring cell: one cell away from the drill's own middle, and kept on the
     // map when the drill stands at its edge.
     const t2d::Vec2 where{

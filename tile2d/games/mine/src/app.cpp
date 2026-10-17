@@ -2771,8 +2771,10 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             const ContentEntry* entry = registry_.find(entity->kind(), entity->id());
             if (entry == nullptr) continue;   // the content is gone: there is nothing to draw it with
             const t2d::Vec2 centre = camera.screen_of(entity->position());
-            const t2d::Aabb2 rect{t2d::Vec2{centre.x - cell * 0.5f, centre.y - cell * 0.5f},
-                                  t2d::Vec2{centre.x + cell * 0.5f, centre.y + cell * 0.5f}};
+            // A third of a cell across, still **centred on its position**: a drop is a small thing lying on
+            // the ground, not a tile - a tile-sized picture would hide the cell it is lying in.
+            const t2d::Aabb2 rect{t2d::Vec2{centre.x - cell / 6.0f, centre.y - cell / 6.0f},
+                                  t2d::Vec2{centre.x + cell / 6.0f, centre.y + cell / 6.0f}};
             const std::string key = image_key(entity->kind(), entry->name);
             if (content_textures_.find(key) == content_textures_.end()) {
                 // Content with no picture gets the colour its name derives, the way a plot without one

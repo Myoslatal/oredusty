@@ -144,22 +144,70 @@ T2D_TEST(a_drill_is_an_entity_plot_that_mines_what_is_under_it) {
     T2D_CHECK_EQ(first.kind(), ContentKind::Drop);
     T2D_CHECK_EQ(first.id(), rig.chunk);
     T2D_CHECK(first.draggable());   // what it throws out is a drop: the pointer can drag it (types/drop.h)
-    T2D_CHECK_NEAR(first.position().x, 6.5f, 1e-5f);   // the drill is at 5,5; the first side is +x
-    T2D_CHECK_NEAR(first.position().y, 5.5f, 1e-5f);
+    // It lands on **one of the four neighbours** - a cell away from the drill's own middle, in a direction
+    // the drill picked at random (the designer asked for a random direction; it used to walk clockwise).
+    const auto is_a_neighbour = [&](const t2d::Vec2& at) {
+        const t2d::Vec2 middle{5.5f, 5.5f};
+        const f32 dx = at.x - middle.x;
+        const f32 dy = at.y - middle.y;
+        return std::abs(std::abs(dx) + std::abs(dy) - 1.0f) < 1e-5f;   // one step along one axis
+    };
+    T2D_CHECK_MSG(is_a_neighbour(first.position()), "the first drop landed at {},{}",
+                  first.position().x, first.position().y);
     // And the layer's quadtree finds it where it landed.
-    T2D_CHECK_EQ(rig.layer.entities_within(t2d::Vec2{6.5f, 5.5f}, 0.25f).size(), 1u);
+    T2D_CHECK_EQ(rig.layer.entities_within(first.position(), 0.25f).size(), 1u);
 
-    // The sides turn, so a drill does not bury itself in one spot: the second drop goes to the next side.
-    T2D_CHECK_EQ(rig.layer.tick(2.0f), 1u);
-    T2D_REQUIRE(rig.layer.entity_count() == 2u);
-    T2D_CHECK_NEAR(rig.layer.entities()[1]->position().x, 5.5f, 1e-5f);
-    T2D_CHECK_NEAR(rig.layer.entities()[1]->position().y, 6.5f, 1e-5f);
+    // More turns, and the drops do **not** all go the same way: over a handful of throws every side comes
+    // up, which is what "the direction is random" looks like from the outside. The stream is the drill's
+    // own and seeded from what it is and where it stands, so this is the same sequence every run.
+    for (i32 turn = 0; turn < 8; ++turn) (void)rig.layer.tick(2.0f);
+    T2D_REQUIRE(rig.layer.entity_count() >= 9u);
+    bool went_right = false;
+    bool went_left = false;
+    bool went_up = false;
+    bool went_down = false;
+    for (const std::unique_ptr<Entity>& drop : rig.layer.entities()) {
+        const t2d::Vec2 at = drop->position();
+        if (at.x > 5.6f) went_right = true;
+        if (at.x < 5.4f) went_left = true;
+        if (at.y > 5.6f) went_down = true;
+        if (at.y < 5.4f) went_up = true;
+        T2D_CHECK(is_a_neighbour(at));
+    }
+    T2D_CHECK_MSG(went_right && went_left && went_up && went_down,
+                  "the drops only went {}: the direction is not random",
+                  std::format("right {} left {} down {} up {}", went_right, went_left, went_down, went_up));
 
     // A frame that swallowed three periods is worth three drops: a hitch must not change what the mine
     // produces (types/entity_tile.h), and the cadence hands over the whole span for exactly this.
+    const usize before = rig.layer.entity_count();
     T2D_CHECK_EQ(rig.layer.tick(6.0f), 1u);   // the drill takes its turn once, with six seconds in hand
-    T2D_CHECK_EQ(rig.layer.entity_count(), 5u);
-    T2D_CHECK_EQ(rig.drill->produced(), 5u);
+    T2D_CHECK_EQ(rig.layer.entity_count(), before + 3u);
+    T2D_CHECK_EQ(rig.drill->produced(), before + 3u);
+}
+
+T2D_TEST(the_same_drill_throws_the_same_way_every_time_it_is_built) {
+    // The dice are the drill's own, seeded from what it is and where it stands: two layers built from the
+    // same data throw alike, so a map is reproducible even though the direction is random (section 1.21).
+    const auto throws_of = [] {
+        Rig rig(2.0f, 1.0f, "chunk");
+        std::vector<t2d::Vec2> where;
+        for (i32 turn = 0; turn < 6; ++turn) (void)rig.layer.tick(2.0f);
+        for (const std::unique_ptr<Entity>& drop : rig.layer.entities()) where.push_back(drop->position());
+        return where;
+    };
+    const std::vector<t2d::Vec2> first = throws_of();
+    const std::vector<t2d::Vec2> second = throws_of();
+    T2D_REQUIRE(first.size() == 6u);
+    T2D_REQUIRE(second.size() == first.size());
+    for (usize index = 0; index < first.size(); ++index) {
+        T2D_CHECK_NEAR(first[index].x, second[index].x, 1e-5f);
+        T2D_CHECK_NEAR(first[index].y, second[index].y, 1e-5f);
+    }
+    // And they are not all the same direction, or the seed would be doing nothing at all.
+    bool differs = false;
+    for (const t2d::Vec2& at : first) differs = differs || at.x != first.front().x || at.y != first.front().y;
+    T2D_CHECK(differs);
 }
 
 T2D_TEST(a_drill_with_nothing_to_mine_is_reported_and_idle) {

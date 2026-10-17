@@ -75,7 +75,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_layer_rules    25 cases / 830 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
-    games/mine/tests/test_drills          6 cases /  72 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
+    games/mine/tests/test_drills          7 cases /  91 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
     games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
     games/mine/tests/test_double_click    8 cases /  28 checks
     games/mine/tests/test_build_sidebar  2 cases /  43 checks  the build sidebar: categories, picking, where its parts are, the pages  two presses on one cell inside a window: the gesture a selection is made of
@@ -506,7 +506,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 927 sections, 2 923 symbols, 11 273 relocations (release)
+        mine.codetab         the game: 927 sections, 2 923 symbols, 11 276 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings

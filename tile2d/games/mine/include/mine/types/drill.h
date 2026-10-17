@@ -16,6 +16,8 @@
 
 #include <mine/types/entity_tile.h>
 
+#include <t2d/core/rng.h>
+
 #include <string>
 
 namespace mine::types {
@@ -80,6 +82,10 @@ private:
     f32 dig_power_ = 0.0f;
     DrillJob job_{};
     usize thrown_ = 0;
+    /// The drill's own dice: which side a drop goes out to (drill.cpp). Seeded from its id and its cell in
+    /// the constructor, so a layer built from the same seed throws the same way - and so a drill's ticks
+    /// never move the layer's own stream, which the map's dice come from.
+    t2d::Rng rng_;
 };
 
 } // namespace mine::types
