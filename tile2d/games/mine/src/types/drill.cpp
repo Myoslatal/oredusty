@@ -34,7 +34,7 @@ namespace {
 
 /// The sides a drill throws to, in the order it uses them: right, down, left, up. Fixed, so the same
 /// mine with the same clock produces the same picture twice.
-constexpr t2d::Vec2 kThrowSides[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+
 
 } // namespace
 
@@ -66,17 +66,24 @@ void Drill::on_update(f32 elapsed_seconds) {
 void Drill::throw_one() {
     MineLayer* layer = owner();
     if (layer == nullptr) return;
-    // **Any** of the four sides, not the next one round: the designer asked for a random direction, so a
-    // drill's drops spread over its neighbours instead of walking clockwise. The stream is the drill's own
-    // and is seeded from what it is and where it stands (drill.h), so the same map throws the same way
-    // every time it is built - the dice of a layer are reproducible (docs/GAME_DESIGN.md sections 1.21,
-    // 1.26), and a drill does not draw from the layer's stream, where its own ticks would move the map's.
-    const t2d::Vec2 side = kThrowSides[rng_.next_bounded(4)];
-    // The middle of the neighbouring cell: one cell away from the drill's own middle, and kept on the
-    // map when the drill stands at its edge.
+    // **Any** direction at all, not the four sides and not the next one round: the designer asked for a
+    // random direction and then made it exact - 360 degrees - so a drop goes out at a random **angle**, one
+    // cell away from the drill's middle, landing anywhere on the circle of neighbours rather than walking
+    // clockwise. The distance is still one cell: what was asked to be random is the direction.
+    //
+    // The stream is the drill's own and is seeded from what it is and where it stands (drill.h), so the same
+    // map throws the same way every time it is built - the dice of a layer are reproducible
+    // (docs/GAME_DESIGN.md sections 1.21, 1.26) - and a drill does not draw from the layer's stream, where
+    // its own ticks would move the map's dice.
+    constexpr f32 kTau = 6.283185307179586f;
+    const f32 angle = kTau * rng_.next_float();
+    // Kept on the map when the drill stands at its edge: a drop is a thing lying on the ground, and there
+    // is no ground outside the layer.
     const t2d::Vec2 where{
-        t2d::clamp(static_cast<f32>(anchor().x) + 0.5f + side.x, 0.0f, static_cast<f32>(layer->width())),
-        t2d::clamp(static_cast<f32>(anchor().y) + 0.5f + side.y, 0.0f, static_cast<f32>(layer->height())),
+        t2d::clamp(static_cast<f32>(anchor().x) + 0.5f + std::cos(angle), 0.0f,
+                   static_cast<f32>(layer->width())),
+        t2d::clamp(static_cast<f32>(anchor().y) + 0.5f + std::sin(angle), 0.0f,
+                   static_cast<f32>(layer->height())),
     };
     layer->adopt(std::make_unique<Drop>(ContentKind::Drop, job_.drop_id, where));
     ++thrown_;

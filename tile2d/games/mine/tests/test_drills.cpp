@@ -144,39 +144,36 @@ T2D_TEST(a_drill_is_an_entity_plot_that_mines_what_is_under_it) {
     T2D_CHECK_EQ(first.kind(), ContentKind::Drop);
     T2D_CHECK_EQ(first.id(), rig.chunk);
     T2D_CHECK(first.draggable());   // what it throws out is a drop: the pointer can drag it (types/drop.h)
-    // It lands on **one of the four neighbours** - a cell away from the drill's own middle, in a direction
-    // the drill picked at random (the designer asked for a random direction; it used to walk clockwise).
-    const auto is_a_neighbour = [&](const t2d::Vec2& at) {
-        const t2d::Vec2 middle{5.5f, 5.5f};
-        const f32 dx = at.x - middle.x;
-        const f32 dy = at.y - middle.y;
-        return std::abs(std::abs(dx) + std::abs(dy) - 1.0f) < 1e-5f;   // one step along one axis
+    // It lands **one cell away at a random angle**: anywhere on the circle around the drill's middle, not
+    // on one of four sides (the designer asked for a random direction, and then for 360 degrees of it).
+    const auto is_on_the_ring = [&](const t2d::Vec2& at) {
+        const f32 dx = at.x - 5.5f;
+        const f32 dy = at.y - 5.5f;
+        return std::abs(std::sqrt(dx * dx + dy * dy) - 1.0f) < 1e-4f;
     };
-    T2D_CHECK_MSG(is_a_neighbour(first.position()), "the first drop landed at {},{}",
+    T2D_CHECK_MSG(is_on_the_ring(first.position()), "the first drop landed at {},{}",
                   first.position().x, first.position().y);
     // And the layer's quadtree finds it where it landed.
     T2D_CHECK_EQ(rig.layer.entities_within(first.position(), 0.25f).size(), 1u);
 
-    // More turns, and the drops do **not** all go the same way: over a handful of throws every side comes
-    // up, which is what "the direction is random" looks like from the outside. The stream is the drill's
-    // own and seeded from what it is and where it stands, so this is the same sequence every run.
-    for (i32 turn = 0; turn < 8; ++turn) (void)rig.layer.tick(2.0f);
-    T2D_REQUIRE(rig.layer.entity_count() >= 9u);
-    bool went_right = false;
-    bool went_left = false;
-    bool went_up = false;
-    bool went_down = false;
+    // More turns, and the drops go **every which way**: with an angle that is a real number, a handful of
+    // throws land on a handful of different angles - which is what 360 degrees of randomness looks like
+    // from the outside, and what four sides could never do. The stream is the drill's own and seeded from
+    // what it is and where it stands, so this is the same sequence every run.
+    for (i32 turn = 0; turn < 15; ++turn) (void)rig.layer.tick(2.0f);
+    T2D_REQUIRE(rig.layer.entity_count() >= 16u);
+    std::vector<f32> angles;
     for (const std::unique_ptr<Entity>& drop : rig.layer.entities()) {
         const t2d::Vec2 at = drop->position();
-        if (at.x > 5.6f) went_right = true;
-        if (at.x < 5.4f) went_left = true;
-        if (at.y > 5.6f) went_down = true;
-        if (at.y < 5.4f) went_up = true;
-        T2D_CHECK(is_a_neighbour(at));
+        T2D_CHECK(is_on_the_ring(at));
+        const f32 angle = std::atan2(at.y - 5.5f, at.x - 5.5f);
+        bool seen = false;
+        for (const f32 other : angles) seen = seen || std::abs(other - angle) < 1e-4f;
+        if (!seen) angles.push_back(angle);
     }
-    T2D_CHECK_MSG(went_right && went_left && went_up && went_down,
-                  "the drops only went {}: the direction is not random",
-                  std::format("right {} left {} down {} up {}", went_right, went_left, went_down, went_up));
+    // Sixteen throws that only ever used four directions would give at most four angles; a random angle
+    // gives sixteen different ones (two of them landing on the same float is not going to happen).
+    T2D_CHECK_MSG(angles.size() >= 12u, "the 16 drops only took {} different directions", angles.size());
 
     // A frame that swallowed three periods is worth three drops: a hitch must not change what the mine
     // produces (types/entity_tile.h), and the cadence hands over the whole span for exactly this.
