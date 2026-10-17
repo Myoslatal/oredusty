@@ -386,6 +386,7 @@ private:
     /// Draws it and answers a click on it. Returns true when the click was the sidebar's, so the map does
     /// not also act on it.
     void draw_build_sidebar();
+    void draw_sidebar_button(const BuildSidebar::Layout& layout);
     [[nodiscard]] bool sidebar_click(t2d::Vec2 point);
     std::unique_ptr<types::SceneTile> playtest_selected_{};
     /// A double click in the playtest selects a plot that holds a container, and its contents show at the

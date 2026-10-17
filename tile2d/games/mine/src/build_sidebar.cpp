@@ -60,9 +60,13 @@ BuildSidebar::Layout BuildSidebar::layout(t2d::Vec2 screen, t2d::f32 unit) const
     // opens it again. The panel itself is only laid out when it is open.
     const t2d::f32 unit_padding = 6.0f * unit;
     const t2d::f32 button = 22.0f * unit;
-    out.toggle = t2d::Aabb2{t2d::Vec2{screen.x - button, (screen.y - button) * 0.5f},
-                            t2d::Vec2{screen.x, (screen.y + button) * 0.5f}};
-    if (!open_) return out;
+    if (!open_) {
+        // Closed: a tab flush against the right edge of the screen, vertically centred - the only part of
+        // the sidebar that is there, and the way back in.
+        out.toggle = t2d::Aabb2{t2d::Vec2{screen.x - button, (screen.y - button) * 0.5f},
+                                t2d::Vec2{screen.x, (screen.y + button) * 0.5f}};
+        return out;
+    }
     out.visible = true;
     // A **fixed** vertical rectangle, **flush against the right edge** of the screen and vertically centred:
     // its size does not depend on how much is in it (docs/GAME_DESIGN.md section 1.36). What does not fit
@@ -72,10 +76,14 @@ BuildSidebar::Layout BuildSidebar::layout(t2d::Vec2 screen, t2d::f32 unit) const
     const t2d::f32 cell = 34.0f * unit;
     const t2d::f32 line = 18.0f * unit;
     const t2d::f32 width = category_width + static_cast<t2d::f32>(kColumns) * cell + padding * 3.0f;
-    const t2d::f32 height = padding * 2.0f + line * 2.0f + static_cast<t2d::f32>(kRows) * cell;
+    const t2d::f32 height = padding * 2.0f + line * 3.5f + static_cast<t2d::f32>(kRows) * cell;
     const t2d::f32 top = std::max(0.0f, (screen.y - height) * 0.5f);
     out.panel = t2d::Aabb2{t2d::Vec2{screen.x - width, top}, t2d::Vec2{screen.x, top + height}};
-    const t2d::f32 body_top = out.panel.min.y + padding;
+    // Open: the button is the first thing on the panel's **left**, above the categories - a close button
+    // belongs at the near edge of the thing it closes, not at the far one (docs/GAME_DESIGN.md 1.36).
+    out.toggle = t2d::Aabb2{t2d::Vec2{out.panel.min.x + padding, out.panel.min.y + padding},
+                            t2d::Vec2{out.panel.min.x + padding + button, out.panel.min.y + padding + line}};
+    const t2d::f32 body_top = out.panel.min.y + padding + line * 1.5f;
     for (usize index = 0; index < categories_.size(); ++index) {
         const t2d::f32 y = body_top + static_cast<t2d::f32>(index) * line;
         out.categories.push_back(t2d::Aabb2{t2d::Vec2{out.panel.min.x + padding, y},

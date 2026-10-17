@@ -2295,17 +2295,22 @@ bool MineApp::sidebar_click(t2d::Vec2 point) {
     return true;   // inside the panel: the map does not get this click either
 }
 
-void MineApp::draw_build_sidebar() {
-    if (!world_.has_layer()) return;
-    const BuildSidebar::Layout layout = sidebar_.layout(
-        t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
-    // The open/close button, always: a small tab against the right edge with an arrow pointing the way the
-    // sidebar would go (section 1.36).
+/// The open/close button: a small box with an arrow pointing the way the sidebar would go (section 1.36).
+void MineApp::draw_sidebar_button(const BuildSidebar::Layout& layout) {
     batch_->draw_rect(layout.toggle, kPalette.panel_fill);
     batch_->draw_rect_outline(layout.toggle, 2.0f, kPalette.panel_edge);
     draw_fitted(layout.toggle.min.x + 6.0f * unit_, layout.toggle.min.y + 3.0f * unit_, body_px_, kPalette.accent,
                 sidebar_.open() ? std::string(">") : std::string("<"), layout.toggle.width() - 8.0f * unit_);
-    if (!layout.visible) return;
+}
+
+void MineApp::draw_build_sidebar() {
+    if (!world_.has_layer()) return;
+    const BuildSidebar::Layout layout = sidebar_.layout(
+        t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    if (!layout.visible) {
+        draw_sidebar_button(layout);
+        return;
+    }
     batch_->draw_rect(layout.panel, kPalette.panel_fill);
     batch_->draw_rect_outline(layout.panel, 2.0f, kPalette.panel_edge);
     // The categories down the left, the picked one in the accent colour; the buildings of the picked one to
@@ -2350,6 +2355,7 @@ void MineApp::draw_build_sidebar() {
         draw_fitted(layout.page_label.min.x, layout.page_label.min.y, body_px_, kPalette.text_dim,
                     std::format("{} / {}", sidebar_.page() + 1, sidebar_.page_count()), layout.page_label.width());
     }
+    draw_sidebar_button(layout);
     draw_fitted(layout.details.min.x, layout.details.min.y + line_for(body_px_), body_px_, kPalette.text_dim,
                 materials, layout.details.width());
 }
