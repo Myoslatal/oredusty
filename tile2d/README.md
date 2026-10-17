@@ -77,7 +77,8 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
     games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
-    games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
+    games/mine/tests/test_double_click    8 cases /  28 checks
+    games/mine/tests/test_build_sidebar  3 cases /  25 checks  the build sidebar: categories, what each holds, picking, and where its parts are  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_sandbox        28 cases / 719 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   18 cases / 265 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -500,7 +501,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 870 sections, 2 733 symbols, 10 613 relocations (release)
+        mine.codetab         the game: 904 sections, 2 838 symbols, 11 007 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
