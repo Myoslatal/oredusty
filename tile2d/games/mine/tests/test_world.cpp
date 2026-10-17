@@ -4,6 +4,7 @@
 // The content in here is a **test double**: names like "wall" or "dirt" are the fixture's, not the
 // game's - the game names no content at all (docs/GAME_DESIGN.md section 7).
 #include <mine/view_limits.h>
+#include <mine/build_animation.h>
 #include <mine/build_cost.h>
 #include <mine/world.h>
 
@@ -616,6 +617,74 @@ T2D_TEST(a_building_is_paid_for_out_of_the_warehouse_that_is_selected) {
     // A price nobody has is a no, not a crash: an item the registry does not know counts as none of it.
     const std::vector<ContentStack> unknown{{std::string("unobtainium"), 1}};
     T2D_CHECK_FALSE(can_afford(stock, content.registry, unknown, &missing));
+}
+
+
+T2D_TEST(the_sweep_of_a_build_is_the_models_to_answer_for) {
+    Fixture content;
+    content.add(ContentKind::Warehouse, "bin", /*random_reverse=*/false, /*capacity=*/4);
+    const ContentId bin = content.registry.find(ContentKind::Warehouse, "bin");
+    const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
+    T2D_REQUIRE(definition != nullptr);
+    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr);
+
+    BuildAnimation sweep;
+    T2D_CHECK(sweep.empty());
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 1.0f);   // nothing being built: everything is up
+    sweep.start(nullptr, 5.0f);
+    sweep.start(plot.get(), 0.0f);                       // an entry that says time:0 goes up at once
+    T2D_CHECK(sweep.empty());
+
+    sweep.start(plot.get(), 4.0f);
+    T2D_REQUIRE(sweep.size() == 1u);
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.0f);
+    sweep.start(plot.get(), 4.0f);                       // placing it twice does not build it twice
+    T2D_CHECK_EQ(sweep.size(), 1u);
+
+    sweep.advance(1.0f);
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.25f);
+    sweep.advance(1.0f);
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.5f);
+    sweep.advance(0.5f);
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.625f);
+    // A long frame does not overshoot: the last step lands exactly on done, and done is forgotten.
+    sweep.advance(10.0f);
+    T2D_CHECK(sweep.empty());
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 1.0f);
+
+    // Leaving the layer forgets the sweeps: those plots are not the ones on screen any more.
+    sweep.start(plot.get(), 4.0f);
+    sweep.clear();
+    T2D_CHECK(sweep.empty());
+}
+
+T2D_TEST(paying_for_a_build_that_cannot_be_paid_for_leaves_the_stock_alone) {
+    Fixture content;
+    content.add(ContentKind::Warehouse, "bin", /*random_reverse=*/false, /*capacity=*/8);
+    content.add(ContentKind::Item, "stone");
+    const ContentId bin = content.registry.find(ContentKind::Warehouse, "bin");
+    const ContentId stone = content.registry.find(ContentKind::Item, "stone");
+    const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
+    T2D_REQUIRE(definition != nullptr);
+    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr && plot->container() != nullptr);
+    types::Container& stock = *plot->container();
+    T2D_REQUIRE(stock.add(ContentKind::Item, stone, 3) == 3u);
+
+    // An item the registry does not know is not paid for: it takes nothing out of the stock.
+    const std::vector<ContentStack> unknown{{std::string("unobtainium"), 2}};
+    std::string missing;
+    T2D_CHECK_FALSE(can_afford(stock, content.registry, unknown, &missing));
+    pay_for(stock, content.registry, unknown);
+    T2D_CHECK_EQ(stock.count_of(ContentKind::Item, stone), 3u);
+
+    // Paying without asking first is the caller's mistake, and it takes what there is and no more: the count
+    // never goes under zero, and what is left is what is left (types/container.h).
+    const std::vector<ContentStack> price{{std::string("stone"), 5}};
+    pay_for(stock, content.registry, price);
+    T2D_CHECK_EQ(stock.count_of(ContentKind::Item, stone), 0u);
+    T2D_CHECK_EQ(stock.total(), 0u);
 }
 
 T2D_TEST_MAIN

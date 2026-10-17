@@ -16,6 +16,7 @@
 #include <mine/content_list.h>
 #include <mine/content_name.h>
 #include <mine/content_pack.h>
+#include <mine/build_animation.h>
 #include <mine/build_cost.h>
 #include <mine/build_sidebar.h>
 #include <mine/double_click.h>
@@ -389,16 +390,11 @@ private:
     BuildSidebar sidebar_{};
     /// Draws it and answers a click on it. Returns true when the click was the sidebar's, so the map does
     /// not also act on it.
-    /// A plot going up: the scan line sweeps it once over the time its entry says, and the picture is revealed
-    /// behind it (docs/GAME_DESIGN.md section 1.37). The plot itself is already on the map - the animation is
-    /// what the player sees while it is being built.
-    struct BuildInProgress {
-        types::SceneTile* plot = nullptr;
-        t2d::f32 elapsed = 0.0f;
-        t2d::f32 seconds = 0.0f;
-    };
-    std::vector<BuildInProgress> building_{};
-    void advance_builds(t2d::f32 delta_seconds);
+    /// What is going up and how far along it is (mine/build_animation.h): the world view draws the sweep, the
+    /// model says where it is (docs/GAME_DESIGN.md section 1.37).
+    BuildAnimation building_{};
+    /// The rectangle a plot covers on the screen, from the camera the map is drawn with.
+    [[nodiscard]] t2d::Aabb2 plot_box_on_screen(const types::SceneTile& plot) const;
     void draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection);
     void draw_build_sidebar();
     void draw_sidebar_button(const BuildSidebar::Layout& layout);

@@ -327,7 +327,7 @@ void MineApp::on_start() {
 }
 
 void MineApp::on_update(f32 delta_seconds) {
-    advance_builds(delta_seconds);
+    building_.advance(delta_seconds);
     switch (screen_) {
         case Screen::Start: handle_start_input(); break;
         case Screen::Session: handle_session_input(); break;
@@ -1084,6 +1084,7 @@ void MineApp::open_world() {
 }
 
 void MineApp::enter_mine_layer(i32 index) {
+    building_.clear();
     sidebar_.rebuild(registry_, content_.report().definitions);
     // A new layer is another mine: whatever was selected belongs to the one being left, and the press
     // that is halfway through a double click does too (docs/GAME_DESIGN.md section 1.31).
@@ -1527,7 +1528,7 @@ void MineApp::handle_world_input(f32 delta_seconds) {
                     pay_for(*stock, registry_, picked->materials);
                     T2D_INFO("world: built {} at {},{}", picked->name, cell.x, cell.y);
                     // The scan line sweeps it once, over the time its entry says (section 1.37).
-                    if (picked->seconds > 0.0f) building_.push_back(BuildInProgress{plot, 0.0f, picked->seconds});
+                    building_.start(plot, picked->seconds);
                     sidebar_.clear_selection();
                 }
             }
@@ -2333,23 +2334,21 @@ void MineApp::draw_sidebar_button(const BuildSidebar::Layout& layout) {
                 sidebar_.open() ? std::string(">") : std::string("<"), layout.toggle.width() - 8.0f * unit_);
 }
 
-void MineApp::advance_builds(t2d::f32 delta_seconds) {
-    if (building_.empty()) return;
-    for (BuildInProgress& build : building_) build.elapsed += delta_seconds;
-    std::erase_if(building_, [](const BuildInProgress& build) { return build.elapsed >= build.seconds; });
+t2d::Aabb2 MineApp::plot_box_on_screen(const types::SceneTile& plot) const {
+    // The cell on the screen, from the camera the map is drawn with - not from a second guess at it.
+    const GridPos at = plot.anchor();
+    const t2d::Vec2 top_left =
+        world_camera_.screen_of(t2d::Vec2{static_cast<f32>(at.x), static_cast<f32>(at.y)});
+    const t2d::Vec2 bottom_right = world_camera_.screen_of(
+        t2d::Vec2{static_cast<f32>(at.x + plot.width()), static_cast<f32>(at.y + plot.height())});
+    return t2d::Aabb2{top_left, bottom_right};
 }
 
 void MineApp::draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection) {
-    if (building_.empty()) return;
-    for (const BuildInProgress& build : building_) {
+    for (const BuildAnimation::Build& build : building_.builds()) {
         if (build.plot == nullptr) continue;
-        const GridPos at = build.plot->anchor();
-        // The cell on the screen, from the camera the map is drawn with - not from a second guess at it.
-        const t2d::Aabb2 cell{world_camera_.screen_of(t2d::Vec2{static_cast<f32>(at.x), static_cast<f32>(at.y)}),
-                              world_camera_.screen_of(
-                                  t2d::Vec2{static_cast<f32>(at.x + build.plot->width()),
-                                            static_cast<f32>(at.y + build.plot->height())})};
-        const f32 done = std::clamp(build.elapsed / build.seconds, 0.0f, 1.0f);
+        const t2d::Aabb2 cell = plot_box_on_screen(*build.plot);
+        const f32 done = build.progress();
         // The scan line comes up from the bottom: what is **below** it has been scanned, so that is the part
         // of the picture that is shown - the plot's own texture, cut where the line is (section 1.37).
         const f32 line = cell.max.y - cell.height() * done;
@@ -2358,12 +2357,13 @@ void MineApp::draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_project
         const ContentEntry* entry = registry_.find(build.plot->kind(), build.plot->id());
         if (entry == nullptr) continue;
         const auto texture = content_textures_.find(image_key(build.plot->kind(), entry->name));
-        if (texture == content_textures_.end()) continue;   // no picture: the bar alone says it is going up
+        if (texture == content_textures_.end()) continue;   // no picture: the line alone says it is going up
         batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
         batch_->draw_quad(shown, uv, 0xFFFFFFFFu);
         batch_->end();
     }
 }
+
 void MineApp::draw_build_sidebar() {
     if (!world_.has_layer()) return;
     const BuildSidebar::Layout layout = sidebar_.layout(
@@ -2536,18 +2536,13 @@ void MineApp::draw_world_overlay() {
         draw_container_panel(selection_panel(*selected, area), *selected->container());
     }
     // The scan line over every plot that is going up (docs/GAME_DESIGN.md section 1.37).
-    for (const BuildInProgress& build : building_) {
+    for (const BuildAnimation::Build& build : building_.builds()) {
         if (build.plot == nullptr) continue;
-        const GridPos at = build.plot->anchor();
-        const t2d::Aabb2 plot_box{world_camera_.screen_of(t2d::Vec2{static_cast<f32>(at.x), static_cast<f32>(at.y)}),
-                                  world_camera_.screen_of(
-                                      t2d::Vec2{static_cast<f32>(at.x + build.plot->width()),
-                                                static_cast<f32>(at.y + build.plot->height())})};
-        const f32 done = std::clamp(build.elapsed / build.seconds, 0.0f, 1.0f);
-        const f32 scan_line = plot_box.max.y - plot_box.height() * done;
-        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{plot_box.min.x, scan_line - 2.0f},
-                                     t2d::Vec2{plot_box.max.x, scan_line}},
-                          kPalette.accent);
+        const t2d::Aabb2 box = plot_box_on_screen(*build.plot);
+        const f32 scan_line = box.max.y - box.height() * build.progress();
+        batch_->draw_rect(
+            t2d::Aabb2{t2d::Vec2{box.min.x, scan_line - 2.0f}, t2d::Vec2{box.max.x, scan_line}},
+            kPalette.accent);
     }
     draw_build_sidebar();
 }

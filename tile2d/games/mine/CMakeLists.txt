@@ -24,6 +24,7 @@ add_library(mine_core STATIC
     src/types/click.cpp
     src/types/container.cpp
     src/types/drag_into.cpp
+    src/build_animation.cpp
     src/build_cost.cpp
     src/build_sidebar.cpp
     src/types/building.cpp
@@ -90,6 +91,7 @@ set(MINE_TABLE_SOURCES
     src/types/click.cpp
     src/types/container.cpp
     src/types/drag_into.cpp
+    src/build_animation.cpp
     src/build_cost.cpp
     src/build_sidebar.cpp
     src/types/building.cpp
