@@ -16,6 +16,7 @@
 #include <mine/content_list.h>
 #include <mine/content_name.h>
 #include <mine/content_pack.h>
+#include <mine/build_sidebar.h>
 #include <mine/double_click.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
@@ -378,6 +379,14 @@ private:
     /// The plot the **playtest** selected. The sandbox keeps content references and not plots, so this one
     /// is built from the definition of the content in that cell and lives until the selection changes
     /// (types/tile_definition.h); it is what its panel asks for what it holds.
+    /// The build sidebar: what the player may pick, and what is picked (docs/GAME_DESIGN.md section 1.36).
+    /// It is filled from the registry when a layer is entered, drawn over the map by the world view, and
+    /// answered clicks there - the model itself knows nothing about pixels (mine/build_sidebar.h).
+    BuildSidebar sidebar_{};
+    /// Draws it and answers a click on it. Returns true when the click was the sidebar's, so the map does
+    /// not also act on it.
+    void draw_build_sidebar();
+    [[nodiscard]] bool sidebar_click(t2d::Vec2 point);
     std::unique_ptr<types::SceneTile> playtest_selected_{};
     /// A double click in the playtest selects a plot that holds a container, and its contents show at the
     /// top of the screen, exactly as in the world view (docs/GAME_DESIGN.md section 1.31).

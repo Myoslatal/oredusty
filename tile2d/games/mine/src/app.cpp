@@ -1083,6 +1083,7 @@ void MineApp::open_world() {
 }
 
 void MineApp::enter_mine_layer(i32 index) {
+    sidebar_.rebuild(registry_, content_.report().definitions);
     // A new layer is another mine: whatever was selected belongs to the one being left, and the press
     // that is halfway through a double click does too (docs/GAME_DESIGN.md section 1.31).
     clear_selection();
@@ -1455,7 +1456,10 @@ void MineApp::handle_world_input(f32 delta_seconds) {
         const t2d::Vec2 at = world_camera_.world_of(mouse);
         if (!world_drag_.begin(world_.layer(), at)) {
             const GridPos cell{t2d::floor_to_i32(at.x), t2d::floor_to_i32(at.y)};
-            if (double_click_.press(cell)) {
+            // The sidebar is over the map, so it is offered the click first: a click that landed on it is the
+        // panel's, not the map's (docs/GAME_DESIGN.md section 1.36).
+        if (sidebar_click(t2d::Vec2{input.mouse_x(), input.mouse_y()})) return;
+        if (double_click_.press(cell)) {
                 // The **second** press of a double click selects instead of clicking. One gesture then
                 // does one of each: the first press was the click (the plot's panel at its corner,
                 // types/click.h), and this one says "show me what it is holding", at the top of the
@@ -1499,6 +1503,8 @@ void MineApp::handle_world_input(f32 delta_seconds) {
         reload_content();
         enter_mine_layer(world_.layer_index());
     }
+    // B opens and closes the build sidebar (docs/GAME_DESIGN.md section 1.36).
+    if (input.key_pressed(ore::Key::B)) sidebar_.toggle();
     if (input.key_pressed(ore::Key::F6)) {
         open_content_list(Screen::World);
         return;
@@ -2218,6 +2224,70 @@ void MineApp::draw_world_screen() {
     }
 }
 
+bool MineApp::sidebar_click(t2d::Vec2 point) {
+    if (!sidebar_.open()) return false;
+    const BuildSidebar::Layout layout = sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    if (!layout.visible || !layout.panel.contains(point)) return false;
+    if (const std::optional<types::BuildingCategory> category = sidebar_.category_at(layout, point);
+        category.has_value()) {
+        sidebar_.select_category(*category);
+        return true;
+    }
+    if (const usize index = sidebar_.entry_at(layout, point); index != BuildSidebar::kNone) {
+        sidebar_.select(index);
+        return true;
+    }
+    return true;   // inside the panel: the map does not get this click either
+}
+
+void MineApp::draw_build_sidebar() {
+    if (!sidebar_.open() || !world_.has_layer()) return;
+    const BuildSidebar::Layout layout = sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    if (!layout.visible) return;
+    batch_->draw_rect(layout.panel, kPalette.panel_fill);
+    batch_->draw_rect_outline(layout.panel, 2.0f, kPalette.panel_edge);
+    // The categories down the left, the picked one in the accent colour; the buildings of the picked one to
+    // their right, the picked one boxed (docs/GAME_DESIGN.md section 1.36).
+    for (usize index = 0; index < layout.categories.size(); ++index) {
+        const types::BuildingCategory category = sidebar_.categories()[index];
+        const bool picked = category == sidebar_.category();
+        if (picked) batch_->draw_rect(layout.categories[index], kPalette.highlight);
+        draw_fitted(layout.categories[index].min.x + 4.0f * unit_, layout.categories[index].min.y + 4.0f * unit_,
+                    body_px_, picked ? kPalette.text : kPalette.text_dim,
+                    std::string(locale_.text(std::format("build.category.{}", types::building_category_name(category)))),
+                    layout.categories[index].width() - 8.0f * unit_);
+    }
+    for (usize index = 0; index < layout.entries.size(); ++index) {
+        const BuildEntry& entry = sidebar_.entries()[index];
+        const bool picked = sidebar_.selected() == &entry;
+        batch_->draw_rect(layout.entries[index], kPalette.grid_background);
+        // The picture itself is drawn by the art pass, which owns the textures: the box here is what the
+        // selection looks like, and the name is under it.
+        draw_fitted(layout.entries[index].min.x + 2.0f * unit_, layout.entries[index].max.y - 14.0f * unit_,
+                    static_cast<u16>(body_px_ * 3 / 4), picked ? kPalette.text : kPalette.text_dim, entry.name,
+                    layout.entries[index].width() - 4.0f * unit_);
+        if (picked) batch_->draw_rect_outline(layout.entries[index], 3.0f, kPalette.accent);
+    }
+    // What the picked one is called and what it costs, under the grid.
+    const BuildEntry* picked = sidebar_.selected();
+    if (picked == nullptr) {
+        draw_fitted(layout.details.min.x, layout.details.min.y, body_px_, kPalette.text_dim,
+                    std::string(locale_.text("build.none")), layout.details.width());
+        return;
+    }
+    draw_fitted(layout.details.min.x, layout.details.min.y, body_px_, kPalette.text, content_name(picked->kind, picked->id),
+                layout.details.width());
+    std::string materials{locale_.text("build.materials")};
+    for (const ContentStack& stack : picked->materials) {
+        const ContentId id = registry_.find(ContentKind::Item, stack.name);
+        materials += std::format(" {}", content_name(ContentKind::Item, id));
+        materials += std::format(" x{}", stack.count);
+    }
+    if (picked->seconds > 0.0f) materials += std::format("   {}s", picked->seconds);
+    draw_fitted(layout.details.min.x, layout.details.min.y + line_for(body_px_), body_px_, kPalette.text_dim,
+                materials, layout.details.width());
+}
+
 void MineApp::draw_world_overlay() {
     if (!world_.has_layer()) return;
     const t2d::Aabb2 area = world_area();
@@ -2332,6 +2402,7 @@ void MineApp::draw_world_overlay() {
     if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
         draw_container_panel(selection_panel(*selected, area), *selected->container());
     }
+    draw_build_sidebar();
 }
 
 MineApp::ImagePassCost MineApp::draw_sandbox_images(ore::RenderFrame& frame,
