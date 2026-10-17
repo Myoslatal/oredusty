@@ -24,6 +24,7 @@ add_library(mine_core STATIC
     src/types/click.cpp
     src/types/container.cpp
     src/types/drag_into.cpp
+    src/types/building.cpp
     src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
@@ -87,6 +88,7 @@ set(MINE_TABLE_SOURCES
     src/types/click.cpp
     src/types/container.cpp
     src/types/drag_into.cpp
+    src/types/building.cpp
     src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp

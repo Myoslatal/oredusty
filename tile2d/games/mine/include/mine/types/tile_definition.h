@@ -15,6 +15,7 @@
 // engineering: it is about what the thing *is*, not about which content exists.
 #pragma once
 
+#include <mine/types/building.h>
 #include <mine/types/scene_tile.h>
 
 #include <t2d/core/ecfg.h>
@@ -49,6 +50,11 @@ struct TileDefinition {
     /// "capacity" (a warehouse): how many things it can hold. 0 when the entry does not say, which is a
     /// warehouse that can hold nothing rather than one given a size nobody wrote.
     usize capacity = 0;
+    /// "building::" - what this plot costs to build, how long it takes and what it is for
+    /// (types/building.h). A **definition** attribute: every plot of this entry shares it, and a layer
+    /// placement cannot change it (docs/GAME_DESIGN.md section 1.35). Empty for content that is not a
+    /// building - a floor, an ore vein.
+    Building building;
 
     /// True for the kinds whose entries describe something that occupies cells. An item, a recipe, a
     /// layer or a channel describes something else, and is not a plot.

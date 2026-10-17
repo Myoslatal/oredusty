@@ -19,6 +19,9 @@
 
 namespace mine::types {
 
+struct Building;
+struct TileDefinition;
+
 /// A plot that is scenery: it is not ticked, and recomputes itself only when it is told to. A
 /// functional plot (types/entity_tile.h) is one of these plus a cadence.
 class SceneTile : public Tile {
@@ -49,7 +52,18 @@ public:
     [[nodiscard]] virtual Container* container() { return nullptr; }
     [[nodiscard]] virtual const Container* container() const { return nullptr; }
 
+    /// The **definition** this plot was made from - the one shared record every plot of that content
+    /// entry reads its fixed attributes through (capacity, dig power, the building sub-object). A plot
+    /// holds its own state (what is in its container, how far a drill has got) and nothing else
+    /// (docs/GAME_DESIGN.md section 1.35). Null for a plot made without one, which only a test does.
+    [[nodiscard]] const TileDefinition* definition() const { return definition_; }
+    void set_definition(const TileDefinition* definition) { definition_ = definition; }
+
+    /// The building sub-object of this plot, when its content declares one (types/building.h).
+    [[nodiscard]] const Building* building() const;
+
 protected:
+    const TileDefinition* definition_ = nullptr;
     /// What the plot recomputes when it is brought up to date. The default does nothing: content that
     /// needs no logic - a floor - is a SceneTile and nothing more.
     virtual void on_refresh() {}

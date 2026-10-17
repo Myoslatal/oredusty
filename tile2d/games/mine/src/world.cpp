@@ -378,9 +378,58 @@ void fill_container(types::SceneTile& plot, const PlacedContent& where, const Co
 
 } // namespace
 
+bool MineLayer::can_place(const PlacedContent& where, std::string* why) const {
+    const auto no = [&](std::string message) {
+        if (why != nullptr) *why = std::move(message);
+        return false;
+    };
+    if (where.layer < 0 || where.layer >= shape_.tile_layers) {
+        return no(std::format("tile layer {}, and this layer has {}", where.layer, shape_.tile_layers));
+    }
+    for (i32 y = 0; y < where.height; ++y) {
+        for (i32 x = 0; x < where.width; ++x) {
+            const GridPos cell{where.anchor.x + x, where.anchor.y + y};
+            if (cell.x < 0 || cell.y < 0 || cell.x >= static_cast<i32>(shape_.width) ||
+                cell.y >= static_cast<i32>(shape_.height)) {
+                return no(std::format("at {},{} and this layer is {}x{}", cell.x, cell.y, shape_.width,
+                                      shape_.height));
+            }
+            if (plot_at(where.layer, cell) != nullptr) {
+                return no(std::format("at {},{} on tile layer {}, and something is already there", cell.x, cell.y,
+                                      where.layer));
+            }
+        }
+    }
+    // Content that has to stand on something: a drill mines what is under it, so it has to have something
+    // under it. The rule is the map's - a lower tile layer of the same cell has to hold an ore - and it is
+    // the example the designer gave for this query (docs/GAME_DESIGN.md section 1.34).
+    if (where.kind == ContentKind::Drill) {
+        bool on_ore = false;
+        for (i32 layer = 0; layer < where.layer && !on_ore; ++layer) {
+            const types::SceneTile* under = plot_at(layer, where.anchor);
+            on_ore = under != nullptr && under->kind() == ContentKind::Ore;
+        }
+        if (!on_ore) {
+            return no(std::format("at {},{} and there is no ore under it on tile layers 0..{}", where.anchor.x,
+                                  where.anchor.y, where.layer - 1));
+        }
+    }
+    return true;
+}
 void MineLayer::build(const LayerSpec& spec, const ContentRegistry& registry,
                       const ContentDefinitions& definitions, LayerBuildReport* report) {
     for (const PlacedContent& where : spec.content) {
+        // The layer's own conditions, asked before anything is placed: a placement the map cannot hold is
+        // refused with the reason rather than half made (docs/GAME_DESIGN.md section 1.34). What place()
+        // already refuses on its own - a cell something is on, content the registry does not have - stays
+        // its own refusal, so the reason a report gives is the one it always gave.
+        if (where.kind == ContentKind::Drill) {
+            std::string why;
+            if (!can_place(where, &why)) {
+                if (report != nullptr) report->refuse(std::format("drill '{}': {}", where.name, why));
+                continue;
+            }
+        }
         types::SceneTile* plot = place(registry, definitions, where, report);
         if (plot == nullptr || where.holds.empty()) continue;
         fill_container(*plot, where, registry, report);

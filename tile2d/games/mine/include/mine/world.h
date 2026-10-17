@@ -31,6 +31,7 @@
 #include <mine/content_loader.h>
 #include <mine/quadtree.h>
 #include <mine/registry.h>
+#include <mine/types/content_stack.h>
 #include <mine/types/types.h>
 
 #include <t2d/core/math2d.h>
@@ -67,15 +68,6 @@ struct LayerShape {
 /// registry knows it by), which tile layer it sits on, where its top left corner is, and how many
 /// cells it covers. A 2x2, 3x3 or 2x3 structure is this struct with width and height set - not a
 /// special case anywhere below.
-/// One slot a plot starts with, named the way the data names it: a content **name** and how many of it.
-/// The name is resolved against the registry when the plot is built, so a placement that names something
-/// that is not there is a problem in the report rather than a plot that quietly starts empty
-/// (docs/GAME_DESIGN.md section 1.33).
-struct ContentStack {
-    std::string name;
-    t2d::i64 count = 0;
-};
-
 struct PlacedContent {
     ContentKind kind = ContentKind::Structure;
     std::string name;
@@ -198,6 +190,13 @@ public:
                                           const PlacedContent& where, LayerBuildReport* report = nullptr);
 
     /// Places everything \p spec describes. This is what entering a layer does.
+    /// Whether \p where may stand where it says, and why not when it may not: the query a caller makes
+    /// **before** placing anything (docs/GAME_DESIGN.md section 1.34). The conditions are the map's, not
+    /// the plot's: the cell has to be on the map, the tile layer has to exist, the cells have to be free
+    /// on that tile layer, and content that has to stand on something has to find it there - a drill has
+    /// to sit on ore (types/drill.h).
+    [[nodiscard]] bool can_place(const PlacedContent& where, std::string* why = nullptr) const;
+
     void build(const LayerSpec& spec, const ContentRegistry& registry, const ContentDefinitions& definitions,
                LayerBuildReport* report);
 

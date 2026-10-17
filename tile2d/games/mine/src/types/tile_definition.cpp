@@ -127,6 +127,8 @@ std::vector<TileDefinition> tile_definitions(const t2d::EcfgDocument& document,
 
 std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId id, i32 layer, GridPos anchor,
                                       i32 width, i32 height) {
+    // The plot keeps a handle on the one definition record, and reads every fixed attribute through it
+    // (docs/GAME_DESIGN.md section 1.35). The definitions outlive the layers that are built from them.
     std::unique_ptr<SceneTile> tile;
     switch (definition.kind) {
         case ContentKind::Floor:
@@ -166,6 +168,7 @@ std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId
             return nullptr;
     }
     tile->set_random_reverse(definition.random_reverse);
+    tile->set_definition(&definition);
     return tile;
 }
 
