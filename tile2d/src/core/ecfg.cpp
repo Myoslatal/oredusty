@@ -508,6 +508,14 @@ constexpr u32 kMaxIncludeDepth = 16;
     return line.substr(0, count);
 }
 
+/// Whether a trimmed line is the `__not_main` marker: the word, then spaces, then a colon.
+[[nodiscard]] bool is_not_main_line(std::string_view content) {
+    constexpr std::string_view kWanted = "__not_main";
+    if (!content.starts_with(kWanted)) return false;
+    content = trim(content.substr(kWanted.size()));
+    return !content.empty() && content.front() == ':';
+}
+
 /// Whether a trimmed line is an `__include` directive: the word, then spaces, then a colon. A line that
 /// reads like one but names nothing is an error rather than an entry, so this stays loose and the expander
 /// says what is missing.
@@ -549,6 +557,10 @@ public:
                 if (!include(content, raw, file, prefix, number, depth)) return false;
                 continue;
             }
+            // `__not_main` belongs to the **file**, not to the lines it contributes: a part keeps saying it
+            // where it is loaded - and is refused there - while the file that includes it is a main file and
+            // stays loadable. So the marker is not copied into the document it lands in.
+            if (!file.empty() && leading_whitespace(raw).empty() && is_not_main_line(content)) continue;
             source.text += prefix;
             source.text += raw;
             source.text += '\n';
@@ -667,7 +679,21 @@ std::optional<EcfgDocument> EcfgDocument::load(const std::string& path, EcfgErro
     // Includes are resolved relative to the file that asks for them, the way a content file's images are
     // resolved relative to it (docs/MODS.md).
     std::optional<EcfgDocument> document = parse(*text, std::filesystem::path(path).parent_path().string(), error);
-    if (document.has_value()) document->source_name_ = path;
+    if (!document.has_value()) return std::nullopt;
+    document->source_name_ = path;
+    // __not_main: true says this file is a part: it is read where another file includes it, and reading it
+    // on its own is a mistake worth reporting rather than a load that half works. The include path never
+    // comes through here - it reads the text itself - so a part is refused exactly when it is loaded
+    // directly, and reloading one (F5 on a pack, say) is refused the same way.
+    if (const EcfgValue* marker = document->find("__not_main"); marker != nullptr && marker->as_bool()) {
+        if (error != nullptr) {
+            *error = EcfgError{marker->line(), 1,
+                               std::format("'{}' is a part (__not_main is true): include it from another file "
+                                           "instead of loading it on its own",
+                                           path)};
+        }
+        return std::nullopt;
+    }
     return document;
 }
 

@@ -704,4 +704,19 @@ T2D_TEST(a_content_file_that_includes_nothing_there_is_reported) {
     T2D_CHECK_MSG(mentions(report.errors, "gone.ecfg"), "{}", report.first_error());
 }
 
+T2D_TEST(a_part_that_is_loaded_by_mistake_is_refused) {
+    // The `_` name keeps a part out of the pack scan; `__not_main: true` is the belt to that: a part whose
+    // name does not say so is reported instead of registering half of something (docs/MODS.md section 0).
+    Scratch scratch;
+    scratch.write("pack/content/part.ecfg", "__not_main:true\npart_ore::\n");
+
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({scratch.root()});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK_MSG(mentions(report.errors, "__not_main"), "{}", report.first_error());
+    T2D_CHECK_EQ(registry.find(ContentKind::Item, "part_ore"), kNoContent);
+}
+
 T2D_TEST_MAIN

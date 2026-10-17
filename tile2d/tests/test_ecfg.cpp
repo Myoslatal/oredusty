@@ -533,4 +533,36 @@ T2D_TEST(a_syntax_error_inside_an_include_names_the_file_it_is_in) {
     T2D_CHECK_EQ(error.line, 2u);
 }
 
+T2D_TEST(a_file_that_says_it_is_not_a_main_file_refuses_to_load) {
+    const TempDirectory dir("not_main");
+    const std::string part = dir.write("_part.ecfg", "__not_main:true\nnum1:1\n");
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(part, &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("__not_main") != std::string::npos,
+                  "the message does not say why: {}", error.message);
+    T2D_CHECK_EQ(error.line, 1u);   // the marker's own line
+}
+
+T2D_TEST(a_part_is_still_includeable_and_its_marker_stays_with_it) {
+    // The marker is a property of the file: the part is refused when loaded, and the file that includes it
+    // is a main file - it does not inherit the marker, or every pack with a part in it would refuse to load.
+    const TempDirectory dir("not_main_include");
+    dir.write("_part.ecfg", "__not_main:true\nnum1:1\n");
+    const std::string parent = dir.write("parent.ecfg", "__include: #_part.ecfg\nbool1:true\n");
+    const std::optional<EcfgDocument> document = load_ok(parent);
+    T2D_REQUIRE(document.has_value());
+    T2D_CHECK_EQ(document->find("num1")->as_int(-1), 1);
+    T2D_CHECK(document->find("bool1")->as_bool());
+    T2D_CHECK(document->find("__not_main") == nullptr);   // the marker did not travel
+}
+
+T2D_TEST(not_a_main_file_false_is_an_ordinary_file) {
+    const TempDirectory dir("not_main_false");
+    const std::string file = dir.write("main.ecfg", "__not_main:false\nnum1:1\n");
+    const std::optional<EcfgDocument> document = load_ok(file);
+    T2D_REQUIRE(document.has_value());
+    T2D_CHECK_EQ(document->find("num1")->as_int(-1), 1);
+}
+
 T2D_TEST_MAIN

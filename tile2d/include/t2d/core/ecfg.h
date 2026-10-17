@@ -15,6 +15,7 @@
 //     content
 //     >>
 //     __include: #other.ecfg                 the file's text is spliced in **here**, then parsed
+//     __not_main:true                        this file is a part: loading it on its own is refused
 //
 // `__include`: a file can be assembled from parts. A line `__include: #<path>` is replaced by the contents
 // of <path> before anything is parsed, indented like the line it lands on - so a file written at the top
@@ -23,6 +24,13 @@
 // `parse(text, base_directory, error)` overload resolve it, while plain `parse(text, error)` refuses an
 // include because that text has no file to be relative to. An include that cannot be read, that loops, or
 // that nests deeper than 16 levels is an error naming the file and line that asked for it.
+//
+// A part can say so: `__not_main: true` makes `EcfgDocument::load` refuse to load that file on its own, with
+// a message that says to include it instead. It is the belt to `__include`'s braces - a part that is loaded
+// by mistake (a stray pack scan, a reload) is reported rather than quietly registering half of something.
+// The marker belongs to the **file**, so it is not copied into a document that includes it: the file that
+// includes a part is a main file and stays loadable. It is also a property of a file, so `parse()` - text
+// with no file behind it - does not check it.
 //
 // Rules the reader enforces, because a config that is half understood is worse than one that is
 // rejected:
