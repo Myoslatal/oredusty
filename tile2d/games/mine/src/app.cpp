@@ -2275,8 +2275,13 @@ void MineApp::draw_world_screen() {
 }
 
 bool MineApp::sidebar_click(t2d::Vec2 point) {
-    if (!sidebar_.open()) return false;
-    const BuildSidebar::Layout layout = sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    const BuildSidebar::Layout layout = sidebar_.layout(
+        t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    // The button is the sidebar's whether it is open or closed: it is what opens it (section 1.36).
+    if (layout.toggle.contains(point)) {
+        sidebar_.toggle();
+        return true;
+    }
     if (!layout.visible || !layout.panel.contains(point)) return false;
     if (const std::optional<types::BuildingCategory> category = sidebar_.category_at(layout, point);
         category.has_value()) {
@@ -2291,8 +2296,15 @@ bool MineApp::sidebar_click(t2d::Vec2 point) {
 }
 
 void MineApp::draw_build_sidebar() {
-    if (!sidebar_.open() || !world_.has_layer()) return;
-    const BuildSidebar::Layout layout = sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    if (!world_.has_layer()) return;
+    const BuildSidebar::Layout layout = sidebar_.layout(
+        t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())}, unit_);
+    // The open/close button, always: a small tab against the right edge with an arrow pointing the way the
+    // sidebar would go (section 1.36).
+    batch_->draw_rect(layout.toggle, kPalette.panel_fill);
+    batch_->draw_rect_outline(layout.toggle, 2.0f, kPalette.panel_edge);
+    draw_fitted(layout.toggle.min.x + 6.0f * unit_, layout.toggle.min.y + 3.0f * unit_, body_px_, kPalette.accent,
+                sidebar_.open() ? std::string(">") : std::string("<"), layout.toggle.width() - 8.0f * unit_);
     if (!layout.visible) return;
     batch_->draw_rect(layout.panel, kPalette.panel_fill);
     batch_->draw_rect_outline(layout.panel, 2.0f, kPalette.panel_edge);

@@ -56,14 +56,20 @@ void BuildSidebar::select(usize index) { selected_ = index < shown_.size() ? ind
 
 BuildSidebar::Layout BuildSidebar::layout(t2d::Vec2 screen, t2d::f32 unit) const {
     Layout out;
+    // The button is always there: closed, it is the only part of the sidebar on the screen, and it is what
+    // opens it again. The panel itself is only laid out when it is open.
+    const t2d::f32 unit_padding = 6.0f * unit;
+    const t2d::f32 button = 22.0f * unit;
+    out.toggle = t2d::Aabb2{t2d::Vec2{screen.x - button, (screen.y - button) * 0.5f},
+                            t2d::Vec2{screen.x, (screen.y + button) * 0.5f}};
     if (!open_) return out;
     out.visible = true;
     // A **fixed** vertical rectangle, **flush against the right edge** of the screen and vertically centred:
     // its size does not depend on how much is in it (docs/GAME_DESIGN.md section 1.36). What does not fit
     // is on another page.
-    const t2d::f32 padding = 6.0f * unit;
-    const t2d::f32 category_width = 76.0f * unit;
-    const t2d::f32 cell = 30.0f * unit;
+    const t2d::f32 padding = unit_padding;
+    const t2d::f32 category_width = 56.0f * unit;
+    const t2d::f32 cell = 34.0f * unit;
     const t2d::f32 line = 18.0f * unit;
     const t2d::f32 width = category_width + static_cast<t2d::f32>(kColumns) * cell + padding * 3.0f;
     const t2d::f32 height = padding * 2.0f + line * 2.0f + static_cast<t2d::f32>(kRows) * cell;

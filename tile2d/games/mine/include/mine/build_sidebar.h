@@ -51,7 +51,7 @@ public:
     /// How many buildings one page holds, and how the pages are turned (docs/GAME_DESIGN.md section 1.36).
     /// The sidebar has a **fixed size**, so a category with more buildings than fit is paged rather than
     /// grown: the grid is kColumns wide and kRows tall, and the wheel over the sidebar turns the page.
-    static constexpr usize kColumns = 2;
+    static constexpr usize kColumns = 3;
     static constexpr usize kRows = 4;
     static constexpr usize kPageSize = kColumns * kRows;
 
@@ -74,6 +74,9 @@ public:
         std::vector<t2d::Aabb2> entries{};
         t2d::Aabb2 details{};
         t2d::Aabb2 page_label{};   ///< where "1 / 2" goes, in the details corner
+        /// The open/close button, flush against the right edge and vertically centred. It is laid out
+        /// **whether the sidebar is open or not**, because it is what opens it (docs/GAME_DESIGN.md 1.36).
+        t2d::Aabb2 toggle{};
     };
     [[nodiscard]] Layout layout(t2d::Vec2 screen, t2d::f32 unit) const;
 
