@@ -67,6 +67,15 @@ struct LayerShape {
 /// registry knows it by), which tile layer it sits on, where its top left corner is, and how many
 /// cells it covers. A 2x2, 3x3 or 2x3 structure is this struct with width and height set - not a
 /// special case anywhere below.
+/// One slot a plot starts with, named the way the data names it: a content **name** and how many of it.
+/// The name is resolved against the registry when the plot is built, so a placement that names something
+/// that is not there is a problem in the report rather than a plot that quietly starts empty
+/// (docs/GAME_DESIGN.md section 1.33).
+struct ContentStack {
+    std::string name;
+    t2d::i64 count = 0;
+};
+
 struct PlacedContent {
     ContentKind kind = ContentKind::Structure;
     std::string name;
@@ -74,6 +83,9 @@ struct PlacedContent {
     GridPos anchor{};
     i32 width = 1;
     i32 height = 1;
+    /// What the plot is created **holding**: the starting slots of a container sub-object, in file order.
+    /// Empty for a plot that starts empty, which is every placement that does not say otherwise.
+    std::vector<ContentStack> holds{};
 };
 
 /// What a layer is, before it exists: the shape of its map, and the content that goes in it.

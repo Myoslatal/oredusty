@@ -21,11 +21,32 @@
 //                     min:8                 #   never fewer, where the map allows (default 0)
 //                     max:20                #   never more (absent: as many as fit)
 //                     floor:"dirt"          #   only cells whose floor is this (absent: any free cell)
+//             place_block::                 # placed blocks: one entry each, at a cell it names itself
+//                 start::                   #   what a message about it calls it
+//                     kind:"warehouse"      #   what it places: a content kind
+//                     content:"stone"       #   and the name the registry knows it by
+//                     layer:0               #   which tile layer it sits on (default 0)
+//                     x:4                   #   the cell it sits on: its column ...
+//                     y:8                   #   ... and its row
+//                     subobject::           #   what it is created holding
+//                         container::       #     a container sub-object ...
+//                             items:["stone",100,"chunk",5]   # ... with these slots: name, count, name, count
 //
 // A layer's **creators run in a fixed order**, whatever order the file writes them in: the floor
 // creator first, then the scatters in file order. That is what lets a scatter ask what the floor of a
 // cell is, and it is why nothing lands on a cell of its own tile layer that the same description
 // already holds - including the floor, when the two are on one tile layer.
+//
+// A place_block **places one plot at the cell it names**, whatever stands there: a fixed position is what
+// the data is for (a starting warehouse, a machine the designer put somewhere), so nothing about it is
+// random. It runs **after the floor creator and before the scatters**, so the cell it claims is not
+// available to a scatter - the same "one plot per cell per tile layer" rule the rest of the build follows.
+//
+// What it holds is described under the engine's own word for a plot's parts: a **sub-object**. Today the
+// only one is container::, and its items: is a flat array of name, count, name, count. An odd number of
+// entries, a count that is not a whole number, or a sub-object the engine does not know is refused while
+// the file is read; a name the registry does not hold is a problem in the build report, because a file
+// cannot know what a mod adds later.
 //
 // A scatter **places one plot per cell**: a cell is either ore or not, which is what "single ore" means
 // (types/single_ore.h), and it is why the count is a count of cells.
@@ -58,6 +79,16 @@
 #include <vector>
 
 namespace mine {
+
+/// One block a layer places at a fixed cell, and what it starts holding.
+struct BlockRule {
+    std::string name;                ///< what a message about it calls it
+    ContentKind kind = ContentKind::Structure;
+    std::string content;             ///< the name the registry knows it by
+    i32 layer = 0;                   ///< the tile layer it sits on
+    GridPos at{};                    ///< the cell it sits on
+    std::vector<ContentStack> holds; ///< container slots, in the order the file writes them
+};
 
 /// One rule of a layer's floor creator: what it paints.
 ///
@@ -126,6 +157,9 @@ struct LayerRule {
     /// The floor creator. A layer whose data has no floor:: table has no floor - and that is a layer:
     /// an empty one is what a session enters before the rules exist (world.h).
     FloorCreator floor;
+    /// The blocks placed at a fixed cell. They go down after the floor creator and before the scatters, so
+    /// a scatter does not take the cell one of them claims.
+    std::vector<BlockRule> blocks;
     /// The scatter generators, in the order the file writes them. They run after the floor creator.
     std::vector<ScatterRule> scatter;
 };
@@ -181,6 +215,10 @@ struct LayerDepth {
 /// layer it belongs to, for messages. The checks that need the layer's other tables - a tile layer this
 /// map does not have, a floor restriction under a layer with no floor creator - are made by
 /// read_layer_rule, once everything is read, so the order the file writes the tables in does not matter.
+/// Reads one entry of a layer's "place_block::" table. Fails with the reason the file is not a placement.
+[[nodiscard]] std::optional<BlockRule> read_block_rule(std::string_view layer_name, const t2d::EcfgValue& entry,
+                                                       std::string* error);
+
 [[nodiscard]] std::optional<ScatterRule> read_scatter_rule(std::string_view layer_name,
                                                            const t2d::EcfgValue& entry,
                                                            std::string* error = nullptr);

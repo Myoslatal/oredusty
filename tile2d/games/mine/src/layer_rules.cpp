@@ -201,6 +201,20 @@ std::optional<LayerRule> read_layer_rule(std::string_view name, const t2d::EcfgV
         }
     }
 
+    if (const t2d::EcfgValue* placed = entry.find("place_block"); placed != nullptr) {
+        if (!placed->is_table()) {
+            return fail(std::format("layer '{}': place_block must be a table of placements (place_block:: "
+                                    "start:: ...)",
+                                    name));
+        }
+        for (const t2d::EcfgValue& placement : placed->children()) {
+            std::string block_error;
+            std::optional<BlockRule> parsed = read_block_rule(name, placement, &block_error);
+            if (!parsed.has_value()) return fail(std::move(block_error));
+            rule.blocks.push_back(std::move(*parsed));
+        }
+    }
+
     if (const t2d::EcfgValue* scatter = entry.find("scatter"); scatter != nullptr) {
         if (!scatter->is_table()) {
             return fail(std::format("layer '{}': scatter must be a table of scatter generators (scatter:: "
@@ -222,6 +236,13 @@ std::optional<LayerRule> read_layer_rule(std::string_view name, const t2d::EcfgV
         if (rule.floor.layer >= rule.tile_layers) {
             return fail(std::format("layer '{}': the floor creator works on tile layer {}, and this layer has {}",
                                     name, rule.floor.layer, rule.tile_layers));
+        }
+        for (const BlockRule& block : rule.blocks) {
+            if (block.layer >= rule.tile_layers) {
+                return fail(std::format("layer '{}': the placed block '{}' sits on tile layer {}, and this layer "
+                                        "has {}",
+                                        name, block.name, block.layer, rule.tile_layers));
+            }
         }
         for (const ScatterRule& scatter : rule.scatter) {
             if (scatter.layer >= rule.tile_layers) {
@@ -336,6 +357,132 @@ std::optional<ScatterRule> read_scatter_rule(std::string_view layer_name, const 
     return rule;
 }
 
+
+std::optional<BlockRule> read_block_rule(std::string_view layer_name, const t2d::EcfgValue& entry,
+                                         std::string* error) {
+    const auto fail = [&](std::string message) -> std::optional<BlockRule> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+
+    BlockRule rule;
+    rule.name = std::string(entry.key());
+    const auto about = [&](std::string_view what) {
+        return std::format("layer '{}': the placed block '{}' {}", layer_name, rule.name, what);
+    };
+    if (!entry.is_table()) {
+        return fail(about("is a table of what it places (kind, content, layer, x, y, subobject)"));
+    }
+
+    bool has_kind = false;
+    bool has_content = false;
+    bool has_x = false;
+    bool has_y = false;
+    for (const t2d::EcfgValue& field : entry.children()) {
+        if (field.key() == "kind") {
+            if (!field.is_string()) return fail(about("takes a quoted content kind (kind:\"warehouse\")"));
+            const ContentKind kind = content_kind_from_name(field.as_string());
+            if (kind == ContentKind::Count) {
+                return fail(about(std::format("places '{}', which is not a content kind", field.as_string())));
+            }
+            if (!types::kind_is_a_tile(kind)) {
+                return fail(about(std::format("places '{}' ({}), and only floors, ores, structures, machines "
+                                              "and warehouses occupy cells",
+                                              field.as_string(), content_kind_name(kind))));
+            }
+            rule.kind = kind;
+            has_kind = true;
+            continue;
+        }
+        if (field.key() == "content") {
+            if (!field.is_string()) return fail(about("takes a quoted content name (content:\"stone\")"));
+            if (field.as_string().empty()) return fail(about("names no content"));
+            rule.content = std::string(field.as_string());
+            has_content = true;
+            continue;
+        }
+        if (field.key() == "layer") {
+            const std::optional<t2d::i64> value = read_int(field);
+            if (!value.has_value()) return fail(about("takes a whole number for layer"));
+            if (*value < 0 || *value >= static_cast<t2d::i64>(ContentGrid::kMaxLayers)) {
+                return fail(about(std::format("sits on tile layer {}, and a map has 0..{} tile layers", *value,
+                                              ContentGrid::kMaxLayers - 1)));
+            }
+            rule.layer = static_cast<i32>(*value);
+            continue;
+        }
+        if (field.key() == "x" || field.key() == "y") {
+            const std::optional<t2d::i64> value = read_int(field);
+            if (!value.has_value()) return fail(about(std::format("takes a whole number for {}", field.key())));
+            if (*value < 0) {
+                return fail(about(std::format("sits at {} {}, and a cell is not negative", field.key(), *value)));
+            }
+            // The upper bound is the layer's own shape, which the reader does not know yet: the story
+            // generator checks it against the map it built and says so in the report.
+            if (field.key() == "x") {
+                rule.at.x = static_cast<i32>(*value);
+                has_x = true;
+            } else {
+                rule.at.y = static_cast<i32>(*value);
+                has_y = true;
+            }
+            continue;
+        }
+        if (field.key() == "subobject") {
+            if (!field.is_table()) {
+                return fail(about("takes a table of sub-objects (subobject:: container:: items:[...])"));
+            }
+            for (const t2d::EcfgValue& part : field.children()) {
+                if (part.key() != "container") {
+                    return fail(about(std::format("has a sub-object '{}', and the only one there is is container",
+                                                  part.key())));
+                }
+                if (!part.is_table()) {
+                    return fail(about("takes a table for its container (container:: items:[...])"));
+                }
+                for (const t2d::EcfgValue& slot : part.children()) {
+                    if (slot.key() != "items") {
+                        return fail(about(std::format("has a container field '{}', and the only one there is is "
+                                                      "items",
+                                                      slot.key())));
+                    }
+                    if (!slot.is_array()) {
+                        return fail(about("takes an array of item names and counts (items:[\"stone\",100])"));
+                    }
+                    if (slot.size() % 2 != 0) {
+                        return fail(about(std::format("has {} entries in items, and they come in pairs of name "
+                                                      "and count",
+                                                      slot.size())));
+                    }
+                    for (usize index = 0; index + 1 < slot.size(); index += 2) {
+                        const t2d::EcfgValue& item = slot.children()[index];
+                        const t2d::EcfgValue& count = slot.children()[index + 1];
+                        if (!item.is_string() || item.as_string().empty()) {
+                            return fail(about(std::format("has items[{}], which is not the quoted name of an item",
+                                                          index)));
+                        }
+                        const std::optional<t2d::i64> amount = read_int(count);
+                        if (!amount.has_value() || *amount <= 0) {
+                            return fail(about(std::format("has items[{}] for '{}', which is not a count above "
+                                                          "zero",
+                                                          index + 1, item.as_string())));
+                        }
+                        rule.holds.push_back(ContentStack{std::string(item.as_string()), *amount});
+                    }
+                }
+            }
+            continue;
+        }
+        return fail(about(std::format("has no attribute '{}' (kind, content, layer, x, y, subobject)",
+                                      field.key())));
+    }
+
+    if (!has_content) return fail(about("does not say what it places (content:\"stone\")"));
+    if (!has_kind) return fail(about("does not say which kind of content it places (kind:\"warehouse\")"));
+    if (!has_x || !has_y) return fail(about("does not say where it sits (x:4 and y:8)"));
+    return rule;
+}
+
 std::vector<LayerRule> layer_rules(const t2d::EcfgDocument& document, std::vector<std::string>* errors) {
     std::vector<LayerRule> rules;
     for (const t2d::EcfgValue& table : document.root().children()) {
@@ -406,6 +553,42 @@ LayerGenerator story_layer_generator(const LayerRules& rules, LayerShape fallbac
                     taken[static_cast<usize>(rule->floor.layer) * cells + cell] = 1;
                 }
             }
+        }
+
+        // The placed blocks, after the floor and before the scatters: a fixed cell is the point of them, and
+        // marking it taken is what keeps a scatter from landing on top of one (layer_rules.h). A block the
+        // layer cannot hold - a tile layer it does not have, a cell outside the map, a cell the floor is
+        // already on - is a problem in the report, and the rest of the layer is still built.
+        for (const BlockRule& block : rule->blocks) {
+            if (block.layer >= tile_layers) {
+                spec.problems.push_back(std::format("layer {}: the placed block '{}' sits on tile layer {}, and "
+                                                    "this layer has {}",
+                                                    index, block.name, block.layer, tile_layers));
+                continue;
+            }
+            if (block.at.x < 0 || block.at.y < 0 || static_cast<u32>(block.at.x) >= spec.shape.width ||
+                static_cast<u32>(block.at.y) >= spec.shape.height) {
+                spec.problems.push_back(std::format("layer {}: the placed block '{}' sits at {},{} and this layer is "
+                                                    "{}x{}",
+                                                    index, block.name, block.at.x, block.at.y, spec.shape.width,
+                                                    spec.shape.height));
+                continue;
+            }
+            const usize cell = static_cast<usize>(block.at.y) * spec.shape.width + static_cast<usize>(block.at.x);
+            if (taken[static_cast<usize>(block.layer) * cells + cell] != 0) {
+                spec.problems.push_back(std::format("layer {}: the placed block '{}' sits at {},{} on tile layer {}, "
+                                                    "and the floor is already there",
+                                                    index, block.name, block.at.x, block.at.y, block.layer));
+                continue;
+            }
+            PlacedContent where;
+            where.kind = block.kind;
+            where.name = block.content;
+            where.layer = block.layer;
+            where.anchor = block.at;
+            where.holds = block.holds;
+            spec.content.push_back(std::move(where));
+            taken[static_cast<usize>(block.layer) * cells + cell] = 1;
         }
 
         // The scatters, in file order, on the layer's own dice: the same (seed, layer) scatters the same

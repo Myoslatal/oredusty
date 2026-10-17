@@ -1248,4 +1248,87 @@ T2D_TEST(the_depth_a_hud_shows_is_counted_the_way_a_player_counts) {
     T2D_CHECK_EQ(layer_depth_for(Mode::Endless, endless, 7).number, 8u);
 }
 
+T2D_TEST(a_place_block_names_a_cell_and_what_the_block_holds) {
+    const Parsed parsed = parse(R"(
+layer::
+    entrance::
+        size::
+            width:64
+            height:48
+            tile_layers:2
+        floor::
+            layer:0
+            full_flash:"dirt"
+        place_block::
+            start::
+                kind:"warehouse"
+                content:"stone"
+                layer:1
+                x:4
+                y:8
+                subobject::
+                    container::
+                        items:["ore",100,"chunk",5]
+)");
+    T2D_CHECK_MSG(parsed.errors.empty(), "{}", parsed.errors.empty() ? "" : parsed.errors.front());
+    T2D_REQUIRE(parsed.rules.size() == 1u);
+    const LayerRule& rule = parsed.rules.front();
+    T2D_REQUIRE(rule.blocks.size() == 1u);
+    const BlockRule& block = rule.blocks.front();
+    T2D_CHECK_EQ(block.name, std::string("start"));
+    T2D_CHECK(block.kind == ContentKind::Warehouse);
+    T2D_CHECK_EQ(block.content, std::string("stone"));
+    T2D_CHECK_EQ(block.layer, 1);
+    T2D_CHECK_EQ(block.at.x, 4);
+    T2D_CHECK_EQ(block.at.y, 8);
+    T2D_REQUIRE(block.holds.size() == 2u);
+    T2D_CHECK_EQ(block.holds[0].name, std::string("ore"));
+    T2D_CHECK_EQ(block.holds[0].count, 100);
+    T2D_CHECK_EQ(block.holds[1].name, std::string("chunk"));
+    T2D_CHECK_EQ(block.holds[1].count, 5);
+}
+
+T2D_TEST(a_place_block_that_is_not_a_placement_is_refused) {
+    // Each of these is one thing wrong with the table, and the message has to say which: a block that
+    // names no cell, items that do not come in pairs, a sub-object the engine does not have, a count that
+    // is not a count, and an attribute that is not one of its own.
+    const auto layer_with = [](std::string_view placement) {
+        return std::string("layer::\n    entrance::\n        place_block::\n") + std::string(placement);
+    };
+    struct Case {
+        std::string text;
+        const char* wanted;
+    };
+    const Case cases[] = {
+        // No y: a cell has two coordinates.
+        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+                    "                x:4\n"),
+         "where it sits"},
+        // An odd number of items: they come in pairs.
+        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+                    "                x:4\n                y:8\n                subobject::\n"
+                    "                    container::\n                        items:[\"ore\",100,\"chunk\"]\n"),
+         "pairs of name and count"},
+        // A sub-object the engine does not have.
+        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+                    "                x:4\n                y:8\n                subobject::\n"
+                    "                    socket::\n"),
+         "only one there is is container"},
+        // A count that is not a count.
+        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+                    "                x:4\n                y:8\n                subobject::\n"
+                    "                    container::\n                        items:[\"ore\",0]\n"),
+         "count above zero"},
+        // An attribute that is not one of its own.
+        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+                    "                x:4\n                y:8\n                colour:\"red\"\n"),
+         "has no attribute"},
+    };
+    for (const Case& one : cases) {
+        const Parsed parsed = parse(one.text);
+        T2D_CHECK_MSG(mentions(parsed.errors, one.wanted), "{}: {}", one.wanted,
+                      parsed.errors.empty() ? std::string("no error") : parsed.errors.front());
+        T2D_CHECK(parsed.rules.empty());
+    }
+}
 T2D_TEST_MAIN

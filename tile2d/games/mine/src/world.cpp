@@ -340,9 +340,51 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
     return plots_[serial].get();
 }
 
+namespace {
+
+/// Fills the container a placement starts with. The data names items the way a content file does, so the
+/// names are resolved **here**, against the registry in force: a name that is not in it is a refusal in the
+/// report and the rest of the placement stands (docs/GAME_DESIGN.md section 1.33). A plot asked to hold
+/// something that has no container is refused too - the data and the content disagree about what it is.
+void fill_container(types::SceneTile& plot, const PlacedContent& where, const ContentRegistry& registry,
+                    LayerBuildReport* report) {
+    const std::string at = std::format("{} '{}' at {},{}", content_kind_name(where.kind), where.name,
+                                       where.anchor.x, where.anchor.y);
+    types::Container* container = plot.container();
+    if (container == nullptr) {
+        if (report != nullptr) {
+            report->refuse(std::format("{} was placed holding something, and it has no container sub-object", at));
+        }
+        return;
+    }
+    for (const ContentStack& stack : where.holds) {
+        const ContentId id = registry.find(ContentKind::Item, stack.name);
+        if (id == kNoContent) {
+            if (report != nullptr) {
+                report->refuse(std::format("{} holds '{}', which is not a registered item", at, stack.name));
+            }
+            continue;
+        }
+        const usize wanted = static_cast<usize>(stack.count);
+        const usize added = container->add(ContentKind::Item, id, wanted);
+        if (added < wanted && report != nullptr) {
+            // The content and the data disagree about how much fits: a container's capacity comes from the
+            // definition, and a placement that asks for more is refused rather than silently trimmed.
+            report->refuse(std::format("{} holds {} '{}' and its container has room for {}", at, wanted, stack.name,
+                                       added));
+        }
+    }
+}
+
+} // namespace
+
 void MineLayer::build(const LayerSpec& spec, const ContentRegistry& registry,
                       const ContentDefinitions& definitions, LayerBuildReport* report) {
-    for (const PlacedContent& where : spec.content) (void)place(registry, definitions, where, report);
+    for (const PlacedContent& where : spec.content) {
+        types::SceneTile* plot = place(registry, definitions, where, report);
+        if (plot == nullptr || where.holds.empty()) continue;
+        fill_container(*plot, where, registry, report);
+    }
 }
 
 void MineLayer::index_plot(usize serial) {

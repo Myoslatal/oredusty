@@ -24,12 +24,13 @@ struct Fixture {
     ContentRegistry registry;
     ContentDefinitions definitions;
 
-    ContentId add(ContentKind kind, std::string_view name, bool random_reverse = false) {
+    ContentId add(ContentKind kind, std::string_view name, bool random_reverse = false, usize capacity = 0) {
         const ContentId id = registry.register_content(kind, name);
         TileDefinition definition;
         definition.kind = kind;
         definition.name = std::string(name);
         definition.random_reverse = random_reverse;
+        definition.capacity = capacity;   // a container a placement fills needs room to fill it
         definitions.add(std::move(definition));
         return id;
     }
@@ -478,6 +479,61 @@ T2D_TEST(the_views_camera_draws_a_cell_between_forty_and_a_hundred_pixels) {
     T2D_CHECK_NEAR(camera.zoom(), 80.0f, 1e-3f);
     T2D_CHECK_NEAR(camera.world_of(anchor).x, world_under_anchor.x, 1e-3f);
     T2D_CHECK_NEAR(camera.world_of(anchor).y, world_under_anchor.y, 1e-3f);
+}
+
+T2D_TEST(a_placed_block_is_there_holding_what_the_data_said) {
+    Fixture content;
+    content.add(ContentKind::Floor, "dirt");
+    content.add(ContentKind::Warehouse, "stone", /*random_reverse=*/false, /*capacity=*/100);
+    content.add(ContentKind::Item, "chunk");
+    const ContentId chunk = content.registry.find(ContentKind::Item, "chunk");
+
+    const LayerShape shape{8, 8, 2};
+    LayerSpec spec;
+    spec.shape = shape;
+    spec.content.push_back(at(ContentKind::Floor, "dirt", 0, 0, 0));
+    PlacedContent placed = at(ContentKind::Warehouse, "stone", 1, 4, 3);
+    placed.holds.push_back(ContentStack{"chunk", 7});
+    spec.content.push_back(placed);
+
+    MineLayer layer(0, shape, 7);
+    LayerBuildReport report;
+    layer.build(spec, content.registry, content.definitions, &report);
+    T2D_CHECK_MSG(report.clean(), "{}", report.errors.empty() ? "" : report.errors.front());
+    const types::SceneTile* plot = layer.plot_at(1, GridPos{4, 3});
+    T2D_REQUIRE(plot != nullptr);
+    const types::Container* container = plot->container();
+    T2D_REQUIRE(container != nullptr);
+    T2D_CHECK_EQ(container->total(), 7u);
+    T2D_REQUIRE(container->slots().size() == 1u);
+    T2D_CHECK_EQ(container->slots()[0].id, chunk);
+    T2D_CHECK_EQ(container->slots()[0].count, 7u);
+}
+
+T2D_TEST(a_placed_block_that_holds_something_nobody_has_is_refused_and_still_built) {
+    Fixture content;
+    content.add(ContentKind::Warehouse, "stone");
+
+    const LayerShape shape{4, 4, 1};
+    LayerSpec spec;
+    spec.shape = shape;
+    PlacedContent placed = at(ContentKind::Warehouse, "stone", 0, 1, 1);
+    placed.holds.push_back(ContentStack{"ghost", 3});
+    spec.content.push_back(placed);
+
+    MineLayer layer(0, shape, 7);
+    LayerBuildReport report;
+    layer.build(spec, content.registry, content.definitions, &report);
+    // The block is there - a name the registry does not hold is a refusal, not a hole in the map - and the
+    // report says which name it was.
+    T2D_CHECK(!report.clean());
+    T2D_REQUIRE(report.errors.size() == 1u);
+    T2D_CHECK_MSG(report.errors.front().find("ghost") != std::string::npos, "{}", report.errors.front());
+    const types::SceneTile* plot = layer.plot_at(0, GridPos{1, 1});
+    T2D_REQUIRE(plot != nullptr);
+    const types::Container* container = plot->container();
+    T2D_REQUIRE(container != nullptr);
+    T2D_CHECK_EQ(container->total(), 0u);
 }
 
 T2D_TEST_MAIN

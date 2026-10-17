@@ -71,8 +71,8 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
     games/mine/tests/test_mine_types     15 cases / 211 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
-    games/mine/tests/test_world          13 cases / 146 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index
-    games/mine/tests/test_layer_rules    23 cases / 807 checks  the story's layers in data: the size, the floor creator, the scatter generator, the depth a HUD shows
+    games/mine/tests/test_world          15 cases / 153 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index, placed blocks
+    games/mine/tests/test_layer_rules    25 cases / 828 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
@@ -500,7 +500,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 859 sections, 2 679 symbols, 10 169 relocations (release)
+        mine.codetab         the game: 870 sections, 2 733 symbols, 10 613 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
