@@ -78,8 +78,11 @@ bool is_placeable_kind(ContentKind kind) {
     // designer says what else sits on the map (a submit channel, for instance). Ore is one of them -
     // a SingleOre is a scene plot on one cell (docs/TYPES.md) - so the palette can paint the ore the
     // story scatters, and a layout that holds one loads instead of being counted as an unknown kind.
+    // A warehouse is one too: it is a scene plot on one cell, and the playtest is where a designer looks
+    // at what the game draws - a plot that holds things has to be placeable to be looked at
+    // (docs/GAME_DESIGN.md section 1.31).
     return kind == ContentKind::Structure || kind == ContentKind::Machine || kind == ContentKind::Floor ||
-           kind == ContentKind::Ore;
+           kind == ContentKind::Ore || kind == ContentKind::Warehouse;
 }
 
 i32 draw_step_for(usize visible_cells, i32 layers, usize max_quads) {

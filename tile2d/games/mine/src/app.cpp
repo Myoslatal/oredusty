@@ -4,6 +4,8 @@
 
 #include <mine/content_search.h>
 
+#include <mine/types/tile_definition.h>
+
 #include <t2d/core/cli.h>
 #include <t2d/core/executable.h>
 #include <t2d/core/log.h>
@@ -940,6 +942,10 @@ void MineApp::set_playtest(bool on) {
     const t2d::Aabb2 area = sandbox_grid_area();
     sandbox_.set_viewport(t2d::Vec2{area.max.x, area.max.y});
     sandbox_.clear_pointer();
+    // The selection belongs to the mode it was made in: a playtest's plot is built from the content at a
+    // cell, and editing is not about that plot any more (docs/GAME_DESIGN.md section 1.31).
+    clear_playtest_selection();
+    double_click_.reset();
     T2D_INFO("sandbox: playtest {}", on ? "on" : "off");
 }
 
@@ -1186,11 +1192,10 @@ void MineApp::place_panel_at(ContainerPanelLayout& layout, t2d::Vec2 anchor) con
     layout.text_x = layout.panel.min.x + padding + layout.picture + padding * 0.5f;
 }
 
-void MineApp::place_panel_top_centre(ContainerPanelLayout& layout) const {
-    // The **top of the screen, centred**, over the map area: what a double click selects shows there
-    // (docs/GAME_DESIGN.md section 1.31). Centred on the world area rather than on the window, so it is
-    // centred on the thing it is telling you about.
-    const t2d::Aabb2 area = world_area();
+void MineApp::place_panel_top_centre(ContainerPanelLayout& layout, t2d::Aabb2 area) const {
+    // The **top of the screen, centred**, over the view's own area: what a double click selects shows there
+    // (docs/GAME_DESIGN.md section 1.31). Centred on that area rather than on the window, so it is centred
+    // on the thing it is telling you about - and the two views that ask have different areas.
     const f32 margin = 8.0f * unit_;
     const f32 x = area.min.x + (area.max.x - area.min.x - layout.size.x) * 0.5f;
     place_panel_at(layout, t2d::Vec2{x, area.min.y + margin});
@@ -1219,7 +1224,7 @@ MineApp::ContainerPanelLayout MineApp::corner_panel(const types::SceneTile& plot
     return layout;
 }
 
-MineApp::ContainerPanelLayout MineApp::selection_panel(const types::SceneTile& plot) const {
+MineApp::ContainerPanelLayout MineApp::selection_panel(const types::SceneTile& plot, t2d::Aabb2 area) const {
     const types::Container* container = plot.container();
     // The selection's title is the plot's localized name, and the name the registry knows it by when the
     // table has none (section 1.29): this panel belongs to **any** plot that holds a container, so there
@@ -1230,7 +1235,7 @@ MineApp::ContainerPanelLayout MineApp::selection_panel(const types::SceneTile& p
                                              [this](std::string_view id) { return locale_.text(id); }),
                                container != nullptr ? container->total() : 0,
                                container != nullptr ? container->capacity() : 0));
-    if (container != nullptr) place_panel_top_centre(layout);
+    if (container != nullptr) place_panel_top_centre(layout, area);
     return layout;
 }
 
@@ -1266,6 +1271,34 @@ void MineApp::clear_selection() {
     if (!has_selection_) return;
     has_selection_ = false;
     T2D_INFO("world: selection cleared");
+}
+
+void MineApp::select_playtest_at(GridPos cell) {
+    playtest_selected_.reset();
+    if (!sandbox_.inside(cell)) return;   // off the map: nothing to select
+    // Topmost first, the way the map is drawn: what a player points at is the plot on top
+    // (docs/GAME_DESIGN.md section 1.31). The sandbox keeps content **references** and not plots, so the
+    // plot is built from its definition for this question and kept until the selection changes
+    // (types/tile_definition.h) - and it holds nothing, because the sandbox has no storage. The panel says
+    // exactly that, which is the truth about a sandbox rather than a missing feature.
+    for (i32 layer = sandbox_.layer_count() - 1; layer >= 0; --layer) {
+        const CellView value = sandbox_.cell(layer, cell);
+        if (value.empty() || value.missing()) continue;
+        const types::TileDefinition* definition =
+            content_.report().definitions.find_tile(value.kind, value.name);
+        if (definition == nullptr) continue;
+        std::unique_ptr<types::SceneTile> plot = types::make_tile(*definition, value.id, layer, cell);
+        if (plot == nullptr || plot->container() == nullptr) continue;
+        playtest_selected_ = std::move(plot);
+        T2D_INFO("sandbox: selected {} #{} at {},{}", content_kind_name(value.kind), value.id, cell.x, cell.y);
+        return;
+    }
+}
+
+void MineApp::clear_playtest_selection() {
+    if (playtest_selected_ == nullptr) return;
+    playtest_selected_.reset();
+    T2D_INFO("sandbox: selection cleared");
 }
 
 void MineApp::draw_container_panel(const ContainerPanelLayout& layout, const types::Container& container) {
@@ -1324,7 +1357,7 @@ MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const
     }
     // The selection shows the same rows at the top of the screen (docs/GAME_DESIGN.md section 1.31).
     if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
-        draw_panel(selection_panel(*selected), *selected->container());
+        draw_panel(selection_panel(*selected, world_area()), *selected->container());
     }
     return cost;
 }
@@ -1550,6 +1583,9 @@ const ContentPipelineReport& MineApp::load_content() {
     content_.set_mod_directories(options_.mod_directories);
     const ContentPipelineReport& report = content_.load(registry_);
     load_content_images();
+    // A reload replaces the definitions a playtest plot was built from, so nothing that was selected
+    // outlives it (docs/GAME_DESIGN.md section 1.31).
+    clear_playtest_selection();
     return report;
 }
 
@@ -1667,6 +1703,21 @@ void MineApp::handle_playtest_input(f32 delta_seconds) {
         mouse_seen_ = true;
     }
     if (mouse_seen_) sandbox_.point_at(mouse);
+
+    // Two presses on one cell are one gesture here too (double_click.h): the playtest is where a player
+    // looks at the layer, so it selects the way the world view does and shows the same panel
+    // (docs/GAME_DESIGN.md section 1.31).
+    double_click_.advance(delta_seconds);
+    if (area.contains(mouse) && input.mouse_pressed(ore::MouseButton::Left)) {
+        const GridPos cell = sandbox_.cell_at_screen(mouse);
+        if (double_click_.press(cell)) {
+            select_playtest_at(cell);
+        } else {
+            // Nothing else answers a click in a playtest, so a click asks for nothing: the selection steps
+            // aside (the world view's rule: one pointer, one thing shown).
+            clear_playtest_selection();
+        }
+    }
 }
 
 void MineApp::handle_sandbox_input(f32 delta_seconds) {
@@ -2056,12 +2107,9 @@ void MineApp::draw_playtest_screen() {
         }
     }
 
-    // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
-    if (const std::optional<GridPos> hovered = sandbox_.hovered(); hovered.has_value()) {
-        const t2d::Vec2 at = sandbox_.screen_of_cell(*hovered);
-        batch_->draw_rect_outline(t2d::Aabb2{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f,
-                                  kPalette.accent);
-    }
+    // The pointer and the selection are drawn **after** the map's pictures, not here: a playtest draws its
+    // cells at full size with no inset, so a picture would cover anything the chrome put down first
+    // (draw_playtest_over_art, docs/GAME_DESIGN.md section 1.31).
 
     // One line of HUD: what the pointer is over, what the view costs, and the way back to editing. The
     // game's own HUD is not designed yet (docs/GAME_DESIGN.md section 7), so this says only what the
@@ -2098,6 +2146,30 @@ void MineApp::draw_playtest_screen() {
     }
     draw_fitted(middle_x, text_y, body_px_, failed ? kPalette.error : kPalette.text_dim, middle, middle_width);
     draw_line(hint_x, text_y, body_px_, kPalette.accent, hint);
+
+}
+
+void MineApp::draw_playtest_over_art() {
+    const f32 cell = sandbox_.cell_px();
+    // The pointer marks the cell the game's actions would apply to (docs/GAME_DESIGN.md section 3).
+    if (const std::optional<GridPos> hovered = sandbox_.hovered(); hovered.has_value()) {
+        const t2d::Vec2 at = sandbox_.screen_of_cell(*hovered);
+        batch_->draw_rect_outline(t2d::Aabb2{t2d::Vec2{at.x, at.y}, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f,
+                                  kPalette.accent);
+    }
+    if (playtest_selected_ == nullptr) return;
+    // The selection is marked the way the world view marks it (docs/GAME_DESIGN.md section 1.31): a box
+    // round the plot's whole footprint with the accent at a quarter alpha inside it.
+    const t2d::Vec2 at = sandbox_.screen_of_cell(playtest_selected_->anchor());
+    const t2d::Aabb2 box{at, t2d::Vec2{at.x + cell * static_cast<f32>(playtest_selected_->width()),
+                                      at.y + cell * static_cast<f32>(playtest_selected_->height())}};
+    batch_->draw_rect(box, kPalette.highlight);
+    batch_->draw_rect_outline(box, 3.0f, kPalette.accent);
+    // And what it holds, at the top of the screen, centred - the same panel the world view draws. The
+    // sandbox has no storage, so the container is empty and the panel says so rather than hiding it.
+    if (const types::Container* container = playtest_selected_->container(); container != nullptr) {
+        draw_container_panel(selection_panel(*playtest_selected_, sandbox_grid_area()), *container);
+    }
 }
 
 void MineApp::draw_world_screen() {
@@ -2184,6 +2256,18 @@ void MineApp::draw_world_overlay() {
         batch_->draw_rect_outline(t2d::Aabb2{at, t2d::Vec2{at.x + cell, at.y + cell}}, 2.0f, kPalette.accent);
     }
 
+    // What a double click selected is marked **where it is**, not only at the top of the screen: a box round
+    // the plot's whole footprint (so a 2x2 warehouse reads as one thing) with the accent at a quarter alpha
+    // inside it, which marks the plot without hiding its art (docs/GAME_DESIGN.md section 1.31).
+    if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
+        const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(selected->anchor().x),
+                                                               static_cast<f32>(selected->anchor().y)});
+        const t2d::Aabb2 box{at, t2d::Vec2{at.x + cell * static_cast<f32>(selected->width()),
+                                          at.y + cell * static_cast<f32>(selected->height())}};
+        batch_->draw_rect(box, kPalette.highlight);
+        batch_->draw_rect_outline(box, 3.0f, kPalette.accent);
+    }
+
     // Two lines at the bottom: what the layer is and what the two passes did, then what the pointer is
     // over and how to move. The game's own HUD is not designed yet (section 7), so this says only what
     // the world already knows and nothing about a game state that does not exist.
@@ -2244,7 +2328,7 @@ void MineApp::draw_world_overlay() {
     // The selection last of all: it sits at the top of the screen, which is where the player who just
     // double clicked a plot is looking (section 1.31).
     if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
-        draw_container_panel(selection_panel(*selected), *selected->container());
+        draw_container_panel(selection_panel(*selected, area), *selected->container());
     }
 }
 
@@ -2535,6 +2619,16 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         draw_calls += cost.draw_calls;
         quads += cost.quads;
         dropped_quads_ += cost.dropped;
+        if (playtest_) {
+            // The playtest's chrome that the map's pictures would otherwise cover: the pointer, the box
+            // round the selection and the panel that says what it holds (docs/GAME_DESIGN.md 1.31).
+            batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+            draw_playtest_over_art();
+            batch_->end();
+            draw_calls += batch_->draw_calls();
+            quads += batch_->quads();
+            dropped_quads_ += batch_->dropped_quads();
+        }
     } else if (screen_ == Screen::World) {
         const ImagePassCost cost = draw_world_layer(frame, view_projection, world_.layer(), world_camera_);
         draw_calls += cost.draw_calls;

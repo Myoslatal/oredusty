@@ -273,8 +273,10 @@ private:
     [[nodiscard]] ContainerPanelLayout container_panel(const types::SceneTile& plot, std::string title) const;
     /// Puts \p layout's top left corner at \p anchor, and derives the row origins from where it landed.
     void place_panel_at(ContainerPanelLayout& layout, t2d::Vec2 anchor) const;
-    /// Puts \p layout at the **top of the screen, centred** - where a double click's selection shows.
-    void place_panel_top_centre(ContainerPanelLayout& layout) const;
+    /// Puts \p layout at the **top of \p area, centred** - where a double click's selection shows
+    /// (section 1.31). Centred on the area rather than on the window, so it is centred on the thing it is
+    /// telling you about, in whichever view asked.
+    void place_panel_top_centre(ContainerPanelLayout& layout, t2d::Aabb2 area) const;
     /// The panel's words: the title, then one line per kind of thing inside, each saying how many there
     /// are. The picture on each line is the image pass's (draw_panel_images).
     void draw_container_panel(const ContainerPanelLayout& layout, const types::Container& container);
@@ -285,7 +287,7 @@ private:
     /// (types/warehouse.h, section 1.27), and the one a **selection** shows at the top of the screen
     /// (section 1.31). Both are the same content in the same shape; only where they land differs.
     [[nodiscard]] ContainerPanelLayout corner_panel(const types::SceneTile& plot) const;
-    [[nodiscard]] ContainerPanelLayout selection_panel(const types::SceneTile& plot) const;
+    [[nodiscard]] ContainerPanelLayout selection_panel(const types::SceneTile& plot, t2d::Aabb2 area) const;
     /// The plot a double click selected, or nullptr when nothing is selected any more - the layer was
     /// rebuilt, the plot there is gone, or it no longer holds anything.
     [[nodiscard]] const types::SceneTile* selected_plot() const;
@@ -373,6 +375,18 @@ private:
     /// and the plot at that cell may not be the one that was selected.
     GridPos selected_cell_{};
     bool has_selection_ = false;
+    /// The plot the **playtest** selected. The sandbox keeps content references and not plots, so this one
+    /// is built from the definition of the content in that cell and lives until the selection changes
+    /// (types/tile_definition.h); it is what its panel asks for what it holds.
+    std::unique_ptr<types::SceneTile> playtest_selected_{};
+    /// A double click in the playtest selects a plot that holds a container, and its contents show at the
+    /// top of the screen, exactly as in the world view (docs/GAME_DESIGN.md section 1.31).
+    void select_playtest_at(GridPos cell);
+    void clear_playtest_selection();
+    /// The playtest's chrome that has to land **over** the map's pictures: the pointer, the box round the
+    /// selection and the selection's panel. The art is its own pass after the chrome's, so anything drawn
+    /// with the chrome would be painted over by it (docs/GAME_DESIGN.md section 1.31).
+    void draw_playtest_over_art();
     /// What the two passes did in the frame that was last drawn: scenery brought up to date, and plots
     /// that took their turn. The HUD says so, because "the mine runs" has to be visible somewhere.
     usize world_refreshed_ = 0;

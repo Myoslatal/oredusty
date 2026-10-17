@@ -103,6 +103,9 @@ T2D_TEST(the_palette_is_the_registered_content_that_can_sit_on_a_tile) {
     T2D_CHECK(is_placeable_kind(ContentKind::Floor));
     // A SingleOre occupies one cell, so it is content the sandbox can paint and a layout can hold.
     T2D_CHECK(is_placeable_kind(ContentKind::Ore));
+    // A warehouse does too, and a playtest has to be able to hold one to select it: its panel is the same
+    // one the world view opens (docs/GAME_DESIGN.md section 1.31).
+    T2D_CHECK(is_placeable_kind(ContentKind::Warehouse));
     T2D_CHECK_FALSE(is_placeable_kind(ContentKind::Item));
     T2D_CHECK_FALSE(is_placeable_kind(ContentKind::Recipe));
     T2D_CHECK_FALSE(is_placeable_kind(ContentKind::Layer));
