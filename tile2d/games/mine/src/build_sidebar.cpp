@@ -34,12 +34,14 @@ void BuildSidebar::rebuild(const ContentRegistry& registry, const ContentDefinit
     if (std::find(categories_.begin(), categories_.end(), category_) == categories_.end()) {
         category_ = categories_.empty() ? types::BuildingCategory::None : categories_.front();
     }
+    page_ = 0;
     select_category(category_);
 }
 
 void BuildSidebar::select_category(types::BuildingCategory category) {
     category_ = category;
     selected_ = kNone;
+    page_ = 0;
     shown_.clear();
     for (const BuildEntry& building : all_) {
         if (building.category == category) shown_.push_back(building);
@@ -56,42 +58,47 @@ BuildSidebar::Layout BuildSidebar::layout(t2d::Vec2 screen, t2d::f32 unit) const
     Layout out;
     if (!open_) return out;
     out.visible = true;
-    // A column at the **right, vertically centred** (the designer's words): wide enough for a category
-    // name beside a grid of pictures, and never more than half the screen - a sidebar that covers the map
-    // is not a sidebar.
-    const t2d::f32 padding = 8.0f * unit;
-    const t2d::f32 category_width = 92.0f * unit;
-    const t2d::f32 cell = 44.0f * unit;
-    const t2d::f32 line = 22.0f * unit;
-    const t2d::f32 grid_width = cell * 3.0f + padding;
-    const t2d::f32 width = std::min(category_width + grid_width + padding * 2.0f, screen.x * 0.5f);
-    const t2d::f32 rows = static_cast<t2d::f32>(std::max<usize>(1, categories_.size()));
-    const t2d::f32 grid_rows = static_cast<t2d::f32>(std::max<usize>(1, (shown_.size() + 2) / 3));
-    const t2d::f32 body = std::max(rows * line, grid_rows * cell);
-    const t2d::f32 height = body + line * 2.0f + padding * 2.0f;
-    const t2d::f32 top = std::max(padding, (screen.y - height) * 0.5f);
-    out.panel = t2d::Aabb2{t2d::Vec2{screen.x - width - padding, top},
-                           t2d::Vec2{screen.x - padding, top + height}};
+    // A **fixed** vertical rectangle, **flush against the right edge** of the screen and vertically centred:
+    // its size does not depend on how much is in it (docs/GAME_DESIGN.md section 1.36). What does not fit
+    // is on another page.
+    const t2d::f32 padding = 6.0f * unit;
+    const t2d::f32 category_width = 76.0f * unit;
+    const t2d::f32 cell = 30.0f * unit;
+    const t2d::f32 line = 18.0f * unit;
+    const t2d::f32 width = category_width + static_cast<t2d::f32>(kColumns) * cell + padding * 3.0f;
+    const t2d::f32 height = padding * 2.0f + line * 2.0f + static_cast<t2d::f32>(kRows) * cell;
+    const t2d::f32 top = std::max(0.0f, (screen.y - height) * 0.5f);
+    out.panel = t2d::Aabb2{t2d::Vec2{screen.x - width, top}, t2d::Vec2{screen.x, top + height}};
+    const t2d::f32 body_top = out.panel.min.y + padding;
     for (usize index = 0; index < categories_.size(); ++index) {
-        const t2d::f32 y = out.panel.min.y + padding + static_cast<t2d::f32>(index) * line;
+        const t2d::f32 y = body_top + static_cast<t2d::f32>(index) * line;
         out.categories.push_back(t2d::Aabb2{t2d::Vec2{out.panel.min.x + padding, y},
                                             t2d::Vec2{out.panel.min.x + padding + category_width, y + line}});
     }
-    const t2d::f32 grid_x = out.panel.min.x + padding + category_width;
-    for (usize index = 0; index < shown_.size(); ++index) {
-        const t2d::f32 x = grid_x + static_cast<t2d::f32>(index % 3) * cell;
-        const t2d::f32 y = out.panel.min.y + padding + static_cast<t2d::f32>(index / 3) * cell;
+    const t2d::f32 grid_x = out.panel.min.x + padding * 2.0f + category_width;
+    const usize first = page_ * kPageSize;
+    for (usize index = first; index < shown_.size() && index - first < kPageSize; ++index) {
+        const usize slot = index - first;
+        const t2d::f32 x = grid_x + static_cast<t2d::f32>(slot % kColumns) * cell;
+        const t2d::f32 y = body_top + static_cast<t2d::f32>(slot / kColumns) * cell;
         out.entries.push_back(
-            t2d::Aabb2{t2d::Vec2{x, y}, t2d::Vec2{x + cell - 4.0f * unit, y + cell - 4.0f * unit}});
+            t2d::Aabb2{t2d::Vec2{x, y}, t2d::Vec2{x + cell - 3.0f * unit, y + cell - 3.0f * unit}});
     }
     out.details = t2d::Aabb2{t2d::Vec2{out.panel.min.x + padding, out.panel.max.y - padding - line * 2.0f},
                              t2d::Vec2{out.panel.max.x - padding, out.panel.max.y - padding}};
+    out.page_label = t2d::Aabb2{t2d::Vec2{out.panel.max.x - 44.0f * unit, out.panel.max.y - padding - line},
+                                t2d::Vec2{out.panel.max.x - padding, out.panel.max.y - padding}};
     return out;
 }
 
+void BuildSidebar::turn_page(i32 by) {
+    const t2d::i64 wanted = static_cast<t2d::i64>(page_) + by;
+    const t2d::i64 last = static_cast<t2d::i64>(page_count()) - 1;
+    page_ = static_cast<usize>(std::clamp<t2d::i64>(wanted, 0, last < 0 ? 0 : last));
+}
 usize BuildSidebar::entry_at(const Layout& layout, t2d::Vec2 point) const {
-    for (usize index = 0; index < layout.entries.size(); ++index) {
-        if (layout.entries[index].contains(point)) return index;
+    for (usize slot = 0; slot < layout.entries.size(); ++slot) {
+        if (layout.entries[slot].contains(point)) return page_ * kPageSize + slot;
     }
     return kNone;
 }

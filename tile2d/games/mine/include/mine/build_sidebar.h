@@ -48,7 +48,20 @@ public:
     void select_category(types::BuildingCategory category);
 
     /// The buildings of the selected category, in registration order.
+    /// How many buildings one page holds, and how the pages are turned (docs/GAME_DESIGN.md section 1.36).
+    /// The sidebar has a **fixed size**, so a category with more buildings than fit is paged rather than
+    /// grown: the grid is kColumns wide and kRows tall, and the wheel over the sidebar turns the page.
+    static constexpr usize kColumns = 2;
+    static constexpr usize kRows = 4;
+    static constexpr usize kPageSize = kColumns * kRows;
+
     [[nodiscard]] const std::vector<BuildEntry>& entries() const { return shown_; }
+    [[nodiscard]] usize page() const { return page_; }
+    [[nodiscard]] usize page_count() const {
+        return shown_.empty() ? 1 : (shown_.size() + kPageSize - 1) / kPageSize;
+    }
+    /// Turns \p by pages (negative goes back), clamped to the pages there are.
+    void turn_page(i32 by);
     [[nodiscard]] const BuildEntry* selected() const;
     void select(usize index);
     void clear_selection() { selected_ = kNone; }
@@ -60,6 +73,7 @@ public:
         std::vector<t2d::Aabb2> categories{};
         std::vector<t2d::Aabb2> entries{};
         t2d::Aabb2 details{};
+        t2d::Aabb2 page_label{};   ///< where "1 / 2" goes, in the details corner
     };
     [[nodiscard]] Layout layout(t2d::Vec2 screen, t2d::f32 unit) const;
 
@@ -75,6 +89,7 @@ private:
     std::vector<types::BuildingCategory> categories_;        ///< the ones with something in them
     std::vector<BuildEntry> shown_;                          ///< the selected category's buildings
     types::BuildingCategory category_ = types::BuildingCategory::None;
+    usize page_ = 0;
     usize selected_ = kNone;
     bool open_ = false;
 };

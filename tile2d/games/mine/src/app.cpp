@@ -1453,6 +1453,16 @@ void MineApp::handle_world_input(f32 delta_seconds) {
     if (input.mouse_down(ore::MouseButton::Middle)) {
         world_camera_.pan(t2d::Vec2{input.mouse_delta_x(), input.mouse_delta_y()});
     }
+    // The wheel over the sidebar turns its page; anywhere else it zooms the map (docs/GAME_DESIGN.md 1.36).
+    if (input.scroll_y() != 0.0f && sidebar_.open()) {
+        const BuildSidebar::Layout layout =
+            sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())},
+                            unit_);
+        if (layout.visible && layout.panel.contains(t2d::Vec2{input.mouse_x(), input.mouse_y()})) {
+            sidebar_.turn_page(input.scroll_y() > 0.0f ? -1 : 1);
+            return;
+        }
+    }
     if (input.scroll_y() != 0.0f) {
         world_camera_.zoom_at(mouse, input.scroll_y() > 0.0f ? 1.15f : 1.0f / 1.15f);
     }
@@ -2324,6 +2334,10 @@ void MineApp::draw_build_sidebar() {
         materials += std::format(" x{}", stack.count);
     }
     if (picked->seconds > 0.0f) materials += std::format("   {}s", picked->seconds);
+    if (sidebar_.page_count() > 1) {
+        draw_fitted(layout.page_label.min.x, layout.page_label.min.y, body_px_, kPalette.text_dim,
+                    std::format("{} / {}", sidebar_.page() + 1, sidebar_.page_count()), layout.page_label.width());
+    }
     draw_fitted(layout.details.min.x, layout.details.min.y + line_for(body_px_), body_px_, kPalette.text_dim,
                 materials, layout.details.width());
 }
