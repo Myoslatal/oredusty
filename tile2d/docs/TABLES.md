@@ -241,7 +241,7 @@ GCC 在 `-O3` 下给 `std::__format` 的 sink 吐出了 253 字节与 744 字节
 | **本体代码进表并运行** | `mine_core` 的 `registry.cpp` 编成表：注册两个 item（id 1、2）、重复注册 id 不变，`game_probe()` = 110 |
 | **模组覆盖本体表里的函数** | 加一张模组表后 `game_probe()` = **112**，报告 1 条覆盖（`game_bonus`，game_mod ← mine），`find_previous()` = 5 |
 | **表回调宿主** | 表里没定义的 `host_service` 与 `t2d::log_enabled` 由宿主解析（后者超距，走了桩） |
-| **整块本体进表，可执行文件变启动器** | 表由工具链编（`codetab build`）：release **924 节 / 2905 符号 / 11250 重定位 / 1.43 MiB**；debug **6289 / 21375 / 28634 / 3.99 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
+| **整块本体进表，可执行文件变启动器** | 表由工具链编（`codetab build`）：release **924 节 / 2905 符号 / 11250 重定位 / 1.43 MiB**；debug **6568 / 22316 / 30241 / 4.19 MiB**。启动器合并后调用 `mine_game_main`，游戏照常跑（窗口、Vulkan、内容、多语言） |
 | **构建时统一 ABI** | 本体表与启动器记录同指纹（`bdcb9b070ab30e78`）；`-O0`/`-O2`/`-O3 -DNDEBUG` 三种构建指纹相同、完全合并；另一个 `std::string` ABI、头文件改动、CPU 缺特性三种情形**拒绝并指名**（§5.6、[`ABI.md`](ABI.md)） |
 | **一份定义两个函数体：构建期折叠，加载期报告** | 同一个 vague linkage 函数在 `-O3` 下可以有两份不同机器码（实测 253 / 744 字节）。`codetab build` 先链接，表里只剩一份（9 个函数少掉 55 份死拷贝，渲染逐像素相同）；`codetab pack` 原样打包的仍会在加载时报出来，被丢掉的拷贝连同它的重定位一起丢，越界即构建失败 |
 | **模组表端到端** | `--table mods/demo_mod/mod.codetab`：`mine_game_banner` 被 `demo_mod` 顶掉（报告 1 条覆盖），游戏自己的调用改道，输出从 `Mine, unmodified` 变成 `Mine, modded` |
