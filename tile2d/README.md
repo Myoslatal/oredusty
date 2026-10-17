@@ -78,7 +78,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
     games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
     games/mine/tests/test_double_click    8 cases /  28 checks
-    games/mine/tests/test_build_sidebar  3 cases /  25 checks  the build sidebar: categories, what each holds, picking, and where its parts are  two presses on one cell inside a window: the gesture a selection is made of
+    games/mine/tests/test_build_sidebar  2 cases /  43 checks  the build sidebar: categories, picking, where its parts are, the pages  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_sandbox        28 cases / 719 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   18 cases / 265 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one

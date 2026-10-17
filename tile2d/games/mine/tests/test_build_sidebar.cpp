@@ -1,5 +1,5 @@
-// The build sidebar: which categories have buildings, which buildings each holds, what is picked, and where
-// its parts are on a screen (docs/GAME_DESIGN.md section 1.36).
+// The build sidebar: which categories have buildings, which buildings each holds, what is picked, where its
+// parts are on a screen, and how the pages turn (docs/GAME_DESIGN.md section 1.36).
 #include <mine/build_sidebar.h>
 
 #include <support/test_support.h>
@@ -33,36 +33,20 @@ struct Fixture {
 constexpr t2d::f32 kUnit = 1.0f;
 const t2d::Vec2 kScreen{1280.0f, 720.0f};
 
-} // namespace
-
-T2D_TEST(the_sidebar_lists_the_buildings_by_category) {
-    Fixture content;
-    content.add("bin", BuildingCategory::Storage, 2);
-    content.add("drill", BuildingCategory::Extraction, 1);
-    content.add("crusher", BuildingCategory::Processing, 1);
-
-    BuildSidebar sidebar;
-    sidebar.rebuild(content.registry, content.definitions);
-    T2D_REQUIRE(sidebar.categories().size() == 3u);
-    T2D_CHECK(sidebar.categories()[0] == BuildingCategory::Storage);
-    T2D_CHECK(sidebar.categories()[1] == BuildingCategory::Extraction);
-    T2D_CHECK(sidebar.categories()[2] == BuildingCategory::Processing);
-    // The first category with something in it is the one it starts on, and only its buildings are shown.
-    T2D_CHECK(sidebar.category() == BuildingCategory::Storage);
-    T2D_REQUIRE(sidebar.entries().size() == 1u);
-    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("bin"));
-    T2D_CHECK_EQ(sidebar.entries()[0].materials.size(), 2u);
-    T2D_CHECK_EQ(sidebar.entries()[0].seconds, 5.0f);
-
-    sidebar.select_category(BuildingCategory::Extraction);
-    T2D_REQUIRE(sidebar.entries().size() == 1u);
-    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("drill"));
+/// The middle of a rectangle: where a click lands when a test means "this one".
+t2d::Vec2 middle_of(const t2d::Aabb2& box) {
+    return t2d::Vec2{(box.min.x + box.max.x) * 0.5f, (box.min.y + box.max.y) * 0.5f};
 }
 
-T2D_TEST(content_that_is_not_a_building_is_not_offered) {
+} // namespace
+
+T2D_TEST(the_build_sidebar_lists_buildings_by_category_picks_one_and_pages_the_rest) {
     Fixture content;
-    content.add("bin", BuildingCategory::Storage, 1);
-    content.registry.register_content(ContentKind::Floor, "dirt");   // no building sub-object
+    content.add("bin", BuildingCategory::Storage, 2);
+    content.add("shed", BuildingCategory::Storage, 1);
+    content.add("drill", BuildingCategory::Extraction, 1);
+    content.add("crusher", BuildingCategory::Processing, 1);
+    content.registry.register_content(ContentKind::Floor, "dirt");   // no building sub-object: not offered
     TileDefinition floor;
     floor.kind = ContentKind::Floor;
     floor.name = "dirt";
@@ -70,54 +54,104 @@ T2D_TEST(content_that_is_not_a_building_is_not_offered) {
 
     BuildSidebar sidebar;
     sidebar.rebuild(content.registry, content.definitions);
-    T2D_REQUIRE(sidebar.categories().size() == 1u);
+
+    // --- what it offers ----------------------------------------------------------------------------
+    T2D_REQUIRE(sidebar.categories().size() == 3u);
     T2D_CHECK(sidebar.categories()[0] == BuildingCategory::Storage);
-    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    T2D_CHECK(sidebar.categories()[1] == BuildingCategory::Extraction);
+    T2D_CHECK(sidebar.categories()[2] == BuildingCategory::Processing);
+    T2D_CHECK(sidebar.category() == BuildingCategory::Storage);   // the first that has something
+    T2D_REQUIRE(sidebar.entries().size() == 2u);
     T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("bin"));
-}
-
-T2D_TEST(picking_a_building_is_a_box_and_a_line_under_the_grid) {
-    Fixture content;
-    content.add("bin", BuildingCategory::Storage, 2);
-    content.add("shed", BuildingCategory::Storage, 1);
-
-    BuildSidebar sidebar;
-    sidebar.rebuild(content.registry, content.definitions);
+    T2D_CHECK_EQ(sidebar.entries()[0].materials.size(), 2u);
+    T2D_CHECK_EQ(sidebar.entries()[0].seconds, 5.0f);
     T2D_CHECK(sidebar.selected() == nullptr);   // nothing is picked until the player picks
+
+    sidebar.select_category(BuildingCategory::Extraction);
+    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("drill"));
+    T2D_CHECK_EQ(sidebar.page(), 0u);   // a new category starts on its first page
+
+    // --- where its parts are -----------------------------------------------------------------------
+    sidebar.set_open(false);
+    BuildSidebar::Layout closed = sidebar.layout(kScreen, kUnit);
+    T2D_CHECK_FALSE(closed.visible);
+    T2D_CHECK(closed.toggle.max.x == kScreen.x);                       // the way in, on the right edge
+    T2D_CHECK(closed.toggle.min.x > kScreen.x - 40.0f * kUnit);
+    T2D_CHECK(closed.panel.max.x == 0.0f && closed.panel.max.y == 0.0f);   // nothing else is laid out
 
     sidebar.set_open(true);
     const BuildSidebar::Layout layout = sidebar.layout(kScreen, kUnit);
     T2D_CHECK(layout.visible);
-    T2D_REQUIRE(layout.categories.size() == 1u);
-    T2D_REQUIRE(layout.entries.size() == 2u);
-    // The panel is on the **right** of the screen and inside it, and the categories are to the left of the
-    // buildings: the two columns the designer asked for.
-    T2D_CHECK(layout.panel.max.x <= kScreen.x);
-    T2D_CHECK(layout.panel.min.x > kScreen.x * 0.5f);
-    T2D_CHECK(layout.panel.min.y >= 0.0f && layout.panel.max.y <= kScreen.y);
-    T2D_CHECK(layout.categories[0].max.x <= layout.entries[0].min.x);
-    T2D_CHECK(layout.details.min.y >= layout.entries[0].max.y);
+    T2D_CHECK(layout.panel.max.x == kScreen.x);                        // flush against the right edge
+    T2D_CHECK(layout.panel.min.x > kScreen.x * 0.5f);                  // and a column, not the whole screen
+    T2D_CHECK(layout.panel.max.y - layout.panel.min.y > layout.panel.max.x - layout.panel.min.x);
+    T2D_REQUIRE(layout.categories.size() == 3u);   // every category is on screen; the picked one is lit
+    T2D_REQUIRE(layout.entries.size() == 1u);
+    T2D_CHECK(layout.categories[0].max.x <= layout.entries[0].min.x);  // categories left of the buildings
+    T2D_CHECK(layout.details.min.y >= layout.entries[0].max.y);        // and what it costs below both
+    // The button is on the **left** of the panel when it is open: it closes what it is near.
+    T2D_CHECK(layout.toggle.min.x < layout.panel.min.x + (layout.panel.max.x - layout.panel.min.x) * 0.5f);
+    T2D_CHECK(layout.toggle.max.y <= layout.categories[0].min.y);
 
-    // What a click lands on, which is what the world view asks.
-    const t2d::Vec2 middle{(layout.entries[1].min.x + layout.entries[1].max.x) * 0.5f,
-                           (layout.entries[1].min.y + layout.entries[1].max.y) * 0.5f};
-    T2D_CHECK_EQ(sidebar.entry_at(layout, middle), 1u);
-    T2D_CHECK(sidebar.category_at(layout, middle) == std::nullopt);
-    const t2d::Vec2 on_category{(layout.categories[0].min.x + layout.categories[0].max.x) * 0.5f,
-                                (layout.categories[0].min.y + layout.categories[0].max.y) * 0.5f};
-    T2D_CHECK(sidebar.category_at(layout, on_category) == BuildingCategory::Storage);
-    T2D_CHECK_EQ(sidebar.entry_at(layout, on_category), BuildSidebar::kNone);
+    // --- what a click lands on ---------------------------------------------------------------------
+    T2D_CHECK(sidebar.category_at(layout, middle_of(layout.toggle)) == std::nullopt);
+    T2D_CHECK_EQ(sidebar.entry_at(layout, middle_of(layout.toggle)), BuildSidebar::kNone);
+    T2D_CHECK(sidebar.category_at(layout, middle_of(layout.categories[0])) == sidebar.categories()[0]);
+    T2D_CHECK_EQ(sidebar.entry_at(layout, middle_of(layout.categories[0])), BuildSidebar::kNone);
+    T2D_CHECK_EQ(sidebar.entry_at(layout, middle_of(layout.entries[0])), 0u);
     T2D_CHECK_EQ(sidebar.entry_at(layout, t2d::Vec2{10.0f, 10.0f}), BuildSidebar::kNone);   // over the map
 
-    sidebar.select(1);
+    // --- picking ----------------------------------------------------------------------------------
+    sidebar.select(0);
     T2D_REQUIRE(sidebar.selected() != nullptr);
-    T2D_CHECK_EQ(sidebar.selected()->name, std::string("shed"));
+    T2D_CHECK_EQ(sidebar.selected()->name, std::string("drill"));
     sidebar.clear_selection();
     T2D_CHECK(sidebar.selected() == nullptr);
+    sidebar.select(99);   // past the end is nothing, not the last one
+    T2D_CHECK(sidebar.selected() == nullptr);
+}
 
-    // Closed is closed: nothing is laid out and nothing is hit.
-    sidebar.set_open(false);
-    T2D_CHECK_FALSE(sidebar.layout(kScreen, kUnit).visible);
+T2D_TEST(a_category_with_more_buildings_than_fit_is_paged) {
+    Fixture content;
+    for (usize index = 0; index < BuildSidebar::kPageSize + 3; ++index) {
+        content.add(std::format("shed{}", index), BuildingCategory::Storage);
+    }
+
+    BuildSidebar sidebar;
+    sidebar.rebuild(content.registry, content.definitions);
+    sidebar.set_open(true);
+    T2D_REQUIRE(sidebar.entries().size() == BuildSidebar::kPageSize + 3);
+    T2D_CHECK_EQ(sidebar.page_count(), 2u);
+
+    // The first page is full, the second holds what is left, and a click on it answers with the index in the
+    // **whole** list - the world view places the building the player is looking at, not the one on slot 0.
+    const BuildSidebar::Layout first = sidebar.layout(kScreen, kUnit);
+    T2D_REQUIRE(first.entries.size() == BuildSidebar::kPageSize);
+    T2D_CHECK_EQ(sidebar.entry_at(first, middle_of(first.entries[0])), 0u);
+    T2D_CHECK_EQ(sidebar.entry_at(first, middle_of(first.entries[BuildSidebar::kPageSize - 1])),
+                 BuildSidebar::kPageSize - 1);
+
+    sidebar.turn_page(1);
+    T2D_CHECK_EQ(sidebar.page(), 1u);
+    const BuildSidebar::Layout second = sidebar.layout(kScreen, kUnit);
+    T2D_REQUIRE(second.entries.size() == 3u);
+    T2D_CHECK_EQ(sidebar.entry_at(second, middle_of(second.entries[0])), BuildSidebar::kPageSize);
+    T2D_CHECK_EQ(sidebar.entry_at(second, middle_of(second.entries[2])), BuildSidebar::kPageSize + 2);
+    // The panel is the same size on both pages: the sidebar has a fixed size (section 1.36).
+    T2D_CHECK(second.panel.max.x == first.panel.max.x && second.panel.max.y == first.panel.max.y);
+    T2D_CHECK(second.panel.min.x == first.panel.min.x && second.panel.min.y == first.panel.min.y);
+
+    // Turning past either end stays on the pages there are.
+    sidebar.turn_page(1);
+    T2D_CHECK_EQ(sidebar.page(), 1u);
+    sidebar.turn_page(-5);
+    T2D_CHECK_EQ(sidebar.page(), 0u);
+    // A category with one page has nothing to turn to.
+    sidebar.select_category(BuildingCategory::Processing);
+    T2D_CHECK_EQ(sidebar.page_count(), 1u);
+    sidebar.turn_page(1);
+    T2D_CHECK_EQ(sidebar.page(), 0u);
 }
 
 T2D_TEST_MAIN
