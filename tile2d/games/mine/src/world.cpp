@@ -378,6 +378,13 @@ void fill_container(types::SceneTile& plot, const PlacedContent& where, const Co
 
 } // namespace
 
+i32 MineLayer::first_free_layer(GridPos cell) const {
+    for (i32 layer = 0; layer < shape_.tile_layers; ++layer) {
+        if (plot_at(layer, cell) == nullptr) return layer;
+    }
+    return shape_.tile_layers;
+}
+
 bool MineLayer::can_place(const PlacedContent& where, std::string* why) const {
     const auto no = [&](std::string message) {
         if (why != nullptr) *why = std::move(message);

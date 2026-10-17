@@ -112,6 +112,8 @@ target_link_libraries(test_warehouses PRIVATE mine_core)
 
 # Two presses on one cell are one gesture: the double click a selection is made of.
 t2d_add_test(test_double_click test_double_click.cpp)
+t2d_add_test(test_build_sidebar test_build_sidebar.cpp)
+target_link_libraries(test_build_sidebar PRIVATE mine_core)
 target_link_libraries(test_double_click PRIVATE mine_core)
 
 

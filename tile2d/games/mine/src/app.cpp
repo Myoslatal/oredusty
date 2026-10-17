@@ -1331,6 +1331,25 @@ MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const
     const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
     // One panel's pictures, at the rows the layout gave them. The words are the overlay's (draw_container_panel),
     // and both come out of the same layout, so a picture cannot land on another line's name.
+    // The build sidebar's pictures, one batch per entry, in the cells the layout gave them: the same texture
+    // the map draws that content with (docs/GAME_DESIGN.md section 1.36).
+    if (sidebar_.open()) {
+        const BuildSidebar::Layout layout =
+            sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())},
+                            unit_);
+        for (usize index = 0; index < layout.entries.size(); ++index) {
+            const BuildEntry& entry = sidebar_.entries()[index];
+            const auto texture = content_textures_.find(image_key(entry.kind, entry.name));
+            if (texture == content_textures_.end()) continue;   // no picture: the name alone says it
+            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+            batch_->draw_quad(layout.entries[index], full_uv, 0xFFFFFFFFu);
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
+    }
+
     const auto draw_panel = [&](const ContainerPanelLayout& layout, const types::Container& container) {
         if (layout.empty) return;
         const std::vector<types::ContainerSlot>& slots = container.slots();
@@ -1459,6 +1478,27 @@ void MineApp::handle_world_input(f32 delta_seconds) {
             // The sidebar is over the map, so it is offered the click first: a click that landed on it is the
         // panel's, not the map's (docs/GAME_DESIGN.md section 1.36).
         if (sidebar_click(t2d::Vec2{input.mouse_x(), input.mouse_y()})) return;
+        // A building picked in the sidebar and a click on the map: the building goes on the first free tile
+        // layer of that cell - above the floor, above the ore in the ground - when the layer says it may
+        // stand there, and the reason it may not is logged either way (docs/GAME_DESIGN.md sections 1.34,
+        // 1.36). The pointer does one thing at a time: this click is the placement, not the corner panel.
+        if (const BuildEntry* picked = sidebar_.selected(); picked != nullptr) {
+            MineLayer& layer = world_.layer();
+            PlacedContent where;
+            where.kind = picked->kind;
+            where.name = picked->name;
+            where.layer = layer.first_free_layer(cell);
+            where.anchor = cell;
+            std::string why;
+            if (!layer.can_place(where, &why)) {
+                T2D_INFO("world: {} cannot stand there: {}", picked->name, why);
+            } else if (layer.place(registry_, content_.report().definitions, where, nullptr) != nullptr) {
+                T2D_INFO("world: built {} at {},{}", picked->name, cell.x, cell.y);
+                sidebar_.clear_selection();
+            }
+            double_click_.reset();
+            return;
+        }
         if (double_click_.press(cell)) {
                 // The **second** press of a double click selects instead of clicking. One gesture then
                 // does one of each: the first press was the click (the plot's panel at its corner,

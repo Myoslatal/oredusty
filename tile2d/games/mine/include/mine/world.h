@@ -197,6 +197,12 @@ public:
     /// to sit on ore (types/drill.h).
     [[nodiscard]] bool can_place(const PlacedContent& where, std::string* why = nullptr) const;
 
+    /// The first tile layer of \p cell that has nothing on it: where a building goes when the player picks
+    /// one and clicks (docs/GAME_DESIGN.md section 1.36). A building stands **above** what is already there -
+    /// the floor, the ore in the ground - which is the same rule the story's first layer follows. The layer
+    /// count when every one of them is taken, which can_place() then refuses.
+    [[nodiscard]] i32 first_free_layer(GridPos cell) const;
+
     void build(const LayerSpec& spec, const ContentRegistry& registry, const ContentDefinitions& definitions,
                LayerBuildReport* report);
 
