@@ -666,4 +666,42 @@ item::
     T2D_CHECK_EQ(broken_report.definitions.item_count(), 0u);
 }
 
+T2D_TEST(a_content_file_can_include_another_file) {
+    // A pack can be split into parts, and a part lands where the include is (docs/MODS.md): the included
+    // file is written at the top level and indented to the include line, so it can be a fragment of the
+    // table that names it - what it declares is content, exactly as if it had been written in place.
+    Scratch scratch;
+    // The part's name starts with '_': a file another file includes is not content of its own, or it
+    // would be registered twice - once by itself and once where it is included.
+    scratch.write("pack/content/_parts.ecfg", "part_ore::\npart_scrap::\n");
+    scratch.write("pack/content/mine.ecfg", "item::\n    whole_ore::\n    __include: #_parts.ecfg\n");
+
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({scratch.root()});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK_EQ(report.total_content, 3u);
+    const ContentPack* pack = find_pack(pipeline, "pack");
+    T2D_REQUIRE(pack != nullptr);
+    T2D_CHECK_EQ(pack->files.size(), 1u);   // the part is not read on its own
+    T2D_CHECK(registry.find(ContentKind::Item, "whole_ore") != kNoContent);
+    T2D_CHECK(registry.find(ContentKind::Item, "part_ore") != kNoContent);
+    T2D_CHECK(registry.find(ContentKind::Item, "part_scrap") != kNoContent);
+}
+
+T2D_TEST(a_content_file_that_includes_nothing_there_is_reported) {
+    // The failure names the file and the line that asked for it, which is the only way to find it in a
+    // pack of parts.
+    Scratch scratch;
+    scratch.write("pack/content/mine.ecfg", "item::\n    __include: #gone.ecfg\n");
+
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({scratch.root()});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_FALSE(report.clean());
+    T2D_CHECK_MSG(mentions(report.errors, "gone.ecfg"), "{}", report.first_error());
+}
+
 T2D_TEST_MAIN

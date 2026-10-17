@@ -16,6 +16,7 @@ engine 1.0
 A _ZN3t2d11log_enabledENS_8LogLevelE t2d/core   # t2d::log_enabled
 A _ZN3t2d12EcfgDocument4loadERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPNS_9EcfgErrorE t2d/core   # t2d::EcfgDocument::load
 A _ZN3t2d12EcfgDocument5parseESt17basic_string_viewIcSt11char_traitsIcEEPNS_9EcfgErrorE t2d/core   # t2d::EcfgDocument::parse
+A _ZN3t2d12EcfgDocument5parseESt17basic_string_viewIcSt11char_traitsIcEERKNSt7__cxx1112basic_stringIcS3_SaIcEEEPNS_9EcfgErrorE t2d/core   # t2d::EcfgDocument::parse (with a base directory, for __include)
 A _ZN3t2d13language_codeENS_8LanguageE t2d/text   # t2d::language_code
 A _ZN3t2d13language_nameENS_8LanguageE t2d/text   # t2d::language_name
 A _ZN3t2d14parse_languageESt17basic_string_viewIcSt11char_traitsIcEE t2d/text   # t2d::parse_language

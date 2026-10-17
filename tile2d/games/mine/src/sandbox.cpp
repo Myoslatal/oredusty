@@ -8,6 +8,7 @@
 #include <t2d/core/rng.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <cmath>
 #include <format>
 
@@ -376,7 +377,10 @@ SandboxReloadReport SandboxModel::reload_texts(ContentRegistry& registry,
     for (usize index = 0; index < texts.size(); ++index) {
         const std::string& name = index < names.size() ? names[index] : std::string("<text>");
         t2d::EcfgError error;
-        std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(texts[index], &error);
+        // An __include in the text is resolved relative to the file it came from, the same rule the pack
+        // loader follows (docs/MODS.md): the name here is that file's path.
+        const std::string base = std::filesystem::path(name).parent_path().string();
+        std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(texts[index], base, &error);
         if (!document.has_value()) {
             report.parsed = false;
             report.errors.push_back(error.describe(name));

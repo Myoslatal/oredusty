@@ -14,6 +14,15 @@
 //                                            included, and the closing marker is a line with only ">>"
 //     content
 //     >>
+//     __include: #other.ecfg                 the file's text is spliced in **here**, then parsed
+//
+// `__include`: a file can be assembled from parts. A line `__include: #<path>` is replaced by the contents
+// of <path> before anything is parsed, indented like the line it lands on - so a file written at the top
+// level can be included inside a table. The body of a `<< ... >>` block is copied exactly and never
+// indented: it is a value. The path is relative to the file that names it; `EcfgDocument::load` and the
+// `parse(text, base_directory, error)` overload resolve it, while plain `parse(text, error)` refuses an
+// include because that text has no file to be relative to. An include that cannot be read, that loops, or
+// that nests deeper than 16 levels is an error naming the file and line that asked for it.
 //
 // Rules the reader enforces, because a config that is half understood is worse than one that is
 // rejected:
@@ -103,7 +112,13 @@ class EcfgDocument {
 public:
     /// Parses text. On failure returns nullopt and fills error (when given).
     [[nodiscard]] static std::optional<EcfgDocument> parse(std::string_view text, EcfgError* error = nullptr);
-    /// Reads and parses a file. A file that cannot be read reports line 0.
+    /// Parses text, resolving its `__include: #<path>` lines against \p base_directory (see the note at the
+    /// top of this file). Text with no includes parses exactly as the overload above does, so this is the
+    /// one to use when the text came from a file and that file may point at others.
+    [[nodiscard]] static std::optional<EcfgDocument> parse(std::string_view text, const std::string& base_directory,
+                                                           EcfgError* error = nullptr);
+    /// Reads and parses a file, resolving its includes relative to the file's own directory - the same rule a
+    /// content file's images follow. A file that cannot be read reports line 0.
     [[nodiscard]] static std::optional<EcfgDocument> load(const std::string& path, EcfgError* error = nullptr);
 
     [[nodiscard]] const EcfgValue& root() const { return root_; }

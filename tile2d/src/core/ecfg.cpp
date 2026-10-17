@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 
 namespace t2d {
@@ -482,22 +483,178 @@ std::string EcfgValue::describe(usize indent) const {
     return pad + "?";
 }
 
+// --- __include -------------------------------------------------------------------------------------
+
+/// One line of the source the parser ends up reading, and where it really came from.
+struct LineOrigin {
+    std::string file;   ///< empty for text the caller passed rather than a file
+    u32 line = 0;
+};
+
+/// The expanded source: what the parser reads, and the file and line each of its lines came from.
+struct ExpandedSource {
+    std::string text;
+    std::vector<LineOrigin> origin;
+};
+
+/// How deeply `__include` may nest: a file that includes a file that includes ... is a stack the reader
+/// would otherwise walk until the real one runs out.
+constexpr u32 kMaxIncludeDepth = 16;
+
+/// The leading whitespace of a line, as written (tabs stay tabs).
+[[nodiscard]] std::string_view leading_whitespace(std::string_view line) {
+    usize count = 0;
+    while (count < line.size() && (line[count] == ' ' || line[count] == '\t')) ++count;
+    return line.substr(0, count);
+}
+
+/// Whether a trimmed line is an `__include` directive: the word, then spaces, then a colon. A line that
+/// reads like one but names nothing is an error rather than an entry, so this stays loose and the expander
+/// says what is missing.
+[[nodiscard]] bool is_include_line(std::string_view content) {
+    constexpr std::string_view kDirective = "__include";
+    if (!content.starts_with(kDirective)) return false;
+    content = trim(content.substr(kDirective.size()));
+    return !content.empty() && content.front() == ':';
+}
+
+/// Expands the `__include: #<path>` lines of \p text, which is what \p file holds (empty for text the
+/// caller passed), prefixing every line of the result with \p prefix so that a file written at the top level
+/// can land inside a table. The body of a `<< ... >>` block is copied exactly: it is the value.
+class IncludeExpander {
+public:
+    IncludeExpander(std::string base_directory, EcfgError* error)
+        : base_(std::move(base_directory)), error_(error) {}
+
+    [[nodiscard]] bool expand(std::string_view text, const std::string& file, std::string_view prefix,
+                              u32 depth) {
+        u32 number = 0;
+        bool block = false;   // inside a "<< ... >>" body, which is copied verbatim
+        usize start = 0;
+        while (start < text.size()) {
+            const usize end = text.find('\n', start);
+            const std::string_view raw =
+                text.substr(start, (end == std::string_view::npos ? text.size() : end) - start);
+            start = end == std::string_view::npos ? text.size() : end + 1;
+            ++number;
+            const std::string_view content = trim(raw);
+            if (block && content != ">>") {
+                // The body of a text block is the value: it is copied exactly, prefix and all.
+                source.text += raw;
+                source.text += '\n';
+                source.origin.push_back(LineOrigin{file, number});
+                continue;
+            }
+            if (is_include_line(content)) {
+                if (!include(content, raw, file, prefix, number, depth)) return false;
+                continue;
+            }
+            source.text += prefix;
+            source.text += raw;
+            source.text += '\n';
+            source.origin.push_back(LineOrigin{file, number});
+            if (content.size() >= 2 && content.substr(content.size() - 2) == "<<") block = true;
+            else if (content == ">>") block = false;
+        }
+        return true;
+    }
+
+    ExpandedSource source;
+
+private:
+    [[nodiscard]] bool fail(u32 line, std::string message) {
+        if (error_ != nullptr) *error_ = EcfgError{line, 1, std::move(message)};
+        return false;
+    }
+
+    /// One `__include` line: the path is checked, the file is read, and its text lands where the line was.
+    [[nodiscard]] bool include(std::string_view content, std::string_view raw, const std::string& file,
+                               std::string_view prefix, u32 number, u32 depth) {
+        constexpr std::string_view kWanted = "an __include wants a file: __include: #path/to/file.ecfg";
+        std::string_view rest = trim(content.substr(std::string_view("__include").size()));
+        rest = trim(rest.substr(1));   // after the ':'
+        if (rest.size() < 2 || rest.front() != '#') return fail(number, std::string(kWanted));
+        rest.remove_prefix(1);
+        // Like every other line, the rest of it may be a comment: the path ends at the next '#'.
+        if (const usize comment = rest.find('#'); comment != std::string_view::npos) rest = rest.substr(0, comment);
+        const std::string path(trim(rest));
+        if (path.empty()) return fail(number, std::string(kWanted));
+        if (base_.empty()) {
+            return fail(number,
+                        std::format("__include '{}' has no file to be relative to: this text was not read "
+                                    "from one",
+                                    path));
+        }
+        const std::filesystem::path target = std::filesystem::path(path).is_absolute()
+                                                 ? std::filesystem::path(path)
+                                                 : std::filesystem::path(base_) / path;
+        const std::string key = target.lexically_normal().string();
+        if (std::find(chain_.begin(), chain_.end(), key) != chain_.end()) {
+            return fail(number, std::format("__include '{}' is already being read: {} (a loop)", path,
+                                            describe_chain(file, number)));
+        }
+        if (depth >= kMaxIncludeDepth) {
+            return fail(number,
+                        std::format("__include '{}' is nested deeper than {} levels", path, kMaxIncludeDepth));
+        }
+        const std::optional<std::string> included = read_text(key);
+        if (!included.has_value()) {
+            return fail(number, std::format("__include '{}' cannot be read (from {})", key,
+                                            describe_chain(file, number)));
+        }
+        chain_.push_back(key);
+        const bool ok = expand(*included, key, std::string(prefix) + std::string(leading_whitespace(raw)),
+                               depth + 1);
+        chain_.pop_back();
+        return ok;
+    }
+
+    [[nodiscard]] static std::string describe_chain(const std::string& file, u32 number) {
+        return file.empty() ? std::format("line {}", number) : std::format("{}:{}", file, number);
+    }
+
+    std::string base_;
+    EcfgError* error_ = nullptr;
+    std::vector<std::string> chain_;   ///< the files being expanded, outermost first
+};
+
 std::optional<EcfgDocument> EcfgDocument::parse(std::string_view text, EcfgError* error) {
+    // Text on its own is still assembled from parts as long as it names none: an include in it is refused
+    // with a message that says why (there is no file to be relative to), not as a syntax error.
+    return parse(text, std::string{}, error);
+}
+
+std::optional<EcfgDocument> EcfgDocument::parse(std::string_view text, const std::string& base_directory,
+                                                EcfgError* error) {
+    IncludeExpander expander(base_directory, error);
+    if (!expander.expand(text, std::string{}, std::string_view{}, 0)) return std::nullopt;
+
     EcfgError scan_error;
-    std::vector<ecfg_detail::Line> lines = scan_lines(text, scan_error);
+    std::vector<ecfg_detail::Line> lines = scan_lines(expander.source.text, scan_error);
     if (scan_error.line != 0) {
         if (error != nullptr) *error = scan_error;
         return std::nullopt;
     }
 
+    bool ok = true;
     EcfgDocument document;
     try {
         ecfg_detail::Parser parser(std::move(lines));
         parser.run(document.root_);
     } catch (const EcfgError& failure) {
         if (error != nullptr) *error = failure;
-        return std::nullopt;
+        ok = false;
     }
+    if (!ok && error != nullptr && error->line > 0 && error->line <= expander.source.origin.size()) {
+        // The parser counted lines of the **expanded** source; say which file and line that really is,
+        // because the expanded text is not the file the designer is looking at.
+        const LineOrigin& origin = expander.source.origin[error->line - 1];
+        if (!origin.file.empty()) {
+            error->message = std::format("{} ({}:{})", error->message, origin.file, origin.line);
+            error->line = origin.line;
+        }
+    }
+    if (!ok) return std::nullopt;
     return document;
 }
 
@@ -507,7 +664,9 @@ std::optional<EcfgDocument> EcfgDocument::load(const std::string& path, EcfgErro
         if (error != nullptr) *error = EcfgError{0, 0, std::format("cannot read '{}'", path)};
         return std::nullopt;
     }
-    std::optional<EcfgDocument> document = parse(*text, error);
+    // Includes are resolved relative to the file that asks for them, the way a content file's images are
+    // resolved relative to it (docs/MODS.md).
+    std::optional<EcfgDocument> document = parse(*text, std::filesystem::path(path).parent_path().string(), error);
     if (document.has_value()) document->source_name_ = path;
     return document;
 }

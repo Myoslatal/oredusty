@@ -3,6 +3,9 @@
 
 #include <support/test_support.h>
 
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -363,6 +366,171 @@ T2D_TEST(describe_renders_the_tree) {
     T2D_CHECK_MSG(text.find("b: \"x\"") != std::string::npos, "describe() lost the string: {}", text);
     T2D_CHECK_MSG(text.find("c: true") != std::string::npos, "describe() lost the nested bool: {}", text);
     T2D_CHECK_MSG(text.find("d: [1, 2]") != std::string::npos, "describe() lost the array: {}", text);
+}
+
+// --- __include: a file assembled from parts -----------------------------------------------------------
+
+namespace {
+
+/// A directory of its own for one test, removed when the test ends. The include reader needs real files, and
+/// a test that wrote into the source tree would leave them there.
+class TempDirectory {
+public:
+    explicit TempDirectory(std::string_view name) {
+        path = std::filesystem::temp_directory_path() / std::format("t2d-ecfg-{}-{}", name, counter_++);
+        std::error_code code;
+        std::filesystem::remove_all(path, code);
+        std::filesystem::create_directories(path, code);
+    }
+    ~TempDirectory() {
+        std::error_code code;
+        std::filesystem::remove_all(path, code);
+    }
+    TempDirectory(const TempDirectory&) = delete;
+    TempDirectory& operator=(const TempDirectory&) = delete;
+
+    /// Writes one file into the directory and returns its full path (callers that only want the file
+    /// written ignore it, so it is not [[nodiscard]]).
+    std::string write(std::string_view name, std::string_view text) const {
+        const std::filesystem::path file = path / name;
+        std::ofstream out(file, std::ios::binary);
+        out << text;
+        out.close();
+        return file.string();
+    }
+
+    std::filesystem::path path;
+
+private:
+    inline static u32 counter_ = 0;
+};
+
+/// Loads a file that must load, and says why when it does not.
+[[nodiscard]] std::optional<EcfgDocument> load_ok(const std::string& path) {
+    EcfgError error;
+    std::optional<EcfgDocument> document = EcfgDocument::load(path, &error);
+    if (!document.has_value()) T2D_CHECK_MSG(false, "loading failed: {}", error.describe(path));
+    return document;
+}
+
+}  // namespace
+
+T2D_TEST(an_include_puts_a_file_where_the_line_is) {
+    const TempDirectory dir("splice");
+    dir.write("part.ecfg", "number1:7\nstring1:\"bbb\"\n");
+    const std::string parent = dir.write("parent.ecfg", "__include: #part.ecfg\nbool1:true\n");
+    const std::optional<EcfgDocument> document = load_ok(parent);
+    T2D_REQUIRE(document.has_value());
+    T2D_CHECK_EQ(document->find("number1")->as_int(-1), 7);
+    T2D_CHECK_EQ(document->find("string1")->as_string(), std::string_view("bbb"));
+    T2D_CHECK(document->find("bool1")->as_bool());
+    // The directive itself is gone: it *was* the file, not an entry of its own.
+    T2D_CHECK(document->find("__include") == nullptr);
+    T2D_CHECK_EQ(document->root().size(), 3u);
+}
+
+T2D_TEST(an_include_inside_a_table_lands_in_that_table) {
+    // The included file is written at the top level and lands inside a table: it is indented to the
+    // include line, which is what makes a part reusable at any depth.
+    const TempDirectory dir("table");
+    dir.write("part.ecfg", "num1:1\nnum2:2\n");
+    const std::string parent = dir.write(
+        "parent.ecfg", "table1::\n    __include: #part.ecfg\n    num3:3\n");
+    const std::optional<EcfgDocument> document = load_ok(parent);
+    T2D_REQUIRE(document.has_value());
+    T2D_CHECK_EQ(document->find_path("table1.num1")->as_int(-1), 1);
+    T2D_CHECK_EQ(document->find_path("table1.num2")->as_int(-1), 2);
+    T2D_CHECK_EQ(document->find_path("table1.num3")->as_int(-1), 3);
+    T2D_CHECK(document->find("num1") == nullptr);   // not at the top level: it went into the table
+}
+
+T2D_TEST(an_included_text_block_is_copied_exactly) {
+    // The body of a `<< ... >>` block is a value: indenting it to the include line would change it.
+    const TempDirectory dir("block");
+    dir.write("part.ecfg", "text1:<<\n    kept as written\n>>\n");
+    const std::string parent = dir.write("parent.ecfg", "table1::\n    __include: #part.ecfg\n");
+    const std::optional<EcfgDocument> document = load_ok(parent);
+    T2D_REQUIRE(document.has_value());
+    T2D_REQUIRE(document->find_path("table1.text1") != nullptr);
+    T2D_CHECK_EQ(document->find_path("table1.text1")->as_string(),
+                std::string_view("    kept as written\n"));
+}
+
+T2D_TEST(an_include_can_include_another) {
+    const TempDirectory dir("nested");
+    dir.write("c.ecfg", "deep:3\n");
+    dir.write("b.ecfg", "__include: #c.ecfg\nmiddle:2\n");
+    const std::string parent = dir.write("a.ecfg", "__include: #b.ecfg\ntop:1\n");
+    const std::optional<EcfgDocument> document = load_ok(parent);
+    T2D_REQUIRE(document.has_value());
+    T2D_CHECK_EQ(document->find("deep")->as_int(-1), 3);
+    T2D_CHECK_EQ(document->find("middle")->as_int(-1), 2);
+    T2D_CHECK_EQ(document->find("top")->as_int(-1), 1);
+}
+
+T2D_TEST(an_include_is_relative_to_the_file_that_names_it) {
+    // Not to the working directory: a content file sits in a pack and points at its neighbours.
+    const TempDirectory dir("relative");
+    std::filesystem::create_directories(dir.path / "parts");
+    dir.write("parts/ore.ecfg", "ore1:\"stone\"\n");
+    const std::string parent = dir.write("parent.ecfg", "__include: #parts/ore.ecfg\n");
+    const std::optional<EcfgDocument> document = load_ok(parent);
+    T2D_REQUIRE(document.has_value());
+    T2D_REQUIRE(document->find("ore1") != nullptr);
+    T2D_CHECK_EQ(document->find("ore1")->as_string(), std::string_view("stone"));
+}
+
+T2D_TEST(a_missing_include_is_an_error_that_names_it) {
+    const TempDirectory dir("missing");
+    const std::string parent = dir.write("parent.ecfg", "a:1\n__include: #gone.ecfg\n");
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(parent, &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("gone.ecfg") != std::string::npos, "the message does not name the file: {}",
+                  error.message);
+    T2D_CHECK_EQ(error.line, 2u);   // the line that asked for it
+}
+
+T2D_TEST(an_include_that_loops_is_refused) {
+    const TempDirectory dir("loop");
+    dir.write("a.ecfg", "__include: #b.ecfg\n");
+    const std::string b = dir.write("b.ecfg", "__include: #a.ecfg\n");
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(b, &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("loop") != std::string::npos, "the message does not say it loops: {}",
+                  error.message);
+}
+
+T2D_TEST(a_malformed_include_says_what_it_wants) {
+    const TempDirectory dir("malformed");
+    const std::string parent = dir.write("parent.ecfg", "__include: part.ecfg\n");   // no '#'
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(parent, &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("__include: #") != std::string::npos,
+                  "the message does not show the form: {}", error.message);
+}
+
+T2D_TEST(text_with_no_file_cannot_resolve_an_include) {
+    // Plain parse(text) has nothing to be relative to, and says so instead of guessing a directory.
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::parse("__include: #part.ecfg\n", &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("no file to be relative to") != std::string::npos,
+                  "the message does not say why: {}", error.message);
+}
+
+T2D_TEST(a_syntax_error_inside_an_include_names_the_file_it_is_in) {
+    const TempDirectory dir("error");
+    dir.write("part.ecfg", "good:1\nbad:aaa\n");   // a bare word is an error
+    const std::string parent = dir.write("parent.ecfg", "__include: #part.ecfg\n");
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(parent, &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("part.ecfg:2") != std::string::npos,
+                  "the error does not point into the included file: {}", error.message);
+    T2D_CHECK_EQ(error.line, 2u);
 }
 
 T2D_TEST_MAIN

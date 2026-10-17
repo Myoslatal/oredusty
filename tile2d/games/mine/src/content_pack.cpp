@@ -164,6 +164,13 @@ std::vector<std::string> ContentPack::content_files(const std::string& directory
             it.disable_recursion_pending();
             continue;
         }
+        // A name starting with '_' is a **part**, not content: a file some other file includes, or a
+        // directory of them (docs/MODS.md section 0). The pack does not read it on its own - what it
+        // holds is declared where it is included, and reading it twice would register it twice.
+        if (!name.empty() && name[0] == '_') {
+            it.disable_recursion_pending();
+            continue;
+        }
         std::error_code entry_code;
         if (it->is_directory(entry_code)) {
             if (is_mod_package(path)) it.disable_recursion_pending();
