@@ -29,9 +29,11 @@ public:
 
     // --- its three halves -------------------------------------------------------------------------
     /// What it holds. This is the half other code talks to: a machine that should deliver here, a demand
-    /// that counts what arrived, a save that writes it down.
-    [[nodiscard]] Container& container() { return container_; }
-    [[nodiscard]] const Container& container() const { return container_; }
+    /// that counts what arrived, a save that writes it down. It is also the generic answer a plot gives
+    /// (types/scene_tile.h) - the one a double click asks for - which is why it returns a pointer there:
+    /// a floor has no container, a warehouse always does (docs/GAME_DESIGN.md section 1.31).
+    [[nodiscard]] Container* container() override { return &container_; }
+    [[nodiscard]] const Container* container() const override { return &container_; }
     /// What takes dragged drops in.
     [[nodiscard]] DragInto& draginto() { return draginto_; }
     [[nodiscard]] const DragInto& draginto() const { return draginto_; }

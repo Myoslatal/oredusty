@@ -69,7 +69,8 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills          4 cases /  58 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
-    games/mine/tests/test_warehouses      7 cases / 114 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
+    games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
+    games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_sandbox        28 cases / 718 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   14 cases / 245 checks  packs: a directory per pack, several files each, headers, order, collisions, art
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -492,7 +493,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 822 sections, 2 602 symbols, 9 928 relocations (release)
+        mine.codetab         the game: 851 sections, 2 662 symbols, 10 073 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -742,12 +743,12 @@ estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 30/30 tests green |
-| `release` | 30/30 tests green |
-| `asan` (Address + UB sanitizers) | 30/30 tests green |
-| `tsan` (ThreadSanitizer) | 30/30 tests green |
+| `debug` | 31/31 tests green |
+| `release` | 31/31 tests green |
+| `asan` (Address + UB sanitizers) | 31/31 tests green |
+| `tsan` (ThreadSanitizer) | 31/31 tests green |
 | `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
-| `server-only` | 30/30 tests green |
+| `server-only` | 31/31 tests green |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

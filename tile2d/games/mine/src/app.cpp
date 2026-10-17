@@ -1075,6 +1075,10 @@ void MineApp::open_world() {
 }
 
 void MineApp::enter_mine_layer(i32 index) {
+    // A new layer is another mine: whatever was selected belongs to the one being left, and the press
+    // that is halfway through a double click does too (docs/GAME_DESIGN.md section 1.31).
+    clear_selection();
+    double_click_.reset();
     const i32 wanted = std::max(0, index);
     const MineLayer& layer = world_.enter(wanted, registry_, content_.report().definitions);
     const LayerBuildReport& report = world_.build_report();
@@ -1139,25 +1143,18 @@ void MineApp::report_release(ReleaseResult result) {
     }
 }
 
-MineApp::WarehousePanelLayout MineApp::warehouse_panel_layout(const types::Warehouse& warehouse) const {
+MineApp::ContainerPanelLayout MineApp::container_panel(const types::SceneTile& plot, std::string title) const {
     const TextLookup text = [this](std::string_view id) { return locale_.text(id); };
-    WarehousePanelLayout layout;
+    ContainerPanelLayout layout;
+    const types::Container* container = plot.container();
+    if (container == nullptr) return layout;   // nothing to show: the caller draws nothing
 
-    // The title is the warehouse's **own localized name** when the text file has one, and the kind's word
-    // when it does not (content_name.h): "石头仓库   1 / 100" is what a player reads, and a designer who
-    // has not written a label still gets a title rather than an id.
-    bool named = false;
-    const std::string label = content_label(registry_, warehouse.kind(), warehouse.id(), text, &named);
-    layout.title = format_localized(locale_.text("world.warehouse.title"),
-                                    named ? label : std::string(locale_.text("world.warehouse.name")),
-                                    warehouse.container().total(), warehouse.container().capacity());
-
-    const std::vector<types::ContainerSlot>& slots = warehouse.container().slots();
-    layout.labels.reserve(slots.size());
-    for (const types::ContainerSlot& slot : slots) {
+    layout.title = std::move(title);
+    layout.labels.reserve(container->slots().size());
+    for (const types::ContainerSlot& slot : container->slots()) {
         layout.labels.push_back(content_label(registry_, slot.kind, slot.id, text));
     }
-    layout.empty = slots.empty();
+    layout.empty = container->slots().empty();
 
     const f32 padding = 8.0f * unit_;
     const f32 inset = 4.0f * unit_;
@@ -1173,25 +1170,105 @@ MineApp::WarehousePanelLayout MineApp::warehouse_panel_layout(const types::Wareh
     if (layout.empty) {
         width = std::max(width, text_->measure(locale_.text("world.warehouse.empty"), fonts_, style).width);
     }
-
-    // The panel hangs off the plot's **bottom-right corner**, which is what the designer asked for
-    // (docs/GAME_DESIGN.md section 1.27): the corner of the plot, in screen pixels.
-    const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{
-        static_cast<f32>(warehouse.anchor().x + warehouse.width()),
-        static_cast<f32>(warehouse.anchor().y + warehouse.height())});
-    const usize rows = layout.empty ? 1u : slots.size();
-    layout.panel = t2d::Aabb2{
-        t2d::Vec2{corner.x + inset, corner.y + inset},
-        t2d::Vec2{corner.x + inset + width + padding * 2.0f,
-                  corner.y + inset + layout.row_height * static_cast<f32>(rows + 1) + padding}};
-    layout.title_y = layout.panel.min.y + padding * 0.5f;
-    layout.first_row_y = layout.title_y + layout.row_height;
-    layout.text_x = layout.panel.min.x + padding + layout.picture + padding * 0.5f;
+    // The title and one line per kind of thing inside - an empty container still takes one line, because
+    // saying "empty" is an answer and a panel with no room for it would look broken.
+    const usize rows = layout.empty ? 1u : container->slots().size();
+    layout.size = t2d::Vec2{width + padding * 2.0f,
+                            layout.row_height * static_cast<f32>(rows + 1) + padding};
     return layout;
 }
 
-void MineApp::draw_warehouse_panel(const types::Warehouse& warehouse) {
-    const WarehousePanelLayout layout = warehouse_panel_layout(warehouse);
+void MineApp::place_panel_at(ContainerPanelLayout& layout, t2d::Vec2 anchor) const {
+    const f32 padding = 8.0f * unit_;
+    layout.panel = t2d::Aabb2{anchor, t2d::Vec2{anchor.x + layout.size.x, anchor.y + layout.size.y}};
+    layout.title_y = layout.panel.min.y + padding * 0.5f;
+    layout.first_row_y = layout.title_y + layout.row_height;
+    layout.text_x = layout.panel.min.x + padding + layout.picture + padding * 0.5f;
+}
+
+void MineApp::place_panel_top_centre(ContainerPanelLayout& layout) const {
+    // The **top of the screen, centred**, over the map area: what a double click selects shows there
+    // (docs/GAME_DESIGN.md section 1.31). Centred on the world area rather than on the window, so it is
+    // centred on the thing it is telling you about.
+    const t2d::Aabb2 area = world_area();
+    const f32 margin = 8.0f * unit_;
+    const f32 x = area.min.x + (area.max.x - area.min.x - layout.size.x) * 0.5f;
+    place_panel_at(layout, t2d::Vec2{x, area.min.y + margin});
+}
+
+MineApp::ContainerPanelLayout MineApp::corner_panel(const types::SceneTile& plot) const {
+    const TextLookup text = [this](std::string_view id) { return locale_.text(id); };
+    // The title is the plot's **own localized name** when the text file has one, and the warehouse's own
+    // kind word when it does not (content_name.h): "石头仓库   1 / 100" is what a player reads, and a
+    // designer who has not written a label still gets a title rather than an id (section 1.28).
+    bool named = false;
+    const std::string label = content_label(registry_, plot.kind(), plot.id(), text, &named);
+    const types::Container* container = plot.container();
+    const usize capacity = container != nullptr ? container->capacity() : 0;
+    const usize total = container != nullptr ? container->total() : 0;
+    ContainerPanelLayout layout = container_panel(
+        plot, format_localized(locale_.text("world.warehouse.title"),
+                               named ? label : std::string(locale_.text("world.warehouse.name")), total, capacity));
+    if (container == nullptr) return layout;
+    // The panel hangs off the plot's **bottom-right corner**, which is what the designer asked for
+    // (docs/GAME_DESIGN.md section 1.27): the corner of the plot, in screen pixels.
+    const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{
+        static_cast<f32>(plot.anchor().x + plot.width()), static_cast<f32>(plot.anchor().y + plot.height())});
+    const f32 inset = 4.0f * unit_;
+    place_panel_at(layout, t2d::Vec2{corner.x + inset, corner.y + inset});
+    return layout;
+}
+
+MineApp::ContainerPanelLayout MineApp::selection_panel(const types::SceneTile& plot) const {
+    const types::Container* container = plot.container();
+    // The selection's title is the plot's localized name, and the name the registry knows it by when the
+    // table has none (section 1.29): this panel belongs to **any** plot that holds a container, so there
+    // is no single kind word to fall back to that would be right for all of them.
+    ContainerPanelLayout layout = container_panel(
+        plot, format_localized(locale_.text("world.warehouse.title"),
+                               content_label(registry_, plot.kind(), plot.id(),
+                                             [this](std::string_view id) { return locale_.text(id); }),
+                               container != nullptr ? container->total() : 0,
+                               container != nullptr ? container->capacity() : 0));
+    if (container != nullptr) place_panel_top_centre(layout);
+    return layout;
+}
+
+const types::SceneTile* MineApp::selected_plot() const {
+    if (!has_selection_ || !world_.has_layer()) return nullptr;
+    if (!world_.layer().inside(selected_cell_)) return nullptr;
+    const types::SceneTile* plot = world_.layer().top_plot_at(selected_cell_);
+    return plot != nullptr && plot->container() != nullptr ? plot : nullptr;
+}
+
+void MineApp::select_at(GridPos cell) {
+    const types::SceneTile* plot = world_.layer().top_plot_at(cell);
+    if (plot == nullptr || plot->container() == nullptr) {
+        // A double click on scenery, or on ground, selects nothing: there is nothing to show, and a panel
+        // that stayed up would be describing something else (types/click.h's rule, said again).
+        clear_selection();
+        return;
+    }
+    selected_cell_ = cell;
+    has_selection_ = true;
+    // One pointer, one thing shown (types/click.h): a double click asks for the contents at the top of
+    // the screen, so the panels single clicks opened step aside - the player then reads one place
+    // instead of two saying the same thing.
+    for (const std::unique_ptr<types::SceneTile>& other : world_.layer().plots()) {
+        if (auto* warehouse = dynamic_cast<types::Warehouse*>(other.get()); warehouse != nullptr) {
+            warehouse->click().set_open(false);
+        }
+    }
+    T2D_INFO("world: selected {} #{} at {},{}", content_kind_name(plot->kind()), plot->id(), cell.x, cell.y);
+}
+
+void MineApp::clear_selection() {
+    if (!has_selection_) return;
+    has_selection_ = false;
+    T2D_INFO("world: selection cleared");
+}
+
+void MineApp::draw_container_panel(const ContainerPanelLayout& layout, const types::Container& container) {
     batch_->draw_rect(layout.panel, kPalette.panel_fill);
     batch_->draw_rect(t2d::Aabb2{t2d::Vec2{layout.panel.min.x, layout.panel.min.y},
                                  t2d::Vec2{layout.panel.max.x, layout.panel.min.y + 2.0f}},
@@ -1202,7 +1279,7 @@ void MineApp::draw_warehouse_panel(const types::Warehouse& warehouse) {
                   locale_.text("world.warehouse.empty"));
         return;
     }
-    const std::vector<types::ContainerSlot>& slots = warehouse.container().slots();
+    const std::vector<types::ContainerSlot>& slots = container.slots();
     for (usize index = 0; index < slots.size(); ++index) {
         // [picture][name][count]: the picture is the image pass's, so the words start after its square
         // (docs/GAME_DESIGN.md section 1.28).
@@ -1212,16 +1289,15 @@ void MineApp::draw_warehouse_panel(const types::Warehouse& warehouse) {
     }
 }
 
-MineApp::ImagePassCost MineApp::draw_warehouse_images(ore::RenderFrame& frame, const ore::Mat4& view_projection) {
+MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const ore::Mat4& view_projection) {
     ImagePassCost cost;
     if (!world_.has_layer()) return cost;
     const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
-    for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
-        const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
-        if (warehouse == nullptr || !warehouse->click().open()) continue;
-        const WarehousePanelLayout layout = warehouse_panel_layout(*warehouse);
-        if (layout.empty) continue;
-        const std::vector<types::ContainerSlot>& slots = warehouse->container().slots();
+    // One panel's pictures, at the rows the layout gave them. The words are the overlay's (draw_container_panel),
+    // and both come out of the same layout, so a picture cannot land on another line's name.
+    const auto draw_panel = [&](const ContainerPanelLayout& layout, const types::Container& container) {
+        if (layout.empty) return;
+        const std::vector<types::ContainerSlot>& slots = container.slots();
         for (usize index = 0; index < slots.size(); ++index) {
             const ContentEntry* entry = registry_.find(slots[index].kind, slots[index].id);
             if (entry == nullptr) continue;
@@ -1240,6 +1316,15 @@ MineApp::ImagePassCost MineApp::draw_warehouse_images(ore::RenderFrame& frame, c
             cost.quads += batch_->quads();
             cost.dropped += batch_->dropped_quads();
         }
+    };
+    for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
+        const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
+        if (warehouse == nullptr || !warehouse->click().open()) continue;
+        draw_panel(corner_panel(*warehouse), *warehouse->container());
+    }
+    // The selection shows the same rows at the top of the screen (docs/GAME_DESIGN.md section 1.31).
+    if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
+        draw_panel(selection_panel(*selected), *selected->container());
     }
     return cost;
 }
@@ -1318,21 +1403,42 @@ void MineApp::handle_world_input(f32 delta_seconds) {
     }
     clamp_world_view();
 
-    // The first thing the pointer **does** to the mine (docs/GAME_DESIGN.md section 1.25): a drop lying
-    // in the layer is picked up by pressing on it and put down by letting go. The camera is settled by
-    // now, so the press and every move after it are measured against the same view. What else a pointer
-    // may do to a cell is still the action table the designer has not given (section 7.14).
+    // Two presses on one cell inside a window are one gesture (double_click.h), and the window has to run
+    // out even while nothing is pressed: a first press is forgotten by time, not by the next press.
+    double_click_.advance(delta_seconds);
+
+    // The selection is a cell, so it is asked again every frame rather than remembered as a plot: a
+    // reload, or a layer change, can take the plot that was selected away (docs/GAME_DESIGN.md 1.31).
+    if (has_selection_ && selected_plot() == nullptr) clear_selection();
+
+    // What the pointer **does** to the mine: a drop lying in the layer is picked up by pressing on it and
+    // put down by letting go (docs/GAME_DESIGN.md section 1.25); with nothing to pick up the press is a
+    // click, and two of them in the same cell are a double click. The camera is settled by now, so the
+    // press and every move after it are measured against the same view. What else a pointer may do to a
+    // cell is still the action table the designer has not given (section 7.14).
     if (world_.has_layer() && area.contains(mouse) && input.mouse_pressed(ore::MouseButton::Left)) {
         const t2d::Vec2 at = world_camera_.world_of(mouse);
         if (!world_drag_.begin(world_.layer(), at)) {
-            // Nothing to pick up, so the press is a **click**: everything that receives clicks is told
-            // about it, and the one it landed on is what opens (or closes) its panel - the others close
-            // theirs, because there is one pointer and therefore one thing selected (types/click.h).
             const GridPos cell{t2d::floor_to_i32(at.x), t2d::floor_to_i32(at.y)};
-            for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
-                if (auto* warehouse = dynamic_cast<types::Warehouse*>(plot.get()); warehouse != nullptr) {
-                    (void)warehouse->on_click(cell);
+            if (double_click_.press(cell)) {
+                // The **second** press of a double click selects instead of clicking. One gesture then
+                // does one of each: the first press was the click (the plot's panel at its corner,
+                // types/click.h), and this one says "show me what it is holding", at the top of the
+                // screen (section 1.31). A press that clicked again would close the panel the first one
+                // opened, which is not what a player who asked to see something wants.
+                select_at(cell);
+            } else {
+                // A click: everything that receives clicks is told about it, and the one it landed on is
+                // what opens (or closes) its panel - the others close theirs, because there is one
+                // pointer and therefore one thing selected (types/click.h).
+                for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
+                    if (auto* warehouse = dynamic_cast<types::Warehouse*>(plot.get()); warehouse != nullptr) {
+                        (void)warehouse->on_click(cell);
+                    }
                 }
+                // The same rule for the double click's own selection: a click asks for the plot's panel,
+                // so the selection steps aside - one pointer, one thing shown.
+                clear_selection();
             }
         }
     }
@@ -1363,6 +1469,9 @@ void MineApp::handle_world_input(f32 delta_seconds) {
         return;
     }
     if (input.key_pressed(ore::Key::Escape)) {
+        // Leaving the view leaves the selection behind: it is about a plot of the layer being left.
+        clear_selection();
+        double_click_.reset();
         screen_ = Screen::Session;
         return;
     }
@@ -2122,12 +2231,20 @@ void MineApp::draw_world_overlay() {
     draw_fitted(right - passes_width, bottom_y, body_px_,
                 failed ? kPalette.error : (said ? kPalette.warning : kPalette.text_dim), passes, passes_width);
 
-    // And last, over everything: what a warehouse is holding, for the ones a click opened. It is drawn
-    // after the two lines because a panel that the status bar painted over would not be an answer to
-    // anything (docs/GAME_DESIGN.md section 1.27).
+    // And last, over everything: what a container is holding, for the plots a click opened (at their own
+    // bottom-right corner) and for the plot a double click selected. It is drawn after the two lines
+    // because a panel that the status bar painted over would not be an answer to anything
+    // (docs/GAME_DESIGN.md section 1.27).
     for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
         const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
-        if (warehouse != nullptr && warehouse->click().open()) draw_warehouse_panel(*warehouse);
+        if (warehouse != nullptr && warehouse->click().open()) {
+            draw_container_panel(corner_panel(*warehouse), *warehouse->container());
+        }
+    }
+    // The selection last of all: it sits at the top of the screen, which is where the player who just
+    // double clicked a plot is looking (section 1.31).
+    if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
+        draw_container_panel(selection_panel(*selected), *selected->container());
     }
 }
 
@@ -2433,7 +2550,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         dropped_quads_ += batch_->dropped_quads();
         // And the pictures on a warehouse's panel, after the panel itself: each one is a texture of its
         // own, so it cannot ride in the pass that draws the chrome with the glyph atlas.
-        const ImagePassCost panels = draw_warehouse_images(frame, view_projection);
+        const ImagePassCost panels = draw_panel_images(frame, view_projection);
         draw_calls += panels.draw_calls;
         quads += panels.quads;
         dropped_quads_ += panels.dropped;

@@ -16,6 +16,7 @@
 #include <mine/content_list.h>
 #include <mine/content_name.h>
 #include <mine/content_pack.h>
+#include <mine/double_click.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
 #include <mine/pointer_drag.h>
@@ -248,12 +249,15 @@ private:
     /// what the pointer is over and what the passes did. Drawn after the layer, so a zoomed-in map
     /// cannot paint over the status bar (measured: it used to).
     void draw_world_overlay();
-    /// Where a warehouse's panel goes and what it says. **Two passes draw it** - the words in the
+    /// Where a container's panel goes and what it says. **Two passes draw it** - the words in the
     /// overlay and the pictures in their own image pass (a picture binds its own texture, the chrome is
     /// drawn with the glyph atlas) - and both ask this, so they cannot disagree about where a row is
-    /// (the same reason the sandbox has one PaletteLayout for its two passes).
-    struct WarehousePanelLayout {
+    /// (the same reason the sandbox has one PaletteLayout for its two passes). One panel serves both
+    /// places a container shows: the click panel at a plot's corner (section 1.27) and the selection
+    /// panel at the top of the screen (section 1.31).
+    struct ContainerPanelLayout {
         t2d::Aabb2 panel{};
+        t2d::Vec2 size{};     ///< what the content needs, before it is placed
         f32 title_y = 0.0f;
         f32 first_row_y = 0.0f;
         f32 row_height = 0.0f;
@@ -263,14 +267,33 @@ private:
         std::vector<std::string> labels;   ///< one per kind of thing inside, localized (content_name.h)
         bool empty = false;
     };
-    [[nodiscard]] WarehousePanelLayout warehouse_panel_layout(const types::Warehouse& warehouse) const;
-    /// The panel's words, at the plot's **bottom-right corner** - what a click opens (types/warehouse.h):
-    /// the title, then one line per kind of thing inside, in the order it first arrived, each saying how
-    /// many there are.
-    void draw_warehouse_panel(const types::Warehouse& warehouse);
+    /// What a plot's container panel says and how big it is, before it is placed: the rows are the
+    /// container's, in the order things arrived, and \p title is the caller's (a panel opening on a
+    /// click says something slightly different from one a selection opened).
+    [[nodiscard]] ContainerPanelLayout container_panel(const types::SceneTile& plot, std::string title) const;
+    /// Puts \p layout's top left corner at \p anchor, and derives the row origins from where it landed.
+    void place_panel_at(ContainerPanelLayout& layout, t2d::Vec2 anchor) const;
+    /// Puts \p layout at the **top of the screen, centred** - where a double click's selection shows.
+    void place_panel_top_centre(ContainerPanelLayout& layout) const;
+    /// The panel's words: the title, then one line per kind of thing inside, each saying how many there
+    /// are. The picture on each line is the image pass's (draw_panel_images).
+    void draw_container_panel(const ContainerPanelLayout& layout, const types::Container& container);
     /// The pictures on those lines: one per row, in the square the layout gave it. Their own pass,
     /// because each one is a texture of its own and the chrome is drawn with the glyph atlas.
-    [[nodiscard]] ImagePassCost draw_warehouse_images(ore::RenderFrame& frame, const ore::Mat4& view_projection);
+    [[nodiscard]] ImagePassCost draw_panel_images(ore::RenderFrame& frame, const ore::Mat4& view_projection);
+    /// The panel a plot's container shows through a **click**, at the plot's bottom-right corner
+    /// (types/warehouse.h, section 1.27), and the one a **selection** shows at the top of the screen
+    /// (section 1.31). Both are the same content in the same shape; only where they land differs.
+    [[nodiscard]] ContainerPanelLayout corner_panel(const types::SceneTile& plot) const;
+    [[nodiscard]] ContainerPanelLayout selection_panel(const types::SceneTile& plot) const;
+    /// The plot a double click selected, or nullptr when nothing is selected any more - the layer was
+    /// rebuilt, the plot there is gone, or it no longer holds anything.
+    [[nodiscard]] const types::SceneTile* selected_plot() const;
+    /// A double click at \p cell: selects the plot there when it holds a container
+    /// (types/scene_tile.h), and clears the selection when there is nothing to show.
+    void select_at(GridPos cell);
+    /// Forgets the selection: the pointer clicked away from it, or the view left the layer.
+    void clear_selection();
     /// Says what letting go of a dragged drop did: a box with no room has to say so
     /// (pointer_drag.h, types/drag_into.h).
     void report_release(ReleaseResult result);
@@ -342,6 +365,14 @@ private:
     /// hold (pointer_drag.h). The first thing the pointer does to the mine - what else it may do to a
     /// cell is the action table the designer has not given yet (docs/GAME_DESIGN.md section 7.14).
     PointerDrag world_drag_{};
+    /// Two presses on one cell inside a window are one gesture: a **double click** (double_click.h), which
+    /// is what selects a plot that holds a container (docs/GAME_DESIGN.md section 1.31).
+    DoubleClick double_click_{};
+    /// The cell that double click selected, while its plot still holds a container: the top of the screen
+    /// says what that container holds. A cell and not a plot pointer, because a reload rebuilds the layer
+    /// and the plot at that cell may not be the one that was selected.
+    GridPos selected_cell_{};
+    bool has_selection_ = false;
     /// What the two passes did in the frame that was last drawn: scenery brought up to date, and plots
     /// that took their turn. The HUD says so, because "the mine runs" has to be visible somewhere.
     usize world_refreshed_ = 0;

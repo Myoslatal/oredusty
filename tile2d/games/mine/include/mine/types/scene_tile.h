@@ -14,6 +14,7 @@
 // the difference between a frame that costs what changed and a frame that costs what exists.
 #pragma once
 
+#include <mine/types/container.h>
 #include <mine/types/tile.h>
 
 namespace mine::types {
@@ -40,6 +41,13 @@ public:
 
     /// Brings the plot up to date if it needs it, and returns whether on_refresh() ran.
     bool refresh();
+
+    /// The container this plot holds things in, when it has one (types/container.h): it is what a double
+    /// click selects, and what the panel that selection opens shows (docs/GAME_DESIGN.md section 1.31).
+    /// Scenery that keeps nothing - a floor, an ore vein, a wall - holds none, and the default says so;
+    /// a warehouse (types/warehouse.h) is the first that does. A machine's input side will be another.
+    [[nodiscard]] virtual Container* container() { return nullptr; }
+    [[nodiscard]] virtual const Container* container() const { return nullptr; }
 
 protected:
     /// What the plot recomputes when it is brought up to date. The default does nothing: content that

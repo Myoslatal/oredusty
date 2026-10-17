@@ -109,6 +109,7 @@ only entry point is `MineApp::content_name(kind, id)` (`games/mine/include/mine/
 | the sandbox palette | the name on the left, `kind #id` on the right — the id stays, because a save and a log use it |
 | the sandbox's cell readout and cell labels | `L0 floor #1 DIRT` in the status bar, and the label drawn on a cell when it is big enough to hold one (it falls back to `#id` when the name does not fit) |
 | the HUD's stored message | `STORED drop #1 chunk` / `已入库 drop #1 chunk` |
+| the selection panel (a double click on a plot that holds something) | the title and every row, at the top of the screen, centred — the same content the click panel shows, in the same shape |
 
 **The kind's own word is not translated.** `ore`, `warehouse`, `floor`… are the engine's vocabulary
 (`content_kind_name`): they are what the docs, the log and `engine.api` say, so `warehouse #1 石头仓库`

@@ -110,6 +110,10 @@ target_link_libraries(test_drills PRIVATE mine_core)
 t2d_add_test(test_warehouses test_warehouses.cpp)
 target_link_libraries(test_warehouses PRIVATE mine_core)
 
+# Two presses on one cell are one gesture: the double click a selection is made of.
+t2d_add_test(test_double_click test_double_click.cpp)
+target_link_libraries(test_double_click PRIVATE mine_core)
+
 
 # --- the game's own code in a code table --------------------------------------------------------------
 # mine_core's registry is compiled into a table and *not* linked into the test: what the test loads is

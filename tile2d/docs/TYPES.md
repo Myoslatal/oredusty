@@ -68,6 +68,10 @@ if (vein.refresh()) { }   // 这一帧真的干了活；没脏就是一次判断
 新地块一开始就是脏的（还没人看过它），`refresh()` 清标记并调用 `on_refresh()`；
 **没有任何定时器**：没被标记过的场景地块，之后的多少帧都不会运行一次（`test_mine_types` 里有这条）。
 
+* **它有没有"容器"是可问的**（`container()`，`types/scene_tile.h`）：默认没有，仓库（`types/warehouse.h`）
+  覆盖它返回自己的容器。问这一句是**界面的动作**——双击选中一个地块就是问它（`docs/GAME_DESIGN.md`
+  §1.31）——所以它返回指针而不是引用："地板没有容器"这件事要说得出来。
+
 ## 3. 实体地块（`EntityTile`）：场景地块 + 自己的节奏
 
 实体地块是**功能地块**：机器、传送带、钻机、需求终端。**它继承场景地块**（`EntityTile : SceneTile`）：
@@ -398,6 +402,9 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
   （`docs/TEXT.md` §"Naming content"）——字符串表里有名字就用它，没有就回注册表里的名字；而**一格画多大**
   由设计者给的 40–100 像素/格决定（`mine/view_limits.h`，`docs/GAME_DESIGN.md` §1.30），进层取景也停在
   这个范围里。
+* **双击选中的是"有容器的地块"**：`SceneTile::container()`（§2）是那一问，`mine/double_click.h` 是判据
+  （同一个格子、两次按下、0.4 秒之内），选中之后容器内容由 `container_panel()` 排一次、画两趟（字与贴图）——
+  与右下角那个面板同一份（`docs/GAME_DESIGN.md` §1.31）。单测 `test_double_click` 8 用例 / 28 断言。
 
 单测 `test_world`（13 用例 / 146 断言）覆盖上面每一条，包括**同一 `(seed, 层号)` 两次生成逐字节相同**；
 实体那半边是 `test_entities`（8 用例 / 129 断言，§7）。
