@@ -327,6 +327,7 @@ void MineApp::on_start() {
 }
 
 void MineApp::on_update(f32 delta_seconds) {
+    advance_builds(delta_seconds);
     switch (screen_) {
         case Screen::Start: handle_start_input(); break;
         case Screen::Session: handle_session_input(); break;
@@ -1270,6 +1271,12 @@ void MineApp::select_at(GridPos cell) {
     T2D_INFO("world: selected {} #{} at {},{}", content_kind_name(plot->kind()), plot->id(), cell.x, cell.y);
 }
 
+types::SceneTile* MineApp::selected_plot_to_change() {
+    // The selection holds the plot itself (select_at), so this is the same plot the const one answers with -
+    // asked for by code that means to change it, not just to look at it.
+    return has_selection_ ? const_cast<types::SceneTile*>(selected_plot()) : nullptr;
+}
+
 void MineApp::clear_selection() {
     if (!has_selection_) return;
     has_selection_ = false;
@@ -1326,6 +1333,7 @@ void MineApp::draw_container_panel(const ContainerPanelLayout& layout, const typ
 }
 
 MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const ore::Mat4& view_projection) {
+    draw_builds(frame, view_projection);
     ImagePassCost cost;
     if (!world_.has_layer()) return cost;
     const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
@@ -1502,9 +1510,26 @@ void MineApp::handle_world_input(f32 delta_seconds) {
             std::string why;
             if (!layer.can_place(where, &why)) {
                 T2D_INFO("world: {} cannot stand there: {}", picked->name, why);
-            } else if (layer.place(registry_, content_.report().definitions, where, nullptr) != nullptr) {
-                T2D_INFO("world: built {} at {},{}", picked->name, cell.x, cell.y);
-                sidebar_.clear_selection();
+            } else {
+                // The price comes out of the **selected warehouse**: the player builds with what is in the box
+                // they picked, and a plot with no warehouse picked (or not enough in it) is not built at all
+                // (docs/GAME_DESIGN.md sections 1.31, 1.37).
+                types::SceneTile* holder = selected_plot_to_change();
+                types::Container* stock = holder != nullptr ? holder->container() : nullptr;
+                std::string short_of;
+                if (stock == nullptr) {
+                    T2D_INFO("world: {} costs {} and no warehouse is selected", picked->name, picked->materials.size());
+                } else if (!can_afford(*stock, registry_, picked->materials, &short_of)) {
+                    T2D_INFO("world: {} cannot be paid for: {}", picked->name, short_of);
+                } else if (types::SceneTile* plot = layer.place(registry_, content_.report().definitions, where,
+                                                               nullptr);
+                           plot != nullptr) {
+                    pay_for(*stock, registry_, picked->materials);
+                    T2D_INFO("world: built {} at {},{}", picked->name, cell.x, cell.y);
+                    // The scan line sweeps it once, over the time its entry says (section 1.37).
+                    if (picked->seconds > 0.0f) building_.push_back(BuildInProgress{plot, 0.0f, picked->seconds});
+                    sidebar_.clear_selection();
+                }
             }
             double_click_.reset();
             return;
@@ -1515,7 +1540,12 @@ void MineApp::handle_world_input(f32 delta_seconds) {
                 // types/click.h), and this one says "show me what it is holding", at the top of the
                 // screen (section 1.31). A press that clicked again would close the panel the first one
                 // opened, which is not what a player who asked to see something wants.
-                select_at(cell);
+                // A double click on the plot that is already selected puts it back: the selection is toggled.
+                if (has_selection_ && selected_plot() != nullptr && selected_plot()->covers(cell)) {
+                    clear_selection();
+                } else {
+                    select_at(cell);
+                }
             } else {
                 // A click: everything that receives clicks is told about it, and the one it landed on is
                 // what opens (or closes) its panel - the others close theirs, because there is one
@@ -1525,9 +1555,9 @@ void MineApp::handle_world_input(f32 delta_seconds) {
                         (void)warehouse->on_click(cell);
                     }
                 }
-                // The same rule for the double click's own selection: a click asks for the plot's panel,
-                // so the selection steps aside - one pointer, one thing shown.
-                clear_selection();
+                // A click elsewhere does **not** put the selection back: the player asked to see what one plot
+                // is holding, and looking at something else is not the same as putting it down. The second
+                // double click on it is what puts it down (docs/GAME_DESIGN.md section 1.31).
             }
         }
     }
@@ -2303,6 +2333,37 @@ void MineApp::draw_sidebar_button(const BuildSidebar::Layout& layout) {
                 sidebar_.open() ? std::string(">") : std::string("<"), layout.toggle.width() - 8.0f * unit_);
 }
 
+void MineApp::advance_builds(t2d::f32 delta_seconds) {
+    if (building_.empty()) return;
+    for (BuildInProgress& build : building_) build.elapsed += delta_seconds;
+    std::erase_if(building_, [](const BuildInProgress& build) { return build.elapsed >= build.seconds; });
+}
+
+void MineApp::draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection) {
+    if (building_.empty()) return;
+    for (const BuildInProgress& build : building_) {
+        if (build.plot == nullptr) continue;
+        const GridPos at = build.plot->anchor();
+        // The cell on the screen, from the camera the map is drawn with - not from a second guess at it.
+        const t2d::Aabb2 cell{world_camera_.screen_of(t2d::Vec2{static_cast<f32>(at.x), static_cast<f32>(at.y)}),
+                              world_camera_.screen_of(
+                                  t2d::Vec2{static_cast<f32>(at.x + build.plot->width()),
+                                            static_cast<f32>(at.y + build.plot->height())})};
+        const f32 done = std::clamp(build.elapsed / build.seconds, 0.0f, 1.0f);
+        // The scan line comes up from the bottom: what is **below** it has been scanned, so that is the part
+        // of the picture that is shown - the plot's own texture, cut where the line is (section 1.37).
+        const f32 line = cell.max.y - cell.height() * done;
+        const t2d::Aabb2 shown{t2d::Vec2{cell.min.x, line}, cell.max};
+        const t2d::Aabb2 uv{t2d::Vec2{0.0f, 1.0f - done}, t2d::Vec2{1.0f, 1.0f}};
+        const ContentEntry* entry = registry_.find(build.plot->kind(), build.plot->id());
+        if (entry == nullptr) continue;
+        const auto texture = content_textures_.find(image_key(build.plot->kind(), entry->name));
+        if (texture == content_textures_.end()) continue;   // no picture: the bar alone says it is going up
+        batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+        batch_->draw_quad(shown, uv, 0xFFFFFFFFu);
+        batch_->end();
+    }
+}
 void MineApp::draw_build_sidebar() {
     if (!world_.has_layer()) return;
     const BuildSidebar::Layout layout = sidebar_.layout(
@@ -2473,6 +2534,20 @@ void MineApp::draw_world_overlay() {
     // double clicked a plot is looking (section 1.31).
     if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
         draw_container_panel(selection_panel(*selected, area), *selected->container());
+    }
+    // The scan line over every plot that is going up (docs/GAME_DESIGN.md section 1.37).
+    for (const BuildInProgress& build : building_) {
+        if (build.plot == nullptr) continue;
+        const GridPos at = build.plot->anchor();
+        const t2d::Aabb2 plot_box{world_camera_.screen_of(t2d::Vec2{static_cast<f32>(at.x), static_cast<f32>(at.y)}),
+                                  world_camera_.screen_of(
+                                      t2d::Vec2{static_cast<f32>(at.x + build.plot->width()),
+                                                static_cast<f32>(at.y + build.plot->height())})};
+        const f32 done = std::clamp(build.elapsed / build.seconds, 0.0f, 1.0f);
+        const f32 scan_line = plot_box.max.y - plot_box.height() * done;
+        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{plot_box.min.x, scan_line - 2.0f},
+                                     t2d::Vec2{plot_box.max.x, scan_line}},
+                          kPalette.accent);
     }
     draw_build_sidebar();
 }

@@ -4,6 +4,7 @@
 // The content in here is a **test double**: names like "wall" or "dirt" are the fixture's, not the
 // game's - the game names no content at all (docs/GAME_DESIGN.md section 7).
 #include <mine/view_limits.h>
+#include <mine/build_cost.h>
 #include <mine/world.h>
 
 #include <support/test_support.h>
@@ -583,6 +584,38 @@ T2D_TEST(can_place_answers_before_anything_is_placed) {
     T2D_CHECK(!built_report.clean());
     T2D_CHECK_MSG(built_report.errors.front().find("no ore under it") != std::string::npos, "{}",
                   built_report.errors.front());
+}
+
+
+T2D_TEST(a_building_is_paid_for_out_of_the_warehouse_that_is_selected) {
+    Fixture content;
+    content.add(ContentKind::Warehouse, "bin", /*random_reverse=*/false, /*capacity=*/10);
+    content.add(ContentKind::Item, "stone");
+    const ContentId bin = content.registry.find(ContentKind::Warehouse, "bin");
+    const ContentId stone = content.registry.find(ContentKind::Item, "stone");
+    T2D_REQUIRE(bin != kNoContent && stone != kNoContent);
+
+    // Built from its definition, the way the layer builds one: the capacity is the definition's (section 1.35).
+    const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
+    T2D_REQUIRE(definition != nullptr);
+    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr && plot->container() != nullptr);
+    types::Container& stock = *plot->container();
+    T2D_CHECK_EQ(stock.capacity(), 10u);
+    T2D_REQUIRE(stock.add(ContentKind::Item, stone, 10) == 10u);
+
+    const std::vector<ContentStack> price{{std::string("stone"), 10}};
+    std::string missing;
+    T2D_CHECK(can_afford(stock, content.registry, price, &missing));
+    pay_for(stock, content.registry, price);
+    T2D_CHECK_EQ(stock.count_of(ContentKind::Item, stone), 0u);
+
+    // Empty now: the same building cannot be paid for a second time, and the reason says what is short.
+    T2D_CHECK_FALSE(can_afford(stock, content.registry, price, &missing));
+    T2D_CHECK_MSG(missing.find("stone") != std::string::npos, "{}", missing);
+    // A price nobody has is a no, not a crash: an item the registry does not know counts as none of it.
+    const std::vector<ContentStack> unknown{{std::string("unobtainium"), 1}};
+    T2D_CHECK_FALSE(can_afford(stock, content.registry, unknown, &missing));
 }
 
 T2D_TEST_MAIN

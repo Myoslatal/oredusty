@@ -16,6 +16,7 @@
 #include <mine/content_list.h>
 #include <mine/content_name.h>
 #include <mine/content_pack.h>
+#include <mine/build_cost.h>
 #include <mine/build_sidebar.h>
 #include <mine/double_click.h>
 #include <mine/menu.h>
@@ -292,6 +293,9 @@ private:
     /// The plot a double click selected, or nullptr when nothing is selected any more - the layer was
     /// rebuilt, the plot there is gone, or it no longer holds anything.
     [[nodiscard]] const types::SceneTile* selected_plot() const;
+    /// The same plot, for the code that changes it - paying for a building out of the warehouse that is
+    /// selected is what a container is for (docs/GAME_DESIGN.md section 1.37). Null when nothing is selected.
+    [[nodiscard]] types::SceneTile* selected_plot_to_change();
     /// A double click at \p cell: selects the plot there when it holds a container
     /// (types/scene_tile.h), and clears the selection when there is nothing to show.
     void select_at(GridPos cell);
@@ -385,6 +389,17 @@ private:
     BuildSidebar sidebar_{};
     /// Draws it and answers a click on it. Returns true when the click was the sidebar's, so the map does
     /// not also act on it.
+    /// A plot going up: the scan line sweeps it once over the time its entry says, and the picture is revealed
+    /// behind it (docs/GAME_DESIGN.md section 1.37). The plot itself is already on the map - the animation is
+    /// what the player sees while it is being built.
+    struct BuildInProgress {
+        types::SceneTile* plot = nullptr;
+        t2d::f32 elapsed = 0.0f;
+        t2d::f32 seconds = 0.0f;
+    };
+    std::vector<BuildInProgress> building_{};
+    void advance_builds(t2d::f32 delta_seconds);
+    void draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection);
     void draw_build_sidebar();
     void draw_sidebar_button(const BuildSidebar::Layout& layout);
     [[nodiscard]] bool sidebar_click(t2d::Vec2 point);
