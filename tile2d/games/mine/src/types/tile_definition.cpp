@@ -69,6 +69,76 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
         }
         return std::nullopt;
     };
+        // "building::" - what this plot costs to build, how long it takes and what it is for
+        // (types/building.h). A **definition** attribute: shared by every plot of the entry, and a layer
+        // placement has no way to write it (docs/GAME_DESIGN.md sections 1.34, 1.35).
+        if (const t2d::EcfgValue* building = entry.find("building"); building != nullptr) {
+            if (!building->is_table()) {
+                return fail(std::format("building '{}': building must be a table (building:: materials:[...])",
+                                        name));
+            }
+            for (const t2d::EcfgValue& field : building->children()) {
+                if (field.key() == "materials") {
+                    if (!field.is_array()) {
+                        return fail(std::format("building '{}': materials must be an array of item names and "
+                                                "counts",
+                                                name));
+                    }
+                    if (field.size() % 2 != 0) {
+                        return fail(std::format("building '{}': materials has {} entries, and they come in pairs "
+                                                "of name and count",
+                                                name, field.size()));
+                    }
+                    for (usize index = 0; index + 1 < field.size(); index += 2) {
+                        const t2d::EcfgValue& item = field.children()[index];
+                        const t2d::EcfgValue& count = field.children()[index + 1];
+                        if (!item.is_string() || item.as_string().empty()) {
+                            return fail(std::format("building '{}': materials[{}] is not the quoted name of an "
+                                                    "item",
+                                                    name, index));
+                        }
+                        if (count.type() != t2d::EcfgType::Int || count.as_int() <= 0) {
+                            return fail(std::format("building '{}': materials[{}] for '{}' is not a count above "
+                                                    "zero",
+                                                    name, index + 1, item.as_string()));
+                        }
+                        definition.building.materials.push_back(
+                            ContentStack{std::string(item.as_string()), count.as_int()});
+                    }
+                    continue;
+                }
+                if (field.key() == "time") {
+                    if (field.type() != t2d::EcfgType::Int && field.type() != t2d::EcfgType::Float) {
+                        return fail(std::format("building '{}': time must be a number of seconds", name));
+                    }
+                    if (field.as_float() < 0.0) {
+                        return fail(std::format("building '{}': time is {}, and a build time is not negative", name,
+                                                field.as_float()));
+                    }
+                    definition.building.seconds = static_cast<f32>(field.as_float());
+                    continue;
+                }
+                if (field.key() == "category") {
+                    if (!field.is_string()) {
+                        return fail(std::format("building '{}': category must be a quoted name (storage, "
+                                                "processing, extraction)",
+                                                name));
+                    }
+                    const std::optional<BuildingCategory> category =
+                        building_category_from_name(field.as_string());
+                    if (!category.has_value()) {
+                        return fail(std::format("building '{}': '{}' is not a building category (storage, "
+                                                "processing, extraction)",
+                                                name, field.as_string()));
+                    }
+                    definition.building.category = *category;
+                    continue;
+                }
+                return fail(std::format("building '{}': the building table has no field '{}' (materials, time, "
+                                        "category)",
+                                        name, field.key()));
+            }
+        }
     if (kind == ContentKind::Drill) {
         if (std::optional<std::string> problem = positive("dig_power", definition.dig_power);
             problem.has_value()) {
@@ -159,7 +229,7 @@ std::unique_ptr<SceneTile> make_tile(const TileDefinition& definition, ContentId
             // A warehouse is scenery that holds things: a scene plot (never ticked) whose container has
             // the capacity its entry declared (types/warehouse.h).
             auto warehouse = std::make_unique<Warehouse>(definition.kind, id, layer, anchor, width, height);
-            warehouse->set_capacity(definition.capacity);
+            warehouse->container()->set_capacity(definition.capacity);
             tile = std::move(warehouse);
             break;
         }

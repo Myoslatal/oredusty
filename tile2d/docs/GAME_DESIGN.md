@@ -1362,13 +1362,15 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
 * **定义属性 / 存档属性按享元分开**：`TileDefinition` 是**一份共享记录**（容量、掉头、图片、挖掘力、硬度、掉落、
   `building`），活过所有层；地块实例只存自己的状态。地块通过新的 `SceneTile::definition()` 拿到那一份——固定属性
   从它读，不拷贝。**层设置写不进定义属性**：`place_block` 的 `container::` 只认 `items`，写 `capacity:` 报错。
-* **这一轮没有做完、也不假装做完的**：① 现在只有 `building` 与「地块→定义」这条链走通了享元；**容器的容量仍是每个
-  仓库实例自己的一份**（`set_capacity` 还在，运行时还能改它），把它改成"只从定义读"会动到仓库的既有测试，留给下一轮；
-  ② `can_place` 的规则今天只有"钻头要矿"一条，其它建筑（存储/加工）的条件等设计者给；③ 建造本身（扣材料、走时间、
-  完工）还没有——这一轮给的是**判断**，不是施工。
-* **验证**：`tools/verify.sh` 七个目标全绿（release / debug / asan / tsan / server-only 31/31、no-renderer 11/11、
-  Ore 13/13）。**这一轮没有新增单测**：`building` 的读取、`can_place` 的两条分支、定义句柄的传递都还只被编译和
-  既有套件覆盖——下一轮补上（说清楚，不写成"已验证"）。
+* **设计者的四条答复**（M2.20 收尾）：① "一次完善"——**容量改成定义属性**：`Warehouse::capacity()` 现在读它那一份
+  定义（`definition()->capacity`），**没有 setter 了**，容器只是按定义建出来，运行时改不动；② "等后续加入"——
+  `can_place` 的更多规则等设计者给；③ "等后续开发"——建造本身（扣材料、走时间、完工）等后续；④ "完善"——
+  **单测补上了**（见下）。
+* **验证**：`test_mine_types` 15 → **17 用例 / 191 → 224 断言**（`building` 从数据读出来是什么；同一内容的两块地块
+  `definition()` 与 `building()` 是**同一个指针**——享元；不是建筑的内容 `building()` 是空）；`test_world` 15 →
+  **16 用例 / 153 → 168 断言**（`can_place` 的四类回答各自的措辞：空位、已占、出图、瓦片层不存在；**钻头要矿**
+  的两条分支；层构建时对钻头强制、报告里点名）；套件 **31 个测试**全绿（release / debug / asan / tsan / server-only
+  31/31、no-renderer 11/11、Ore 13/13）。
 
 ### M1 验收标准（已满足）
 
@@ -1597,8 +1599,9 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
   &why)` 是放置前的询问：在不在图上、瓦片层有没有、格子空不空、内容自己的条件——今天唯一一条是设计者给的例子
   **钻头必须站在矿上**，层构建时对钻头强制。③ **一份内容条目 = 一份定义**（`TileDefinition`，含 `building`），
   活过所有层；地块实例只存自己的状态，固定属性通过新的 `SceneTile::definition()` 从那一份读——享元。层设置写不进
-  定义属性（`container::` 只认 `items`，`capacity:` 报错）。④ 没做完的说清楚：容器的容量仍是实例自己的一份；
-  `can_place` 只有"钻头要矿"一条规则；建造（扣材料、走时间）还没有；这一轮**没有新增单测**。套件 **31 个测试**全绿 |
+  定义属性（`container::` 只认 `items`，`capacity:` 报错）。④ 设计者的四条答复："一次完善"——容量也改成定义属性
+  （`Warehouse::capacity()` 读定义，没有 setter 了）；"等后续加入"——更多 `can_place` 规则等设计者给；"等后续开发"
+  ——建造本身等后续；"完善"——单测补上（`test_mine_types` 17/224、`test_world` 16/168）。套件 **31 个测试**全绿 |
 | M2.19 | **层定义器的 `place_block`**（设计者新要求，§1.33）：一层可以在它说的位置放一块指定的东西，并且一开始就装着
   指定的物品——`place_block:: <名>:: kind:"warehouse" content:"stone" layer:1 x:4 y:8 subobject:: container::
   items:["stone",100]`。`kind`/`content`/`layer` 与 `scatter` 同一套字段，`x` 与 `y` 两个都要写（一格有两个坐标）；

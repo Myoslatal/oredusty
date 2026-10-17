@@ -623,4 +623,55 @@ item::
     T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Item));
 }
 
+
+T2D_TEST(a_building_is_a_definition_attribute_every_plot_of_the_entry_shares) {
+    const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(R"(
+machine::
+    drill::
+        dig_power:2
+        building::
+            materials:["stone",10,"chunk",2]
+            time:5
+            category:"extraction"
+)");
+    T2D_REQUIRE(document.has_value());
+    std::vector<std::string> errors;
+    const std::vector<TileDefinition> definitions = tile_definitions(*document, &errors);
+    T2D_CHECK_MSG(errors.empty(), "{}", errors.empty() ? "" : errors.front());
+    T2D_REQUIRE(definitions.size() == 1u);
+    const TileDefinition& definition = definitions.front();
+    T2D_REQUIRE(definition.building.materials.size() == 2u);
+    T2D_CHECK_EQ(definition.building.materials[0].name, std::string("stone"));
+    T2D_CHECK_EQ(definition.building.materials[0].count, 10);
+    T2D_CHECK_EQ(definition.building.materials[1].count, 2);
+    T2D_CHECK_EQ(definition.building.seconds, 5.0f);
+    T2D_CHECK(definition.building.category == BuildingCategory::Extraction);
+
+    // Two plots of one entry read the **same** record: that is the flyweight of docs/GAME_DESIGN.md 1.35.
+    const std::unique_ptr<SceneTile> first = make_tile(definition, 1, 0, GridPos{0, 0});
+    const std::unique_ptr<SceneTile> second = make_tile(definition, 2, 0, GridPos{1, 0});
+    T2D_REQUIRE(first != nullptr && second != nullptr);
+    T2D_CHECK(first->definition() == &definition);
+    T2D_CHECK(first->definition() == second->definition());
+    T2D_REQUIRE(first->building() != nullptr);
+    T2D_CHECK(first->building() == second->building());   // one building record, not one per plot
+    T2D_CHECK(first->building()->category == BuildingCategory::Extraction);
+    T2D_CHECK(first->building()->seconds == 5.0f);
+}
+
+T2D_TEST(content_that_is_not_a_building_has_no_building_sub_object) {
+    const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(R"(floor::
+    dirt::
+        image:"art/floor_dirt.png"
+)");
+    T2D_REQUIRE(document.has_value());
+    std::vector<std::string> errors;
+    const std::vector<TileDefinition> definitions = tile_definitions(*document, &errors);
+    T2D_REQUIRE(definitions.size() == 1u);
+    T2D_CHECK(definitions.front().building.empty());
+    const std::unique_ptr<SceneTile> plot = make_tile(definitions.front(), 1, 0, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr);
+    T2D_CHECK(plot->building() == nullptr);
+}
+
 T2D_TEST_MAIN

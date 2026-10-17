@@ -536,4 +536,53 @@ T2D_TEST(a_placed_block_that_holds_something_nobody_has_is_refused_and_still_bui
     T2D_CHECK_EQ(container->total(), 0u);
 }
 
+
+T2D_TEST(can_place_answers_before_anything_is_placed) {
+    Fixture content;
+    content.add(ContentKind::Floor, "dirt");
+    content.add(ContentKind::Ore, "stone");
+    content.add(ContentKind::Drill, "drill");
+    content.add(ContentKind::Warehouse, "bin", /*random_reverse=*/false, /*capacity=*/10);
+
+    const LayerShape shape{8, 8, 3};
+    LayerSpec spec;
+    spec.shape = shape;
+    spec.content.push_back(at(ContentKind::Floor, "dirt", 0, 4, 4));
+    spec.content.push_back(at(ContentKind::Ore, "stone", 1, 4, 4));   // the floor and the ore under the drill
+    spec.content.push_back(at(ContentKind::Warehouse, "bin", 1, 0, 0));
+    MineLayer layer(0, shape, 7);
+    LayerBuildReport report;
+    layer.build(spec, content.registry, content.definitions, &report);
+    T2D_CHECK_MSG(report.clean(), "{}", report.errors.empty() ? "" : report.errors.front());
+
+    // The four questions a caller asks before placing anything (docs/GAME_DESIGN.md section 1.34).
+    std::string why;
+    T2D_CHECK(layer.can_place(at(ContentKind::Structure, "wall", 2, 6, 6), &why));
+    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Structure, "wall", 1, 0, 0), &why));   // taken
+    T2D_CHECK(why.find("already there") != std::string::npos);
+    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Structure, "wall", 2, 9, 9), &why));   // off the map
+    T2D_CHECK(why.find("8x8") != std::string::npos);
+    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Structure, "wall", 3, 2, 2), &why));   // no such layer
+    T2D_CHECK(why.find("tile layer 3") != std::string::npos);
+
+    // The rule the designer gave as the example: a drill has to sit on ore - a lower tile layer of the
+    // same cell has to hold one.
+    T2D_CHECK(layer.can_place(at(ContentKind::Drill, "drill", 2, 4, 4), &why));
+    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Drill, "drill", 2, 6, 6), &why));
+    T2D_CHECK(why.find("no ore under it") != std::string::npos);
+
+    // And the layer asks it while it builds: a drill placed from data with nothing under it is refused and
+    // named, rather than standing there mining nothing.
+    spec.content.push_back(at(ContentKind::Drill, "drill", 2, 6, 6));
+    spec.content.push_back(at(ContentKind::Drill, "drill", 2, 4, 4));
+    MineLayer built(0, shape, 7);
+    LayerBuildReport built_report;
+    built.build(spec, content.registry, content.definitions, &built_report);
+    T2D_CHECK(built.plot_at(2, GridPos{4, 4}) != nullptr);   // on the ore: it stands
+    T2D_CHECK(built.plot_at(2, GridPos{6, 6}) == nullptr);   // nothing under it: it does not
+    T2D_CHECK(!built_report.clean());
+    T2D_CHECK_MSG(built_report.errors.front().find("no ore under it") != std::string::npos, "{}",
+                  built_report.errors.front());
+}
+
 T2D_TEST_MAIN

@@ -42,8 +42,11 @@ public:
     [[nodiscard]] const Click& click() const { return click_; }
 
     // --- what the layer and the screen ask it -----------------------------------------------------
-    /// Sets the capacity its entry declared. Called while the plot is built (types/tile_definition.h).
-    void set_capacity(usize capacity) { container_.set_capacity(capacity); }
+    /// How much it can hold. It is a **definition** attribute: it comes from the entry's `capacity`, which
+    /// every warehouse of that entry shares, and there is no setter - nothing may change it after the plot
+    /// is built (docs/GAME_DESIGN.md section 1.35). A plot built without a definition (a test) falls back
+    /// to the container it was made with.
+    [[nodiscard]] usize capacity() const;
     /// A click arrived at \p cell: the warehouse takes it when the cell is one of its own, which is what
     /// opens (or closes) its panel. Every warehouse is told about every click, so the ones the click did
     /// not land on close theirs (types/click.h).
