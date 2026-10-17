@@ -65,7 +65,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases /1265 checks  framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
-    tests/test_render_offscreen   10 cases /  71 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
+    tests/test_render_offscreen   11 cases /  76 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
     games/mine/tests/test_mine_menu      11 cases / 168 checks  the start screen as a state machine
     games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table

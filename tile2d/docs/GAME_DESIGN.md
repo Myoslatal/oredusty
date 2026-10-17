@@ -1410,31 +1410,28 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
   的两条分支；层构建时对钻头强制、报告里点名）；套件 **31 个测试**全绿（release / debug / asan / tsan / server-only
   31/31、no-renderer 11/11、Ore 13/13）。
 
-### M2 交付状态（二十三）：石头的硬度与掉落、钻头的建造时间（本体内容）
+### M2 交付状态（二十四）：建造动画把整张地板画错贴图的 bug（已修，含回归测试）
 
-设计者的话："设置好石头的hardness(=1)和drop，设置钻头建造时间为5s"。
+设计者报的："建造时整个地图的泥地板都被错误渲染成了其他的贴图"。
 
-* **`content/ores.ecfg`**：`ore:: stone::` 加上 `hardness:1` 与 `drop:"stone"`——石头硬度 1，挖出来的是石头。
-* **`content/drops.ecfg`（新）**：`drop:: stone::`，用 `art/item_stone.png`。掉落物是设计者自己的种类（§1.25：
-  "躺在地上、自己不变化、能被指针拖着走"），石头矿石的 `drop` 指的就是它；**图沿用了石头物品那张**（同一块石头，
-  在地上和在被搬着的时候长得一样）——要单独画一张，换掉它的 `image` 即可。
-* **`content/drills.ecfg`**：`building:: time:5`——石头钻头现在要**建 5 秒**，所以放下之后会走那条扫描线。
-* **实测**（真机无头）：双击选中仓库 → 建造栏 `EXTRACTION` → 选 `STONE` 钻头 → 点地图一格，日志：
+* **原因**：`SpriteBatch` 的 descriptor set 是**轮流用**的（一次 `begin` 写一次贴图，写是立即生效的），池子只有
+  **8 个**（`kDescriptorSetCount = 8`，注释写着"够一帧的批次用了"）。世界视图一帧的批次数是"屏幕上**每种不同的贴图**
+  一个 + **每个正在建造的地块**一个 + 界面若干"——没有建造动画时正好压着 8，**一旦有东西在建就超了**：轮回到第一个
+  set 时把它重写了，而第一个 set 正被**地板那一批**用着，于是整张地板用上了别的贴图。这就是"只在建造时出错"的原因。
+* **修法**：① 池子 8 → **64**，并在注释里写清"必须多于一帧的批次数"，以及八为什么不够；② **不再让这种事静默**——每帧
+  记录批次数（用 `RenderFrame::number` 认帧界，因为渲染器每帧给的是同一个对象），一旦超过池子就 `T2D_WARN` 一次并
+  计数（新增 `batches_this_frame()` / `batches_over()` 两个查询）。
+* **回归测试**（`test_render_offscreen`，真设备上离屏渲染 + 读像素）：一帧录 **16 个批次**，红蓝两张 1×1 贴图交替，
+  每批画一条横带——若池子轮回，最早那几条带会穿上最后绑定的贴图，于是**两种颜色里必然少一种**。测试断言两种颜色都在、
+  且 `batches_over() == 0`。**实测它能抓住这个 bug**：把 `kDescriptorSetCount` 临时改回 8，这条用例当场失败
+  （`batches_over() == 8`）；改回 64 就过。
+* **修复前后同一时刻的截图对比**（建造开始后 2 秒）：修之前整张地板是暗色方块（错贴图），修之后是正常的泥土贴图，
+  只有正在建的那一格显示"扫到一半"的钻头贴图。
+* **验证**：`tools/verify.sh` **7/7 全绿**；套件 **32 个测试全绿**；`test_render_offscreen` 10 → **11 用例 / 71 → 76 断言**。
+  本体表不变（游戏自己的代码没动）：**927 节 / 2923 符号 / 11273 重定位 / 1.44 MiB**；debug 表 6571 → **6576 / 22340 /
+  30440 / 4.20 MiB**。
 
-```
-world: selected warehouse #1 at 4,4
-world: the drill 'stone' at 1,2 mines ore 'stone' (hardness 1.00 / power 1.00 = 1.00s per drop of 'stone')
-world: built stone at 1,2
-```
-
-  也就是说这颗钻头**不再是空转的**：每 1 秒往外丢一块石头（hardness ÷ dig_power = 1 ÷ 1）。放下去 2 秒时抓的一张
-  图能看到扫描线走到一半，8 秒时抓的图里钻头旁边的格子之间躺着几块石头掉落物。
-* **单测**：`test_content_pack` 18 用例 / 278 → **285 断言**——本体包现在是 **7 张图**（drills 的两张在最前、接着是
-  drops、floors、items、ores、warehouses），并钉住：石头矿石 `hardness == 1`、`drop == "stone"`、**且这个名字在
-  注册表里真的有对应的掉落物**（§1.26 的规则就是按名字找 `drop::`）、石头钻头 `building.seconds == 5`。
-  套件 **32 个测试**全绿。
-
-![石头钻头在挖矿：旁边的格子之间躺着它丢出来的石头掉落物](../games/mine/docs/images/world_stone_drill_mining_en.png)
+![修好之后：建造中（扫描线在钻头那一格），地板仍是泥土贴图](/mis/oredusty/tile2d/games/mine/docs/images/world_stone_drill_mining_en.png)
 
 ### M1 验收标准（已满足）
 
@@ -1657,6 +1654,15 @@ world: built stone at 1,2
 
 | 版本 | 变更 |
 |---|---|
+| M2.27 | **修：建造时整张地板被画成别的贴图**（设计者报的 bug）。原因：`SpriteBatch` 的 descriptor set 轮流用、池子只有
+  **8 个**，而世界视图一帧的批次数 = 屏幕上每种不同贴图一个 + **每个正在建造的地块一个** + 界面若干——没有建造动画时正好
+  压着 8，**一有东西在建就超**，轮回到第一个 set 时把它重写，而它正被地板那一批用着，于是整张地板换上别的贴图（所以只在
+  建造时出错）。修法：池子 8 → **64**（注释写清为什么必须多于一帧的批次数），并且**不再静默**——每帧记批次数（用
+  `RenderFrame::number` 认帧界），超了就 `T2D_WARN` 一次并计数（新增 `batches_this_frame()` / `batches_over()`）。
+  **回归测试**：`test_render_offscreen` 新增一条——一帧录 16 个批次、红蓝贴图交替、每批一条横带，池子轮回时两种颜色必少
+  一种；实测把池子临时改回 8 该用例当场失败（`batches_over() == 8`），改回 64 就过。`test_render_offscreen` 10 → 11 用例 /
+  71 → 76 断言；套件 **32 个测试**全绿。本体表不变 **927 / 2923 / 11273 / 1.44 MiB**，debug 6571 → **6576 / 22340 / 30440 /
+  4.20 MiB** |
 | M2.26 | **石头的硬度与掉落、钻头的建造时间**（本体内容）：`ore:: stone::` 加 `hardness:1` + `drop:"stone"`；新增
   `content/drops.ecfg`（`drop:: stone::`，图沿用 `art/item_stone.png`——同一块石头在地上与在手里长得一样）；
   `drill:: stone::` 的 `building::` 加 `time:5`（放下后走扫描线）。实测日志：

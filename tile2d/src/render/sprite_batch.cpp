@@ -101,9 +101,14 @@ Scope<SpriteBatch> SpriteBatch::create(ore::rhi::GraphicsContext& context, const
     batch->pipeline_ = ore::rhi::GraphicsPipeline::create(context.device(), pipeline_desc);
     if (batch->pipeline_ == nullptr) return nullptr;
 
-    // Enough sets that a frame's batches never collide and a set comes back around only after
-    // several frames have been retired by the GPU.
-    constexpr u32 kDescriptorSetCount = 8;
+    // Enough sets that a frame's batches never collide and a set comes back around only after several
+    // frames have been retired by the GPU. **This has to be more than the batches one frame records**:
+    // the sets are handed out round robin and a set is written when it is bound, so a frame that runs
+    // past the end rewrites a set an earlier draw is still using - and that draw comes out wearing the
+    // wrong texture. Eight was not enough: the world view records one batch per distinct picture on
+    // screen plus one per plot going up, and it went past eight the first time a build animation ran
+    // (the whole floor came out as something else). A frame that gets close is reported, not silent.
+    constexpr u32 kDescriptorSetCount = 64;
     const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kDescriptorSetCount};
     batch->descriptor_pool_ = ore::rhi::DescriptorPool::create(
         context.device(), ore::ConstSpan<VkDescriptorPoolSize>(&pool_size, 1), kDescriptorSetCount);
@@ -144,7 +149,22 @@ void SpriteBatch::begin(ore::RenderFrame& frame, const ore::Mat4& view_projectio
     vertices_ = staging_.data();
 
     // A fresh set per batch: the write below is immediate, so sharing one set between the batches
-    // of a frame would leave every draw sampling the last texture written.
+    // of a frame would leave every draw sampling the last texture written. A frame that runs past the
+    // sets there are rewrites the first ones, and those draws come out wearing the wrong texture - so
+    // it is counted and said out loud rather than left to be noticed on screen.
+    if (frame_number_ != frame.number) {
+        frame_number_ = frame.number;
+        batches_this_frame_ = 0;
+    }
+    ++batches_this_frame_;
+    if (batches_this_frame_ > descriptor_sets_.size()) {
+        if (batches_this_frame_ == descriptor_sets_.size() + 1) {
+            T2D_WARN("sprite batch: a frame recorded more than {} batches, so its first draws sample another "
+                     "batch's texture (raise kDescriptorSetCount)",
+                     descriptor_sets_.size());
+        }
+        ++batches_over_;
+    }
     ore::rhi::DescriptorSet& descriptor_set = descriptor_sets_[next_descriptor_set_];
     next_descriptor_set_ = (next_descriptor_set_ + 1) % descriptor_sets_.size();
     descriptor_set.write_texture(0, atlas, sampler);

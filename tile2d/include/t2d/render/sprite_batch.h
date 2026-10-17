@@ -97,6 +97,11 @@ public:
     [[nodiscard]] u32 dropped_quads() const { return dropped_quads_; }
     [[nodiscard]] u32 max_quads() const { return max_quads_; }
     [[nodiscard]] u32 vertices_uploaded() const { return quad_count_ * 4u; }
+    /// How many batches the frame being recorded has begun. More of them than the batch has descriptor
+    /// sets means its earliest draws sample another batch's texture, which is worth knowing.
+    [[nodiscard]] u32 batches_this_frame() const { return batches_this_frame_; }
+    /// How many batches were begun past the sets there are, since this batch was created.
+    [[nodiscard]] u32 batches_over() const { return batches_over_; }
 
 private:
     SpriteBatch() = default;
@@ -114,6 +119,12 @@ private:
     /// wearing the font atlas.
     std::vector<ore::rhi::DescriptorSet> descriptor_sets_;
     usize next_descriptor_set_ = 0;
+    /// Which frame the count below belongs to - the renderer hands out the same RenderFrame object every
+    /// frame, so its monotonic number is what says a new one has begun - and how many batches it has
+    /// begun so far.
+    u64 frame_number_ = 0;
+    u32 batches_this_frame_ = 0;
+    u32 batches_over_ = 0;
 
     /// Quads are staged in this CPU buffer and copied into the frame ring by end() with their exact
     /// size. Writing straight into a worst case slice of the ring wastes most of it (two batches per

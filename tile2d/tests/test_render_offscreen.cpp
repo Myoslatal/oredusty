@@ -620,4 +620,67 @@ T2D_TEST(text_is_drawn_inside_the_box_its_pen_describes) {
                   max_y - min_y);
 }
 
+
+T2D_TEST(a_frame_with_many_batches_keeps_every_batch_on_its_own_texture) {
+    Fixture fixture = make_fixture(64);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 64);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    // Two one-texel pictures, so a quad's colour says which texture it was drawn with.
+    ore::Image red = ore::Image::create(1, 1, 0u);
+    red.fill_rect(0, 0, 1, 1, ore::make_rgba(220, 40, 40));
+    ore::Image blue = ore::Image::create(1, 1, 0u);
+    blue.fill_rect(0, 0, 1, 1, ore::make_rgba(40, 40, 220));
+    Scope<ore::rhi::Texture> red_texture = fixture.context->create_texture(red, false, "test.red");
+    Scope<ore::rhi::Texture> blue_texture = fixture.context->create_texture(blue, false, "test.blue");
+    T2D_REQUIRE(red_texture != nullptr && blue_texture != nullptr);
+    const Aabb2 whole{Vec2{0.0f, 0.0f}, Vec2{1.0f, 1.0f}};
+
+    // **More batches than the batch has descriptor sets.** Each batch binds its own texture and draws
+    // one band of the picture; if a frame's sets wrap, the earliest bands come out wearing the last
+    // texture bound instead of their own - which is the bug that made a whole floor render as another
+    // picture while a build animation ran (a frame records one batch per distinct picture on screen
+    // plus one per plot going up). Sixteen is well past any pool this batch would be handed by mistake.
+    constexpr u32 kBatches = 16;
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+    fixture.renderer->begin_pass(clear, 1.0f);
+    for (u32 index = 0; index < kBatches; ++index) {
+        const bool even = index % 2 == 0;
+        batch->begin(frame, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, even ? *red_texture : *blue_texture,
+                     sampler->handle());
+        const f32 y = static_cast<f32>(index) * 4.0f;
+        batch->draw_quad(Aabb2{Vec2{0.0f, y}, Vec2{64.0f, y + 3.0f}}, whole, 0xFFFFFFFFu);
+        batch->end();
+    }
+    fixture.renderer->end_pass();
+    fixture.renderer->end_frame();
+    fixture.renderer->wait_idle();
+
+    T2D_CHECK_EQ(batch->batches_this_frame(), kBatches);
+    T2D_CHECK_EQ(batch->batches_over(), 0u);   // no batch was recorded past the sets there are
+
+    const ore::Image shot = fixture.context->read_render_target(fixture.renderer->target());
+    T2D_REQUIRE(!shot.empty());
+    // Which end of the readback is which does not matter: what matters is that **both** pictures are
+    // there. A wrapped pool leaves every band wearing the last texture bound, so one of the two
+    // colours disappears entirely - and that is what this counts.
+    u32 reds = 0;
+    u32 blues = 0;
+    for (u32 y = 0; y < shot.height; ++y) {
+        for (u32 x = 0; x < shot.width; ++x) {
+            const ore::Color pixel = ore::Color::from_packed(shot.pixel(x, y));
+            if (pixel.r > 150 && pixel.b < 90) ++reds;
+            if (pixel.b > 150 && pixel.r < 90) ++blues;
+        }
+    }
+    T2D_CHECK_MSG(reds > 0, "no band came out red: every batch sampled another one's texture");
+    T2D_CHECK_MSG(blues > 0, "no band came out blue: every batch sampled another one's texture");
+    T2D_CHECK(reds > 100 && blues > 100);
+}
+
 T2D_TEST_MAIN
