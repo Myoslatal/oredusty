@@ -712,4 +712,57 @@ T2D_TEST(a_second_picture_and_a_speed_belong_to_drills_and_are_refused_elsewhere
     T2D_CHECK(refused("drill::\n    rig::\n        dig_power:1\n        spin:0\n"));
 }
 
+
+T2D_TEST(a_drills_top_turns_about_the_point_of_its_picture_the_entry_names) {
+    const auto read = [](std::string_view text) {
+        const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(text);
+        if (!document.has_value()) return std::vector<TileDefinition>{};
+        std::vector<std::string> errors;
+        std::vector<TileDefinition> definitions = tile_definitions(*document, &errors);
+        return errors.empty() ? definitions : std::vector<TileDefinition>{};
+    };
+    const auto refused = [&](std::string_view text) { return read(text).empty(); };
+
+    const std::vector<TileDefinition> given = read(R"(
+drill::
+    rig::
+        dig_power:2
+        top_image:"art/rig_top.png"
+        spin:4
+        spin_origin::
+            x:0.25
+            y:0.75
+)");
+    T2D_REQUIRE(given.size() == 1u);
+    T2D_CHECK_EQ(given.front().spin_origin.x, 0.25f);
+    T2D_CHECK_EQ(given.front().spin_origin.y, 0.75f);
+
+    // Not saying it means the middle: a part drawn to turn where it is drawn.
+    const std::vector<TileDefinition> quiet = read(R"(drill::
+    rig::
+        dig_power:2
+        spin:4
+)");
+    T2D_REQUIRE(quiet.size() == 1u);
+    T2D_CHECK_EQ(quiet.front().spin_origin.x, 0.5f);
+    T2D_CHECK_EQ(quiet.front().spin_origin.y, 0.5f);
+
+    // And what is not a point of a picture is refused: outside it, the wrong shape, the wrong type.
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:2\n        spin_origin::\n            x:1.5\n            y:0.5\n"));
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:2\n        spin_origin::\n            x:-0.1\n            y:0.5\n"));
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:2\n        spin_origin:0.5\n"));
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:2\n        spin_origin::\n            x:\"half\"\n            y:0.5\n"));
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:2\n        spin_origin::\n            x:0.5\n            y:0.5\n            z:0.5\n"));
+    // One half is enough: what is not said is the middle of that axis.
+    const std::vector<TileDefinition> half = read(R"(drill::
+    rig::
+        dig_power:2
+        spin_origin::
+            x:0.0
+)");
+    T2D_REQUIRE(half.size() == 1u);
+    T2D_CHECK_EQ(half.front().spin_origin.x, 0.0f);
+    T2D_CHECK_EQ(half.front().spin_origin.y, 0.5f);
+}
+
 T2D_TEST_MAIN

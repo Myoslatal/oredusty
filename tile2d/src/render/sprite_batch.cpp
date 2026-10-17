@@ -1,5 +1,6 @@
 #include <t2d/render/sprite_batch.h>
 
+#include <array>
 #include <cmath>
 
 #include <t2d/core/log.h>
@@ -167,6 +168,11 @@ void SpriteBatch::draw_quad(const Aabb2& rect, const Aabb2& uv_rect, u32 color) 
 }
 
 void SpriteBatch::draw_quad_rotated(const Aabb2& rect, const Aabb2& uv_rect, f32 radians, u32 color) {
+    draw_quad_rotated(rect, uv_rect, Vec2{0.5f, 0.5f}, radians, color);
+}
+
+void SpriteBatch::draw_quad_rotated(const Aabb2& rect, const Aabb2& uv_rect, Vec2 pivot, f32 radians,
+                                   u32 color) {
     if (vertices_ == nullptr) return;
     if (quad_count_ >= max_quads_) {
         ++dropped_quads_;
@@ -178,25 +184,13 @@ void SpriteBatch::draw_quad_rotated(const Aabb2& rect, const Aabb2& uv_rect, f32
     const f32 u1 = uv_rect.max.x;
     const f32 v1 = uv_rect.max.y;
 
-    // The four corners, turned about the middle of the rectangle. The uv corners stay where they are:
-    // the picture turns with the quad, which is what "the sprite is spinning" looks like.
-    const Vec2 middle{(rect.min.x + rect.max.x) * 0.5f, (rect.min.y + rect.max.y) * 0.5f};
-    const f32 cosine = std::cos(radians);
-    const f32 sine = std::sin(radians);
-    const auto turned = [&](Vec2 corner) {
-        const f32 x = corner.x - middle.x;
-        const f32 y = corner.y - middle.y;
-        return Vec2{middle.x + x * cosine - y * sine, middle.y + x * sine + y * cosine};
-    };
-    const Vec2 bottom_left = turned(rect.min);
-    const Vec2 bottom_right = turned(Vec2{rect.max.x, rect.min.y});
-    const Vec2 top_right = turned(rect.max);
-    const Vec2 top_left = turned(Vec2{rect.min.x, rect.max.y});
-
-    vertex[0] = SpriteVertex{bottom_left.x, bottom_left.y, u0, v0};
-    vertex[1] = SpriteVertex{bottom_right.x, bottom_right.y, u1, v0};
-    vertex[2] = SpriteVertex{top_right.x, top_right.y, u1, v1};
-    vertex[3] = SpriteVertex{top_left.x, top_left.y, u0, v1};
+    // The four corners, turned about the pivot. The uv corners stay where they are: the picture turns with
+    // the quad, which is what "the sprite is spinning" looks like.
+    const std::array<Vec2, 4> corners = rotated_corners(rect, pivot, radians);
+    vertex[0] = SpriteVertex{corners[0].x, corners[0].y, u0, v0};
+    vertex[1] = SpriteVertex{corners[1].x, corners[1].y, u1, v0};
+    vertex[2] = SpriteVertex{corners[2].x, corners[2].y, u1, v1};
+    vertex[3] = SpriteVertex{corners[3].x, corners[3].y, u0, v1};
     for (int i = 0; i < 4; ++i) vertex[i].set_color(color);
     ++quad_count_;
 }

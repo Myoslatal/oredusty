@@ -4,6 +4,8 @@
 
 #include <t2d/core/types.h>
 
+#include <array>
+
 #include <cmath>
 
 namespace t2d {
@@ -87,6 +89,23 @@ struct Aabb2 {
     }
     friend constexpr bool operator==(const Aabb2&, const Aabb2&) = default;
 };
+
+/// The four corners of \p rect turned by \p radians about \p pivot, which is given **in the rectangle's own
+/// coordinates** - (0, 0) is its min corner and (1, 1) its max - so (0.5, 0.5) turns it about its middle and
+/// (0, 0) about its bottom left. The order is bottom left, bottom right, top right, top left: the order a
+/// quad's vertices come in, which is what a sprite that turns needs (render/sprite_batch.h).
+[[nodiscard]] inline std::array<Vec2, 4> rotated_corners(const Aabb2& rect, Vec2 pivot, f32 radians) {
+    const Vec2 middle{rect.min.x + rect.width() * pivot.x, rect.min.y + rect.height() * pivot.y};
+    const f32 cosine = std::cos(radians);
+    const f32 sine = std::sin(radians);
+    const auto turned = [&](Vec2 corner) {
+        const f32 x = corner.x - middle.x;
+        const f32 y = corner.y - middle.y;
+        return Vec2{middle.x + x * cosine - y * sine, middle.y + x * sine + y * cosine};
+    };
+    return {turned(rect.min), turned(Vec2{rect.max.x, rect.min.y}), turned(rect.max),
+            turned(Vec2{rect.min.x, rect.max.y})};
+}
 
 /// Integer rectangle in tile coordinates (half open: [x, x + w) x [y, y + h)).
 struct TileRect {

@@ -75,6 +75,10 @@ public:
     /// sprite that is round - or that is meant to be seen spinning, like a drill's top (games/mine) -
     /// keeps its picture the right way up in its own frame. A rotation of zero is draw_quad().
     void draw_quad_rotated(const Aabb2& rect, const Aabb2& uv_rect, f32 radians, u32 color);
+    /// The same, turned about \p pivot instead of the middle: it is given in the rectangle's own coordinates,
+    /// (0, 0) at its min corner and (1, 1) at its max (core/math2d.h). A drill's top turns about whatever point
+    /// of its picture its entry names, which is not always the middle (games/mine, GAME_DESIGN 1.38).
+    void draw_quad_rotated(const Aabb2& rect, const Aabb2& uv_rect, Vec2 pivot, f32 radians, u32 color);
     /// Points draw_rect() at a texel of the currently bound texture that is opaque. The default is the
     /// font atlas's reserved white cell; a glyph atlas has its own.
     void set_white_texel(const Vec2& uv);

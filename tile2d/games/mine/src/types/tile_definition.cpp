@@ -162,6 +162,33 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
             }
             definition.spin = static_cast<f32>(spin->as_float());
         }
+        // **Where** it turns: a point of the top's picture, in that picture's own coordinates. Both halves
+        // are required and both are inside the picture - a pivot outside it is a part that swings rather
+        // than turns, which is not what this field means (docs/GAME_DESIGN.md section 1.38).
+        if (const t2d::EcfgValue* origin = entry.find("spin_origin"); origin != nullptr) {
+            if (!origin->is_table()) {
+                return fail(std::format("drill '{}': spin_origin must be a table (spin_origin:: x:0.5 y:0.5)",
+                                        name));
+            }
+            f32 x = 0.5f;
+            f32 y = 0.5f;
+            for (const t2d::EcfgValue& half : origin->children()) {
+                if (half.key() != "x" && half.key() != "y") {
+                    return fail(std::format("drill '{}': spin_origin has no field '{}' (x, y)", name,
+                                            half.key()));
+                }
+                if (half.type() != t2d::EcfgType::Int && half.type() != t2d::EcfgType::Float) {
+                    return fail(std::format("drill '{}': spin_origin {} must be a number", name, half.key()));
+                }
+                const f32 value = static_cast<f32>(half.as_float());
+                if (!(value >= 0.0f) || !(value <= 1.0f)) {
+                    return fail(std::format("drill '{}': spin_origin {} is {}, and the picture runs 0 to 1",
+                                            name, half.key(), value));
+                }
+                (half.key() == "x" ? x : y) = value;
+            }
+            definition.spin_origin = t2d::Vec2{x, y};
+        }
     }
     if (kind == ContentKind::Warehouse) {
         // A capacity is a count, so it has to be a whole number: "capacity:2.5" is a warehouse whose size

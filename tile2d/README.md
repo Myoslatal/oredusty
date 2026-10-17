@@ -70,7 +70,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
-    games/mine/tests/test_mine_types     19 cases / 233 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
+    games/mine/tests/test_mine_types     20 cases / 244 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
     games/mine/tests/test_world          19 cases / 189 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index, placed blocks
     games/mine/tests/test_layer_rules    25 cases / 830 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
@@ -501,7 +501,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 924 sections, 2 905 symbols, 11 250 relocations (release)
+        mine.codetab         the game: 927 sections, 2 923 symbols, 11 273 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings

@@ -55,6 +55,9 @@ public:
     /// `spin` seconds. It is a function of the time and not a number kept per drill, so every drill of an
     /// entry turns together and a frame that is late does not slow one down.
     [[nodiscard]] f32 spin_angle(f32 seconds) const;
+    /// The point of its top's picture it turns about, in that picture's own coordinates: the entry's
+    /// `spin_origin`, or the middle when it does not say (section 1.38).
+    [[nodiscard]] t2d::Vec2 spin_origin() const;
 
     /// True when it has something to mine: a drop to make, and a period to make it on.
     [[nodiscard]] bool ready() const { return job_.drop_id != kNoContent && job_.period_seconds > 0.0f; }

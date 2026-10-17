@@ -16,6 +16,11 @@ f32 Drill::spin_seconds() const {
     return record != nullptr ? record->spin : 0.0f;
 }
 
+t2d::Vec2 Drill::spin_origin() const {
+    const TileDefinition* record = definition();
+    return record != nullptr ? record->spin_origin : t2d::Vec2{0.5f, 0.5f};
+}
+
 f32 Drill::spin_angle(f32 seconds) const {
     const f32 turn = spin_seconds();
     if (!(turn > 0.0f) || !(seconds > 0.0f)) return 0.0f;

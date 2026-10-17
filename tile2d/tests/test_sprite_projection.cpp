@@ -73,4 +73,30 @@ T2D_TEST(sprite_geometry_at_world_depth_zero_is_inside_the_clip_volume) {
     T2D_CHECK_GE(project(view_projection, 100.0f, 100.0f, -0.5f).z, 0.0f);
 }
 
+
+T2D_TEST(a_quad_turns_about_the_point_it_is_given) {
+    const t2d::Aabb2 rect{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{2.0f, 2.0f}};
+    constexpr f32 kTau = 6.283185307179586f;
+    // No turn: the corners are the rectangle's own, in the order a quad's vertices come in.
+    const std::array<t2d::Vec2, 4> straight = t2d::rotated_corners(rect, t2d::Vec2{0.5f, 0.5f}, 0.0f);
+    T2D_CHECK(straight[0] == rect.min);
+    T2D_CHECK((straight[1] == t2d::Vec2{2.0f, 0.0f}));
+    T2D_CHECK(straight[2] == rect.max);
+    T2D_CHECK((straight[3] == t2d::Vec2{0.0f, 2.0f}));
+
+    // A quarter turn about the middle: the square lands on itself, and its corners move round by one.
+    const std::array<t2d::Vec2, 4> quarter =
+        t2d::rotated_corners(rect, t2d::Vec2{0.5f, 0.5f}, kTau * 0.25f);
+    T2D_CHECK(std::abs(quarter[0].x - 2.0f) < 1e-5f && std::abs(quarter[0].y - 0.0f) < 1e-5f);
+    T2D_CHECK(std::abs(quarter[2].x - 0.0f) < 1e-5f && std::abs(quarter[2].y - 2.0f) < 1e-5f);
+
+    // About the bottom left corner instead: that corner does not move at all, and the rectangle swings
+    // up - which is what a part that turns about a point of its own picture does (section 1.38).
+    const std::array<t2d::Vec2, 4> swung = t2d::rotated_corners(rect, t2d::Vec2{0.0f, 0.0f}, kTau * 0.25f);
+    T2D_CHECK(swung[0] == rect.min);
+    T2D_CHECK(std::abs(swung[1].x - 0.0f) < 1e-5f && std::abs(swung[1].y - 2.0f) < 1e-5f);
+    T2D_CHECK(std::abs(swung[2].x + 2.0f) < 1e-5f && std::abs(swung[2].y - 2.0f) < 1e-5f);
+    T2D_CHECK(std::abs(swung[3].x + 2.0f) < 1e-5f && std::abs(swung[3].y - 0.0f) < 1e-5f);
+}
+
 T2D_TEST_MAIN

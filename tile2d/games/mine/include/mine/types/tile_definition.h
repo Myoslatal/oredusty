@@ -48,6 +48,10 @@ struct TileDefinition {
     /// "spin" (a drill): how long one full turn of that part takes, in seconds. 0 when the entry does not
     /// say, which is a drill whose top does not turn.
     f32 spin = 0.0f;
+    /// "spin_origin" (a drill): the point of the top's **picture** it turns about, in the picture's own
+    /// coordinates - (0, 0) is its bottom left corner and (1, 1) its top right. The middle when the entry
+    /// does not say, which is a part drawn to turn where it is drawn (docs/GAME_DESIGN.md section 1.38).
+    t2d::Vec2 spin_origin{0.5f, 0.5f};
     /// "hardness" (an ore): how long mining it takes, in power-seconds. 0 when the entry does not say.
     f32 hardness = 0.0f;
     /// "drop" (an ore): the name of the drop content it yields when it is mined. Empty when it does not

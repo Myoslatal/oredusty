@@ -2660,6 +2660,7 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
         t2d::Aabb2 rect{};
         t2d::Aabb2 uv{};
         f32 radians = 0.0f;   ///< 0 for everything but a drill's turning top (section 1.38)
+        t2d::Vec2 pivot{0.5f, 0.5f};   ///< what it turns about, in the picture's own coordinates
     };
     /// Everything one tile layer draws, in the order it draws it: the plots that have no picture, then
     /// the pictures, grouped.
@@ -2720,7 +2721,7 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
                 const t2d::Aabb2 art = plot.mirrored() ? mirrored_uv : full_uv;
                 add_quad(Quad{key, rect, art, 0.0f});
                 add_quad(Quad{image_key(plot.kind(), entry->name, "top"), rect, art,
-                               drill->spin_angle(world_seconds_)});
+                               drill->spin_angle(world_seconds_), drill->spin_origin()});
                 return;
             }
             add_quad(Quad{key, rect, plot.mirrored() ? mirrored_uv : full_uv});
@@ -2745,7 +2746,7 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             if (texture == content_textures_.end()) continue;
             batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
             for (const Quad& quad : group.second) {
-                batch_->draw_quad_rotated(quad.rect, quad.uv, quad.radians, 0xFFFFFFFFu);
+                batch_->draw_quad_rotated(quad.rect, quad.uv, quad.pivot, quad.radians, 0xFFFFFFFFu);
             }
             batch_->end();
             cost.draw_calls += batch_->draw_calls();
