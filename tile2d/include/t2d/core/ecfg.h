@@ -15,7 +15,7 @@
 //     content
 //     >>
 //     __include: #other.ecfg                 the file's text is spliced in **here**, then parsed
-//     __not_main:true                        this file is a part: loading it on its own is refused
+//     __not_main:"skip"                      what the file says about being loaded on its own: see below
 //
 // `__include`: a file can be assembled from parts. A line `__include: #<path>` is replaced by the contents
 // of <path> before anything is parsed, indented like the line it lands on - so a file written at the top
@@ -25,12 +25,24 @@
 // include because that text has no file to be relative to. An include that cannot be read, that loops, or
 // that nests deeper than 16 levels is an error naming the file and line that asked for it.
 //
-// A part can say so: `__not_main: true` makes `EcfgDocument::load` refuse to load that file on its own, with
-// a message that says to include it instead. It is the belt to `__include`'s braces - a part that is loaded
-// by mistake (a stray pack scan, a reload) is reported rather than quietly registering half of something.
+// A part can say so. `__not_main` takes one of three values (the booleans are the same thing written the
+// way the format writes a boolean):
+//
+//     __not_main:"false"   (or false, or no marker at all)   an ordinary file: it loads
+//     __not_main:"skip"                                      do not load this file on its own: leave it out
+//     __not_main:"true"    (or true)                         this is a part: loading it on its own is refused
+//
+// It is the belt to `__include`'s braces: a part that a directory walk picks up by mistake is either left
+// out or reported, never quietly registered. "skip" is the quiet one, for files a walk should simply not
+// see - a reload skips them again, which is the point of saying it in the file instead of in the walker.
+//
+// `EcfgDocument::load` obeys the marker: a "true" file comes back as nullopt with the error filled in, a
+// "skip" file as nullopt with the error left alone - which is what ecfg_skipped() asks about. Anything else
+// in the marker is refused too, rather than guessed at.
+//
 // The marker belongs to the **file**, so it is not copied into a document that includes it: the file that
 // includes a part is a main file and stays loadable. It is also a property of a file, so `parse()` - text
-// with no file behind it - does not check it.
+// with no file behind it - does not act on it; EcfgDocument::main() reports what the text says.
 //
 // Rules the reader enforces, because a config that is half understood is worse than one that is
 // rejected:
@@ -58,6 +70,13 @@ class Parser;
 
 enum class EcfgType : u8 { None, Bool, Int, Float, String, Array, Table };
 
+/// What a file's `__not_main` marker says about loading it on its own (see the note at the top).
+enum class EcfgMain : u8 {
+    Main, ///< nothing, or "false": an ordinary file
+    Skip, ///< "skip": do not read this file on its own - leave it out, no error
+    Part, ///< "true": this file is a part - loading it on its own is refused
+};
+
 [[nodiscard]] const char* ecfg_type_name(EcfgType type);
 
 struct EcfgError {
@@ -67,6 +86,13 @@ struct EcfgError {
 
     [[nodiscard]] std::string describe(std::string_view source_name = {}) const;
 };
+
+/// Whether a failed load failed because the file asked to be skipped rather than because anything went
+/// wrong: `EcfgDocument::load` leaves the error alone for such a file, and a walker that means to be quiet
+/// about them asks this. Pass the error you also passed to load(); a call that got no error cannot tell.
+[[nodiscard]] inline bool ecfg_skipped(const EcfgError& error) {
+    return error.line == 0 && error.column == 0 && error.message.empty();
+}
 
 /// One value of a document. Tables and arrays own their children, so a value is a small tree.
 class EcfgValue {
@@ -128,6 +154,11 @@ public:
     /// Reads and parses a file, resolving its includes relative to the file's own directory - the same rule a
     /// content file's images follow. A file that cannot be read reports line 0.
     [[nodiscard]] static std::optional<EcfgDocument> load(const std::string& path, EcfgError* error = nullptr);
+
+    /// What this document's own `__not_main` says (see EcfgMain). It is the marker of the text the document
+    /// was parsed from: an included file's marker stays with that file and never lands here. A marker that is
+    /// not one of the three values reads as Main - load() is where such a value is refused.
+    [[nodiscard]] EcfgMain main() const;
 
     [[nodiscard]] const EcfgValue& root() const { return root_; }
     [[nodiscard]] const EcfgValue* find(std::string_view key) const { return root_.find(key); }

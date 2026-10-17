@@ -278,6 +278,8 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
             t2d::EcfgError parse_error;
             std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(manifest_path.string(), &parse_error);
             const std::string package_dir = manifest_path.parent_path().string();
+            // A manifest that asks to be skipped is not a manifest: the directory is not a mod package.
+            if (!document.has_value() && t2d::ecfg_skipped(parse_error)) continue;
             if (!document.has_value()) {
                 refuse(package_dir, ModManifest{}, parse_error.describe(manifest_path.string()));
                 continue;
@@ -376,6 +378,8 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
             }
             t2d::EcfgError parse_error;
             std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(file.string(), &parse_error);
+            // A content file that asks to be skipped is left out, the way a pack walk leaves it out.
+            if (!document.has_value() && t2d::ecfg_skipped(parse_error)) continue;
             if (!document.has_value()) {
                 slot.loaded.ok = false;
                 slot.loaded.error = parse_error.describe(file.string());

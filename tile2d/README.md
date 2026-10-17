@@ -41,6 +41,13 @@ that direction. What is left is what the game actually uses, and it is all teste
     cmake --build build/debug
     ctest --test-dir build/debug --output-on-failure
 
+    tools/verify.sh           # every preset at once, plus the engine's own suite
+
+`tools/verify.sh` verifies the seven targets (six presets here and the engine's suite next door) **in
+parallel** - the build trees are independent, and each target's tests run with `ctest -j` - so a run that
+takes about three minutes one at a time finishes in well under one. The job count is split between the
+targets (`VERIFY_JOBS=8 tools/verify.sh` to say how many cores to use); logs land in `build/verify/`.
+
 The whole suite is pure CPU work and finishes in about four seconds (25 suites, measured with `ctest` on
 the debug preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
 interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
@@ -48,7 +55,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
 
     tests/test_tilemap            17 cases / 359 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
     tests/test_camera2d            7 cases /1986 checks  screen/world mapping, zooming about an anchor, fitting a 512² map, bounding the view
-    tests/test_ecfg               25 cases / 161 checks  the configuration format, `__include`, `__not_main`, and the shipped example.ecfg
+    tests/test_ecfg               29 cases / 180 checks  the configuration format, `__include`, `__not_main`, and the shipped example.ecfg
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
@@ -72,7 +79,7 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
     games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_sandbox        28 cases / 719 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   17 cases / 256 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
+    games/mine/tests/test_content_pack   18 cases / 261 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
@@ -493,7 +500,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 857 sections, 2 674 symbols, 10 152 relocations (release)
+        mine.codetab         the game: 859 sections, 2 679 symbols, 10 169 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -525,7 +532,7 @@ What that buys, measured on real compiler output (`test_code_table`, 33 cases / 
   refused — and a different major version is refused whatever it used. The check happens before anything
   of the module is placed.
 
-**The published surface** is `engine.api`: 84 symbols, 39 in tier A (`t2d/core`, `t2d/text` — frozen) and
+**The published surface** is `engine.api`: 85 symbols, 40 in tier A (`t2d/core`, `t2d/text` — frozen) and
 45 in B (`t2d/render`, `t2d/net`, `ore/*` — provided, and allowed to change). `codetab build|pack --api
 engine.api` checks a table **before it is written** — the game's own table is packed that way, and a
 symbol outside the surface fails the build where its author can still do something about it —

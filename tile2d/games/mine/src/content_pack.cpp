@@ -273,34 +273,43 @@ std::optional<ContentPack> ContentPack::load(const std::string& directory, std::
     if (fs::is_regular_file(header_path, code)) {
         t2d::EcfgError parse_error;
         std::optional<t2d::EcfgDocument> header = t2d::EcfgDocument::load(header_path.string(), &parse_error);
-        if (!header.has_value()) return fail(parse_error.describe(header_path.string()));
-        pack.declared = true;
-        for (const t2d::EcfgValue& entry : header->root().children()) {
-            if (!is_pack_key(entry.key())) {
-                return fail(std::format("{}: '{}' is not a pack key ({} takes id, name, version, requires)",
-                                        header_path.string(), entry.key(), kPackHeaderName));
+        // A header that says __not_main is "skip" is a pack that does not declare itself: the file is left
+        // out the way it asked (docs/MODS.md section 0), and the pack keeps the name of its directory.
+        if (!header.has_value() && !t2d::ecfg_skipped(parse_error)) {
+            return fail(parse_error.describe(header_path.string()));
+        }
+        if (header.has_value()) {
+            pack.declared = true;
+            for (const t2d::EcfgValue& entry : header->root().children()) {
+                if (!is_pack_key(entry.key())) {
+                    return fail(std::format("{}: '{}' is not a pack key ({} takes id, name, version, requires)",
+                                            header_path.string(), entry.key(), kPackHeaderName));
+                }
             }
-        }
-        if (const t2d::EcfgValue* id = header->find("id"); id != nullptr) {
-            if (!id->is_string() || id->as_string().empty()) {
-                return fail(std::format("{}: id must be a non empty string", header_path.string()));
+            if (const t2d::EcfgValue* id = header->find("id"); id != nullptr) {
+                if (!id->is_string() || id->as_string().empty()) {
+                    return fail(std::format("{}: id must be a non empty string", header_path.string()));
+                }
+                pack.id = std::string(id->as_string());
             }
-            pack.id = std::string(id->as_string());
-        }
-        if (const t2d::EcfgValue* name = header->find("name"); name != nullptr) {
-            if (!name->is_string()) return fail(std::format("{}: name must be a string", header_path.string()));
-            pack.name = std::string(name->as_string());
-        }
-        if (const t2d::EcfgValue* version = header->find("version"); version != nullptr) {
-            if (!version->is_string()) {
-                return fail(std::format("{}: version must be a string", header_path.string()));
+            if (const t2d::EcfgValue* name = header->find("name"); name != nullptr) {
+                if (!name->is_string()) {
+                    return fail(std::format("{}: name must be a string", header_path.string()));
+                }
+                pack.name = std::string(name->as_string());
             }
-            pack.version = std::string(version->as_string());
-        }
-        if (const t2d::EcfgValue* requirements = header->find("requires"); requirements != nullptr) {
-            pack.requirements = read_string_list(*requirements);
-            if (pack.requirements.empty() && !requirements->is_array() && !requirements->is_string()) {
-                return fail(std::format("{}: requires must be a name or a list of names", header_path.string()));
+            if (const t2d::EcfgValue* version = header->find("version"); version != nullptr) {
+                if (!version->is_string()) {
+                    return fail(std::format("{}: version must be a string", header_path.string()));
+                }
+                pack.version = std::string(version->as_string());
+            }
+            if (const t2d::EcfgValue* requirements = header->find("requires"); requirements != nullptr) {
+                pack.requirements = read_string_list(*requirements);
+                if (pack.requirements.empty() && !requirements->is_array() && !requirements->is_string()) {
+                    return fail(
+                        std::format("{}: requires must be a name or a list of names", header_path.string()));
+                }
             }
         }
     }
@@ -308,9 +317,13 @@ std::optional<ContentPack> ContentPack::load(const std::string& directory, std::
 
     pack.files = content_files(directory);
     if (pack.files.empty()) return fail(std::format("'{}' holds no .ecfg file", directory));
+    std::vector<std::string> read_files;
     for (const std::string& file : pack.files) {
         t2d::EcfgError parse_error;
         std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(file, &parse_error);
+        // A file that says __not_main is "skip" asked not to be read on its own: leave it out of the load and
+        // out of the file list, which is what a reader sees as "what this pack holds".
+        if (!document.has_value() && t2d::ecfg_skipped(parse_error)) continue;
         if (!document.has_value()) return fail(parse_error.describe(file));
         // The header is a file of its own now: the "pack::" table that used to sit at the top of a
         // single file pack is told where it went, rather than being reported as an unknown content kind.
@@ -318,8 +331,10 @@ std::optional<ContentPack> ContentPack::load(const std::string& directory, std::
             return fail(std::format("{}: the pack header is '{}' now, not a 'pack::' table inside a content file",
                                     file, kPackHeaderName));
         }
+        read_files.push_back(file);
         pack.documents.push_back(std::move(*document));
     }
+    pack.files = std::move(read_files);
     return pack;
 }
 

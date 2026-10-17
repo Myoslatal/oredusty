@@ -719,4 +719,24 @@ T2D_TEST(a_part_that_is_loaded_by_mistake_is_refused) {
     T2D_CHECK_EQ(registry.find(ContentKind::Item, "part_ore"), kNoContent);
 }
 
+T2D_TEST(a_part_that_asks_to_be_skipped_is_left_out_quietly) {
+    // "skip" is the quiet one: the walk leaves the file out and says nothing, and the file list a reader
+    // sees does not hold it either - a reload skips it again, which is why the file says so itself.
+    Scratch scratch;
+    scratch.write("pack/content/part.ecfg", "__not_main:\"skip\"\npart_ore::\n");
+    scratch.write("pack/content/mine.ecfg", "item::\n    whole_ore::\n");
+
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({scratch.root()});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+    T2D_CHECK_EQ(report.total_content, 1u);
+    T2D_CHECK(registry.find(ContentKind::Item, "whole_ore") != kNoContent);
+    T2D_CHECK_EQ(registry.find(ContentKind::Item, "part_ore"), kNoContent);
+    const ContentPack* pack = find_pack(pipeline, "pack");
+    T2D_REQUIRE(pack != nullptr);
+    T2D_CHECK_EQ(pack->files.size(), 1u);   // the skipped file is not one of the pack's files
+}
+
 T2D_TEST_MAIN

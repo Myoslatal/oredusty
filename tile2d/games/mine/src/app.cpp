@@ -228,6 +228,8 @@ void MineApp::load_localisation() {
     std::vector<std::string> unknown;
     std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(path, &error);
     if (!document.has_value()) {
+        // A string file that says __not_main is "skip" is not read, and that is not a failure to report.
+        if (t2d::ecfg_skipped(error)) return;
         T2D_WARN("interface strings '{}': {}", path, error.describe(path));
         return;
     }

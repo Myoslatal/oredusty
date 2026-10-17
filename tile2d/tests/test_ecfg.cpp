@@ -565,4 +565,68 @@ T2D_TEST(not_a_main_file_false_is_an_ordinary_file) {
     T2D_CHECK_EQ(document->find("num1")->as_int(-1), 1);
 }
 
+T2D_TEST(a_file_that_says_skip_is_left_out_without_an_error) {
+    const TempDirectory dir("skip");
+    const std::string part = dir.write("_part.ecfg", "__not_main:\"skip\"\nnum1:1\n");
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(part, &error);
+    T2D_CHECK(!document.has_value());
+    // Nothing went wrong: the file asked not to be read on its own, and that is what a walker asks about.
+    T2D_CHECK(ecfg_skipped(error));
+    T2D_CHECK(error.message.empty());
+}
+
+T2D_TEST(the_marker_takes_three_values_and_the_booleans_are_two_of_them) {
+    const TempDirectory dir("three_values");
+    struct Case {
+        const char* value;
+        EcfgMain main;
+        bool loads;
+    };
+    const Case cases[] = {
+        {"false", EcfgMain::Main, true},
+        {"\"false\"", EcfgMain::Main, true},
+        {"\"skip\"", EcfgMain::Skip, false},
+        {"true", EcfgMain::Part, false},
+        {"\"true\"", EcfgMain::Part, false},
+    };
+    u32 index = 0;
+    for (const Case& one : cases) {
+        const std::string file =
+            dir.write(std::format("case{}.ecfg", index++), std::format("__not_main:{}\nnum1:1\n", one.value));
+        EcfgError error;
+        const std::optional<EcfgDocument> document = EcfgDocument::load(file, &error);
+        T2D_CHECK_MSG(document.has_value() == one.loads, "{}: {}", one.value, error.message);
+        if (document.has_value()) {
+            T2D_CHECK(document->main() == one.main);
+        } else {
+            // The two quiet/refused outcomes are told apart by the error, and only skip leaves it alone.
+            T2D_CHECK_EQ(ecfg_skipped(error), one.main == EcfgMain::Skip);
+        }
+    }
+}
+
+T2D_TEST(a_marker_that_is_none_of_the_three_is_refused) {
+    const TempDirectory dir("marker_typo");
+    const std::string file = dir.write("part.ecfg", "__not_main:\"maybe\"\nnum1:1\n");
+    EcfgError error;
+    const std::optional<EcfgDocument> document = EcfgDocument::load(file, &error);
+    T2D_CHECK(!document.has_value());
+    T2D_CHECK_MSG(error.message.find("skip") != std::string::npos,
+                  "the message does not say what it may be: {}", error.message);
+    T2D_CHECK_EQ(error.line, 1u);
+}
+
+T2D_TEST(main_reports_the_marker_without_acting_on_it) {
+    // The marker is a property of a file: text that never was a file is parsed, and what it says is
+    // readable, but nothing is refused - there is no load to refuse.
+    const std::optional<EcfgDocument> skipped = parse_ok("__not_main:\"skip\"\nnum1:1\n");
+    T2D_REQUIRE(skipped.has_value());
+    T2D_CHECK(skipped->main() == EcfgMain::Skip);
+    T2D_CHECK_EQ(skipped->find("num1")->as_int(-1), 1);   // and the content is all there
+    const std::optional<EcfgDocument> ordinary = parse_ok("num1:1\n");
+    T2D_REQUIRE(ordinary.has_value());
+    T2D_CHECK(ordinary->main() == EcfgMain::Main);
+}
+
 T2D_TEST_MAIN

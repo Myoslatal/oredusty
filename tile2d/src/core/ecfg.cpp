@@ -508,6 +508,20 @@ constexpr u32 kMaxIncludeDepth = 16;
     return line.substr(0, count);
 }
 
+/// What a `__not_main` value says about loading the file it is in. nullopt when it is none of the three
+/// values the marker takes: a config that is half understood is worse than one that is rejected, and a
+/// mistyped marker (a typo, a number, a table) is exactly that.
+[[nodiscard]] std::optional<EcfgMain> main_of_marker(const EcfgValue* marker) {
+    if (marker == nullptr) return EcfgMain::Main;
+    // The format's own booleans are the same thing written the way a boolean is written: true and false.
+    if (marker->type() == EcfgType::Bool) return marker->as_bool() ? EcfgMain::Part : EcfgMain::Main;
+    const std::string_view value = marker->as_string();
+    if (value == "false") return EcfgMain::Main;
+    if (value == "skip") return EcfgMain::Skip;
+    if (value == "true") return EcfgMain::Part;
+    return std::nullopt;
+}
+
 /// Whether a trimmed line is the `__not_main` marker: the word, then spaces, then a colon.
 [[nodiscard]] bool is_not_main_line(std::string_view content) {
     constexpr std::string_view kWanted = "__not_main";
@@ -670,6 +684,12 @@ std::optional<EcfgDocument> EcfgDocument::parse(std::string_view text, const std
     return document;
 }
 
+EcfgMain EcfgDocument::main() const {
+    // Lenient on purpose: a document says what it says, and load() is where a value that is none of the
+    // three is refused. Anything unrecognised reads as an ordinary file.
+    return main_of_marker(root_.find("__not_main")).value_or(EcfgMain::Main);
+}
+
 std::optional<EcfgDocument> EcfgDocument::load(const std::string& path, EcfgError* error) {
     const auto text = read_text(path);
     if (!text.has_value()) {
@@ -681,15 +701,32 @@ std::optional<EcfgDocument> EcfgDocument::load(const std::string& path, EcfgErro
     std::optional<EcfgDocument> document = parse(*text, std::filesystem::path(path).parent_path().string(), error);
     if (!document.has_value()) return std::nullopt;
     document->source_name_ = path;
-    // __not_main: true says this file is a part: it is read where another file includes it, and reading it
-    // on its own is a mistake worth reporting rather than a load that half works. The include path never
-    // comes through here - it reads the text itself - so a part is refused exactly when it is loaded
-    // directly, and reloading one (F5 on a pack, say) is refused the same way.
-    if (const EcfgValue* marker = document->find("__not_main"); marker != nullptr && marker->as_bool()) {
+    // What the file says about being loaded on its own. The include path never comes through here - it reads
+    // the text itself - so a marker is obeyed exactly when a file is loaded directly, and a reload (F5 on a
+    // pack, say) obeys it again.
+    const EcfgValue* marker = document->find("__not_main");
+    const std::optional<EcfgMain> main = main_of_marker(marker);
+    if (!main.has_value()) {
         if (error != nullptr) {
             *error = EcfgError{marker->line(), 1,
-                               std::format("'{}' is a part (__not_main is true): include it from another file "
-                                           "instead of loading it on its own",
+                               std::format("'{}' says __not_main is '{}': it must be \"false\", \"skip\" or "
+                                           "\"true\"",
+                                           path, marker->as_string())};
+        }
+        return std::nullopt;
+    }
+    if (*main == EcfgMain::Skip) {
+        // The file asks not to be read on its own: no document, and nothing went wrong either. A walker
+        // tells this apart from a file it could not read with ecfg_skipped(). The error is cleared rather
+        // than left as it was, so a caller that reuses one object cannot read a stale failure.
+        if (error != nullptr) *error = EcfgError{};
+        return std::nullopt;
+    }
+    if (*main == EcfgMain::Part) {
+        if (error != nullptr) {
+            *error = EcfgError{marker->line(), 1,
+                               std::format("'{}' is a part (__not_main is \"true\"): include it from another "
+                                           "file instead of loading it on its own",
                                            path)};
         }
         return std::nullopt;

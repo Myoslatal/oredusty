@@ -17,6 +17,7 @@
 #include <t2d/core/object_file.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -473,11 +474,21 @@ int main() {
     return false;
 }
 
+/// A token unique to this run of the tool. Two codetab processes work at the same time when the presets are
+/// verified in parallel, and scratch space named after *what* is being built is the same for both of them -
+/// which is how one run ends up deleting the directory the other is linking into.
+[[nodiscard]] const std::string& run_token() {
+    static const std::string token =
+        std::format("{:x}", std::chrono::steady_clock::now().time_since_epoch().count());
+    return token;
+}
+
 /// Runs the probe and sorts what it says into the three lists the record carries.
 [[nodiscard]] std::optional<CodeAbi> probe_abi(const Options& options, const std::vector<std::string>& flags,
                                                std::string& error) {
-    const std::filesystem::path work = std::filesystem::temp_directory_path() /
-                                       ("codetab-abi-" + hash_text(options.output + options.record_file + options.compiler));
+    const std::filesystem::path work =
+        std::filesystem::temp_directory_path() /
+        ("codetab-abi-" + hash_text(options.output + options.record_file + options.compiler) + "-" + run_token());
     std::error_code code;
     std::filesystem::create_directories(work, code);
     const std::filesystem::path source = work / "abi_probe.cpp";
@@ -975,7 +986,9 @@ struct SurfaceCheck;
 /// as they are rather than guessed at.
 [[nodiscard]] std::vector<std::string> demangle(const std::vector<std::string>& names) {
     if (names.empty()) return {};
-    const std::string path = (std::filesystem::temp_directory_path() / "codetab-names.txt").string();
+    // Per run, for the same reason the probe's directory is: two runs must not write the same file.
+    const std::string path =
+        (std::filesystem::temp_directory_path() / ("codetab-names-" + run_token() + ".txt")).string();
     {
         std::ofstream file(path, std::ios::trunc);
         for (const std::string& name : names) file << name << "\n";

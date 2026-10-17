@@ -386,6 +386,18 @@ SandboxReloadReport SandboxModel::reload_texts(ContentRegistry& registry,
             report.errors.push_back(error.describe(name));
             continue;
         }
+        // A file can say it is a part or asks to be skipped: a pack walk leaves those out (docs/MODS.md
+        // section 0), and a sandbox handed the file anyway does the same rather than registering half of
+        // something.
+        if (document->main() == t2d::EcfgMain::Skip) continue;
+        if (document->main() == t2d::EcfgMain::Part) {
+            report.parsed = false;
+            report.errors.push_back(std::format(
+                "{}: it is a part (__not_main is \"true\"): include it from another file instead of "
+                "loading it on its own",
+                name));
+            continue;
+        }
         documents.push_back(std::move(*document));
     }
     if (!report.parsed) return report;
