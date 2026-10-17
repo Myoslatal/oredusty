@@ -1279,6 +1279,11 @@ void MineApp::select_at(GridPos cell) {
         }
     }
     T2D_INFO("world: selected {} #{} at {},{}", content_kind_name(plot->kind()), plot->id(), cell.x, cell.y);
+    if (const types::Container* held = plot->container(); held != nullptr) {
+        // What the selection holds, said out loud: a report like "it says stone 0/10 and there is stone in
+        // it" is answered by this line before anything else is looked at.
+        T2D_INFO("world: it holds {} of {} ({} slot(s))", held->total(), held->capacity(), held->slots().size());
+    }
 }
 
 types::SceneTile* MineApp::selected_plot_to_change() {
