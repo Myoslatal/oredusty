@@ -360,10 +360,14 @@ it is not in the palette.
         floors.ecfg          floor:: dirt::   with image:"art/floor_dirt.png"
         items.ecfg           item:: stone::   with image:"art/item_stone.png"
         ores.ecfg            ore:: stone::    with image:"art/ore_stone.png"
+        drills.ecfg          drill:: stone::  base + top, dig_power:1, costs 10 stone (building:: extraction)
+        warehouses.ecfg      warehouse:: stone::   capacity:100
         layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35
         art/floor_dirt.png
         art/item_stone.png
         art/ore_stone.png
+        art/drill_stone_drill_base.png
+        art/drill_stone_drill_top.png
 
 The ore and the item are both called `stone`, and that is not a clash: ids are handed out **per kind**,
 so the stone on the map and the stone you can carry are two entries that never collide.

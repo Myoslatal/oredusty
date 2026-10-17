@@ -1410,25 +1410,36 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
   的两条分支；层构建时对钻头强制、报告里点名）；套件 **31 个测试**全绿（release / debug / asan / tsan / server-only
   31/31、no-renderer 11/11、Ore 13/13）。
 
-### M2 交付状态（二十一）：钻头顶部的旋转中心（已落地，含单测）
+### M2 交付状态（二十二）：设计者的石头钻头（本体内容）
 
-设计者的要求（§1.38 的补充）："在钻头定义器中添加spin_origin字段，表明顶部以贴图的哪个位置为中心旋转"。
+设计者的话："创建石头钻头，挖掘能力为1,材料10石头"。
 
-* **字段**：`spin_origin:: x:0.25 y:0.5`——**贴图自己坐标系**里的一点（(0,0) 是图片左下角、(1,1) 是右上角）。不写就是
-  正中 `(0.5, 0.5)`；只写一半，另一半取 0.5。不是表、不是数字、超出 0..1、表里有别的字段，读文件时报错。它是
-  **定义属性**（§1.35），所以同种钻头共用一份，`Drill::spin_origin()` 从那一份读。
-* **引擎**：旋转中心变成了参数——`core/math2d.h` 新增 `rotated_corners(矩形, 中心点, 弧度)`（纯函数，中心点用矩形自己
-  的 0..1 坐标），`SpriteBatch::draw_quad_rotated` 多了一个带中心点的重载，原来那个等于"以正中为心"。`engine.api` 加了
-  对应条目，表面检查 0 个越界符号。
-* **实测**：演示钻头写 `spin_origin:: x:0.25 y:0.5`，连拍两帧间隔 1 秒——横杆从"指向右、在格子里"转到"指向左下、
-  **甩出格子外**"；以正中为心时它只会绕着格子中心转、不会出格。
-* **单测**：`test_sprite_projection` 2 → **3 用例 / 29 → 39 断言**（零角度就是矩形自己的四个角、绕正中转四分之一圈、
-  绕**左下角**转四分之一圈时那个角**一动不动**）；`test_mine_types` 19 → **20 用例 / 233 → 244 断言**（给了是什么、
-  不写是正中、只写一半、越界/非表/非数字/多余字段被拒）。套件 **32 个测试**全绿。
+* **新增本体内容文件 `games/mine/content/drills.ecfg`**（设计者已经把两张图放进包里了：
+  `art/drill_stone_drill_base.png` 与 `art/drill_stone_drill_top.png`，各 128×128）：
 
-![spin_origin 在 x:0.25：横杆指向右，仍在格子里](../games/mine/docs/images/world_drill_spin_a_en.png)
+```
+drill::
+    stone::
+        image:"art/drill_stone_drill_base.png"      # 底座
+        top_image:"art/drill_stone_drill_top.png"   # 可以旋转的顶部
+        dig_power:1                                 # 挖掘能力 1
+        building::
+            materials:["stone",10]                  # 造价 10 石头
+            category:"extraction"                   # 建筑分类：开采
+```
 
-![一秒之后：绕左侧那一点转了四分之一圈，横杆甩出格子外](../games/mine/docs/images/world_drill_spin_b_en.png)
+* **没有写的两个字段**（设计者没说，我不替他定）：`spin` 与 `spin_origin`——所以这颗钻头的顶部**现在不转**（§1.38 里
+  "不写就是不转"）。给一个"每几秒一圈"和"绕贴图哪一点"，我就补上；顺带，`building::` 里也没写 `time`，所以它**瞬间
+  建成、没有扫描线动画**（不写就是 0 秒）。
+* **实测**：把它放进游戏，双击选中仓库（10 石头）→ 打开建造栏 → 分类 `EXTRACTION` → 选中 `STONE` 钻头 → 点地图上一格
+  ——日志 `world: built stone at 1,2`，上方面板随即变成 `STONE WAREHOUSE 0 / 100 EMPTY`（10 块石头付掉了）。
+  放到没有矿的格子上会被拒：`world: stone cannot stand there: at 1,2 and there is no ore under it on tile layers 0..0`
+  （§1.34 的规则）。
+* **单测**：`test_content_pack` 18 用例 / 210 → **278 断言**——本体包现在是 **6 张图 / 4 个地块定义**（钻头两张图，
+  base 在前、top 在后，同一条目挨着），并逐项钉住这颗钻头：`dig_power == 1`、两张图的路径、`top_image` 的来源、
+  建筑分类是 `extraction`、材料是 10 个 `stone`。套件 **32 个测试**全绿。
+
+![设计者的石头钻头立在地图上的样子（右下那格是选中的仓库，上方是它的面板）](../games/mine/docs/images/world_stone_drill_en.png)
 
 ### M1 验收标准（已满足）
 
@@ -1651,6 +1662,14 @@ place_block:: / placement1:: / x:111... subobject:: / container:: / items:["aaa"
 
 | 版本 | 变更 |
 |---|---|
+| M2.25 | **设计者的石头钻头**（本体内容）：新增 `games/mine/content/drills.ecfg`——`drill:: stone::` 用设计者已放进包里的
+  两张图（`art/drill_stone_drill_base.png` 底座、`art/drill_stone_drill_top.png` 顶部），`dig_power:1`，
+  `building:: materials:["stone",10] category:"extraction"`。**没写** `spin`/`spin_origin`（设计者没说，不替他定：顶部
+  现在不转）与 `building:: time`（不写就是 0 秒、瞬间建成）。实测：双击选中仓库（10 石头）→ 建造栏 `EXTRACTION` →
+  选 `STONE` → 点地图，日志 `world: built stone at 1,2`，仓库随即 `0 / 100 EMPTY`；放到无矿格子上被拒并说明理由。
+  `test_content_pack` 18 用例 / 210 → **278 断言**（本体包 6 张图 / 4 个地块定义，钻头两张图 base 在前 top 在后，
+  并钉住 dig_power / 两张图 / 分类 / 材料）。内容不进代码表，所以本体表仍是 **927 节 / 2923 符号 / 11273 重定位 /
+  1.44 MiB**；套件 **32 个测试**全绿 |
 | M2.24 | **钻头顶部的旋转中心**（设计者新要求，§1.38）：钻头条目可写 `spin_origin:: x:0.25 y:0.5`——贴图自己坐标系
   里的一点（不写就是正中，只写一半另一半取 0.5；越界/非表/非数字/多余字段读文件时报错），是定义属性，
   `Drill::spin_origin()` 从共享定义读。引擎侧：`core/math2d.h` 新增纯函数 `rotated_corners(矩形, 中心, 弧度)`，
