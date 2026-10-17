@@ -99,7 +99,19 @@ std::vector<ContentImage> content_images(const t2d::EcfgDocument& document) {
                          entry.key());
                 continue;
             }
-            images.push_back(ContentImage{kind, std::string(entry.key()), std::string(image->as_string())});
+            images.push_back(
+                ContentImage{kind, std::string(entry.key()), std::string(image->as_string()), std::string()});
+            // A drill has a **second** picture: the top that turns on its base. It is read here, with the
+            // first, so that both are resolved and loaded the same way (docs/GAME_DESIGN.md section 1.38).
+            if (kind != ContentKind::Drill) continue;
+            const t2d::EcfgValue* top = entry.find("top_image");
+            if (top == nullptr) continue;
+            if (!top->is_string()) {
+                T2D_WARN("content: drill '{}' has a top_image that is not a quoted path", entry.key());
+                continue;
+            }
+            images.push_back(
+                ContentImage{kind, std::string(entry.key()), std::string(top->as_string()), std::string("top")});
         }
     }
     return images;
@@ -113,6 +125,7 @@ std::vector<ResolvedImage> resolve_content_images(const t2d::EcfgDocument& docum
         ResolvedImage entry;
         entry.kind = declared.kind;
         entry.content = declared.name;
+        entry.part = declared.part;
         entry.source = source_path;
         entry.path = declared.path;
         const std::filesystem::path resolved = base_directory / declared.path;

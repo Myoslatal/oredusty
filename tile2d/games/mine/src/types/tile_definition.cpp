@@ -144,6 +144,24 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
             problem.has_value()) {
             return fail(std::move(*problem));
         }
+        // A drill has **two** pictures: the base it stands on and the top that turns on it, plus how long
+        // one turn takes (docs/GAME_DESIGN.md section 1.38). Both are a drill's words, so a floor that
+        // says them is a typo rather than a floor with a spinning top.
+        if (const t2d::EcfgValue* top = entry.find("top_image"); top != nullptr) {
+            if (!top->is_string() || top->as_string().empty()) {
+                return fail(std::format("drill '{}': top_image must be the quoted path of a picture", name));
+            }
+            definition.top_image = std::string(top->as_string());
+        }
+        if (const t2d::EcfgValue* spin = entry.find("spin"); spin != nullptr) {
+            if (spin->type() != t2d::EcfgType::Int && spin->type() != t2d::EcfgType::Float) {
+                return fail(std::format("drill '{}': spin must be a number of seconds per turn", name));
+            }
+            if (!(spin->as_float() > 0.0)) {
+                return fail(std::format("drill '{}': spin is {}, and a turn takes time", name, spin->as_float()));
+            }
+            definition.spin = static_cast<f32>(spin->as_float());
+        }
     }
     if (kind == ContentKind::Warehouse) {
         // A capacity is a count, so it has to be a whole number: "capacity:2.5" is a warehouse whose size

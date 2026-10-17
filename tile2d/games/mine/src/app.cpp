@@ -145,8 +145,11 @@ template <class... Args>
 
 /// Where a content entry's picture lives in the image atlas. Kind and name together, because two
 /// kinds may use the same name.
-[[nodiscard]] std::string image_key(ContentKind kind, std::string_view name) {
-    return std::format("{}:{}", content_kind_name(kind), name);
+[[nodiscard]] std::string image_key(ContentKind kind, std::string_view name, std::string_view part = {}) {
+    // A content entry has one picture, and a drill has two: the base and the top that turns on it, which is
+    // the part (docs/GAME_DESIGN.md section 1.38).
+    return part.empty() ? std::format("{}:{}", content_kind_name(kind), name)
+                        : std::format("{}:{}.{}", content_kind_name(kind), name, part);
 }
 
 /// A cell fill that reads as a colour instead of as a lamp: the palette colour pulled towards the
@@ -328,6 +331,9 @@ void MineApp::on_start() {
 
 void MineApp::on_update(f32 delta_seconds) {
     building_.advance(delta_seconds);
+    // The world's own clock: what a drill's top is turned by (section 1.38). It runs on the frame's time and
+    // not on the wall clock, so a paused or headless run turns at the speed the frames say.
+    world_seconds_ += delta_seconds;
     switch (screen_) {
         case Screen::Start: handle_start_input(); break;
         case Screen::Session: handle_session_input(); break;
@@ -1639,7 +1645,7 @@ void MineApp::load_content_images() {
             image_errors_.push_back(std::format("{}: cannot be decoded", image.resolved));
             continue;
         }
-        const std::string key = image_key(image.kind, image.content);
+        const std::string key = image_key(image.kind, image.content, image.part);
         Scope<ore::rhi::Texture> texture =
             context().create_texture(*pixels, false, std::format("content.{}", key));
         if (texture == nullptr) {
@@ -2653,6 +2659,7 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
         std::string key;
         t2d::Aabb2 rect{};
         t2d::Aabb2 uv{};
+        f32 radians = 0.0f;   ///< 0 for everything but a drill's turning top (section 1.38)
     };
     /// Everything one tile layer draws, in the order it draws it: the plots that have no picture, then
     /// the pictures, grouped.
@@ -2704,6 +2711,18 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
                 here.colours.emplace_back(rect, dim_color(debug_color_for(entry->name), 0.45f));
                 return;
             }
+            // A drill is **two** pictures (docs/GAME_DESIGN.md section 1.38): the base it stands on, drawn
+            // where it is, and the top that turns on it - drawn over the base, at the angle the world's
+            // clock says. Everything else on the map is one picture.
+            const auto* drill = dynamic_cast<const types::Drill*>(&plot);
+            if (drill != nullptr && content_textures_.find(image_key(plot.kind(), entry->name, "top")) !=
+                                          content_textures_.end()) {
+                const t2d::Aabb2 art = plot.mirrored() ? mirrored_uv : full_uv;
+                add_quad(Quad{key, rect, art, 0.0f});
+                add_quad(Quad{image_key(plot.kind(), entry->name, "top"), rect, art,
+                               drill->spin_angle(world_seconds_)});
+                return;
+            }
             add_quad(Quad{key, rect, plot.mirrored() ? mirrored_uv : full_uv});
         });
     }
@@ -2725,7 +2744,9 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             const auto texture = content_textures_.find(group.first);
             if (texture == content_textures_.end()) continue;
             batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
-            for (const Quad& quad : group.second) batch_->draw_quad(quad.rect, quad.uv, 0xFFFFFFFFu);
+            for (const Quad& quad : group.second) {
+                batch_->draw_quad_rotated(quad.rect, quad.uv, quad.radians, 0xFFFFFFFFu);
+            }
             batch_->end();
             cost.draw_calls += batch_->draw_calls();
             cost.quads += batch_->quads();

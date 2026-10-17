@@ -47,6 +47,15 @@ public:
     [[nodiscard]] const DrillJob& job() const { return job_; }
     void set_job(DrillJob job);
 
+    /// How long one full turn of its top takes, in seconds - the entry's `spin`. It is a **definition**
+    /// attribute, read from the one record every drill of that entry shares (docs/GAME_DESIGN.md 1.35); 0
+    /// when the entry does not say, which is a drill whose top does not turn (section 1.38).
+    [[nodiscard]] f32 spin_seconds() const;
+    /// How far its top has turned after \p seconds of the world's clock, in radians: a full turn every
+    /// `spin` seconds. It is a function of the time and not a number kept per drill, so every drill of an
+    /// entry turns together and a frame that is late does not slow one down.
+    [[nodiscard]] f32 spin_angle(f32 seconds) const;
+
     /// True when it has something to mine: a drop to make, and a period to make it on.
     [[nodiscard]] bool ready() const { return job_.drop_id != kNoContent && job_.period_seconds > 0.0f; }
     /// How many drops it has thrown out so far.

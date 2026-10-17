@@ -3,6 +3,7 @@
 //
 // The content in here is a **test double**: names like "vein" or "rig" are the fixture's, not the game's -
 // the game names no content at all (docs/GAME_DESIGN.md section 7).
+#include <mine/types/tile_definition.h>
 #include <mine/world.h>
 
 #include <support/test_support.h>
@@ -295,6 +296,61 @@ T2D_TEST(the_debug_fill_puts_a_drill_on_a_cell_that_has_ore) {
     // Nothing registered under the drill table.
     const ContentRegistry none;
     T2D_CHECK_EQ(lay_out_drills(bare, none, fixture.definitions), 0u);
+}
+
+
+T2D_TEST(a_drill_turns_its_top_by_the_clock_and_the_speed_its_entry_gave_it) {
+    Fixture content;
+    // The entry says the top takes four seconds a turn, and that its picture is the second one the drill
+    // has: the fixture's own add_drill() writes neither, so this one is written out here.
+    const ContentId id = content.registry.register_content(ContentKind::Drill, "rig");
+    {
+        TileDefinition definition;
+        definition.kind = ContentKind::Drill;
+        definition.name = "rig";
+        definition.dig_power = 2.0f;
+        definition.top_image = "art/rig_top.png";
+        definition.spin = 4.0f;
+        content.definitions.add(std::move(definition));
+    }
+    const TileDefinition* found = content.definitions.find_tile(ContentKind::Drill, "rig");
+    T2D_REQUIRE(found != nullptr);
+    const std::unique_ptr<SceneTile> plot = make_tile(*found, id, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr);
+    const auto* drill = dynamic_cast<const Drill*>(plot.get());
+    T2D_REQUIRE(drill != nullptr);
+
+    // The speed is the definition's - one record every drill of the entry reads (section 1.35).
+    T2D_CHECK_EQ(drill->spin_seconds(), 4.0f);
+    constexpr f32 kTau = 6.283185307179586f;
+    T2D_CHECK_EQ(drill->spin_angle(0.0f), 0.0f);
+    T2D_CHECK_EQ(drill->spin_angle(1.0f), kTau * 0.25f);
+    T2D_CHECK_EQ(drill->spin_angle(2.0f), kTau * 0.5f);
+    T2D_CHECK_EQ(drill->spin_angle(3.0f), kTau * 0.75f);
+    // A whole turn is back where it started, and it keeps going round rather than growing without bound.
+    T2D_CHECK_EQ(drill->spin_angle(4.0f), 0.0f);
+    T2D_CHECK_EQ(drill->spin_angle(5.0f), kTau * 0.25f);
+    T2D_CHECK_EQ(drill->spin_angle(100.0f), 0.0f);
+    // Negative time is not a turn backwards, it is nothing: the clock does not run that way.
+    T2D_CHECK_EQ(drill->spin_angle(-1.0f), 0.0f);
+}
+
+T2D_TEST(a_drill_with_no_speed_in_its_entry_does_not_turn) {
+    Fixture content;
+    const ContentId id = content.add_drill("plain", 2.0f);   // no spin, and no top picture
+    const TileDefinition* found = content.definitions.find_tile(ContentKind::Drill, "plain");
+    T2D_REQUIRE(found != nullptr);
+    const std::unique_ptr<SceneTile> plot = make_tile(*found, id, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr);
+    const auto* drill = dynamic_cast<const Drill*>(plot.get());
+    T2D_REQUIRE(drill != nullptr);
+    T2D_CHECK_EQ(drill->spin_seconds(), 0.0f);
+    T2D_CHECK_EQ(drill->spin_angle(1.0f), 0.0f);
+    T2D_CHECK_EQ(drill->spin_angle(1000.0f), 0.0f);
+    // And a drill built without a definition (a test's own) has nothing to turn by either.
+    Drill bare(ContentKind::Drill, id, 1, GridPos{0, 0});
+    T2D_CHECK_EQ(bare.spin_seconds(), 0.0f);
+    T2D_CHECK_EQ(bare.spin_angle(3.0f), 0.0f);
 }
 
 T2D_TEST_MAIN

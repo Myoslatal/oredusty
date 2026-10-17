@@ -674,4 +674,42 @@ T2D_TEST(content_that_is_not_a_building_has_no_building_sub_object) {
     T2D_CHECK(plot->building() == nullptr);
 }
 
+
+T2D_TEST(a_drills_two_pictures_and_its_speed_are_read_from_its_entry) {
+    const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(R"(
+drill::
+    rig::
+        image:"art/rig_base.png"
+        top_image:"art/rig_top.png"
+        spin:4
+        dig_power:2
+)");
+    T2D_REQUIRE(document.has_value());
+    std::vector<std::string> errors;
+    const std::vector<TileDefinition> definitions = tile_definitions(*document, &errors);
+    T2D_CHECK_MSG(errors.empty(), "{}", errors.empty() ? "" : errors.front());
+    T2D_REQUIRE(definitions.size() == 1u);
+    T2D_CHECK_EQ(definitions.front().image, std::string("art/rig_base.png"));
+    T2D_CHECK_EQ(definitions.front().top_image, std::string("art/rig_top.png"));
+    T2D_CHECK_EQ(definitions.front().spin, 4.0f);
+}
+
+T2D_TEST(a_second_picture_and_a_speed_belong_to_drills_and_are_refused_elsewhere) {
+    // A floor that says top_image or spin is a typo, not a floor with a turning part (section 1.38).
+    const auto refused = [](std::string_view text) {
+        const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse(text);
+        if (!document.has_value()) return false;
+        std::vector<std::string> errors;
+        (void)tile_definitions(*document, &errors);
+        return !errors.empty();
+    };
+    T2D_CHECK_FALSE(refused("floor::\n    dirt::\n        top_image:\"art/x.png\"\n"));
+    T2D_CHECK_FALSE(refused("floor::\n    dirt::\n        spin:4\n"));
+    // A drill that says them wrongly is refused: a top that is not a path, a speed that is not a number,
+    // and a turn that takes no time at all.
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:1\n        top_image:4\n"));
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:1\n        spin:\"fast\"\n"));
+    T2D_CHECK(refused("drill::\n    rig::\n        dig_power:1\n        spin:0\n"));
+}
+
 T2D_TEST_MAIN

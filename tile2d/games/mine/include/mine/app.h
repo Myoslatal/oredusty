@@ -393,6 +393,8 @@ private:
     /// What is going up and how far along it is (mine/build_animation.h): the world view draws the sweep, the
     /// model says where it is (docs/GAME_DESIGN.md section 1.37).
     BuildAnimation building_{};
+    /// Seconds of world time since the game started: what turns a drill's top (section 1.38).
+    t2d::f32 world_seconds_ = 0.0f;
     /// The rectangle a plot covers on the screen, from the camera the map is drawn with.
     [[nodiscard]] t2d::Aabb2 plot_box_on_screen(const types::SceneTile& plot) const;
     void draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection);

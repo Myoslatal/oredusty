@@ -95,6 +95,9 @@ struct ContentImage {
     ContentKind kind = ContentKind::Item;
     std::string name;   ///< the content entry it belongs to
     std::string path;   ///< the image field as written ("art/wall.png")
+    /// Which picture of that entry it is. Empty is the entry's own "image"; "top" is the second one a
+    /// drill has - the part that turns on its base (docs/GAME_DESIGN.md section 1.38).
+    std::string part;
 };
 
 /// Every "image" field \p document declares, in file order. Entries without one are simply absent.
@@ -104,6 +107,7 @@ struct ContentImage {
 struct ResolvedImage {
     ContentKind kind = ContentKind::Item;
     std::string content;   ///< the content entry it belongs to
+    std::string part;      ///< which of its pictures this is; empty is its own (content_loader.h)
     std::string source;    ///< the file that declared it
     std::string path;      ///< as written in the file ("art/wall.png")
     std::string resolved;  ///< absolute path, empty when it could not be resolved

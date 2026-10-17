@@ -73,6 +73,7 @@ B _ZN3t2d11SpriteBatch17draw_rect_outlineERKNS_5Aabb2Efj t2d/render   # t2d::Spr
 B _ZN3t2d11SpriteBatch3endEv t2d/render   # t2d::SpriteBatch::end
 B _ZN3t2d11SpriteBatch5beginERN3ore11RenderFrameERKN3glm3matILi4ELi4EfLNS4_9qualifierE0EEERNS1_3rhi7TextureEP11VkSampler_T t2d/render   # t2d::SpriteBatch::begin
 B _ZN3t2d11SpriteBatch6createERN3ore3rhi15GraphicsContextERKNS0_7OptionsE t2d/render   # t2d::SpriteBatch::create
+B _ZN3t2d11SpriteBatch17draw_quad_rotatedERKNS_5Aabb2ES3_fj t2d/render   # t2d::SpriteBatch::draw_quad_rotated
 B _ZN3t2d11SpriteBatch9draw_quadERKNS_5Aabb2ES3_j t2d/render   # t2d::SpriteBatch::draw_quad
 B _ZN3t2d11SpriteBatch9draw_rectERKNS_5Aabb2Ej t2d/render   # t2d::SpriteBatch::draw_rect
 B _ZN3t2d11SpriteBatchD1Ev t2d/render   # t2d::SpriteBatch::~SpriteBatch

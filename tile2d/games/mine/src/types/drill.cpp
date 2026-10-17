@@ -1,11 +1,29 @@
 #include <mine/types/drill.h>
 
+#include <mine/types/tile_definition.h>
+
+#include <cmath>
+
 #include <mine/types/drop.h>
 #include <mine/world.h>
 
 #include <memory>
 
 namespace mine::types {
+
+f32 Drill::spin_seconds() const {
+    const TileDefinition* record = definition();
+    return record != nullptr ? record->spin : 0.0f;
+}
+
+f32 Drill::spin_angle(f32 seconds) const {
+    const f32 turn = spin_seconds();
+    if (!(turn > 0.0f) || !(seconds > 0.0f)) return 0.0f;
+    constexpr f32 kTau = 6.283185307179586f;
+    const f32 turns = seconds / turn;
+    return (turns - std::floor(turns)) * kTau;
+}
+
 
 namespace {
 

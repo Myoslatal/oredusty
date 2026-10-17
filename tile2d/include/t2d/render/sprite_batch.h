@@ -71,6 +71,10 @@ public:
                VkSampler sampler);
 
     void draw_quad(const Aabb2& rect, const Aabb2& uv_rect, u32 color);
+    /// The same quad, turned \p radians about its own centre. The uv rectangle turns with it, so a
+    /// sprite that is round - or that is meant to be seen spinning, like a drill's top (games/mine) -
+    /// keeps its picture the right way up in its own frame. A rotation of zero is draw_quad().
+    void draw_quad_rotated(const Aabb2& rect, const Aabb2& uv_rect, f32 radians, u32 color);
     /// Points draw_rect() at a texel of the currently bound texture that is opaque. The default is the
     /// font atlas's reserved white cell; a glyph atlas has its own.
     void set_white_texel(const Vec2& uv);

@@ -42,6 +42,12 @@ struct TileDefinition {
     /// "dig_power" (a drill): how fast it mines, in hardness per second. 0 when the entry does not say,
     /// which is a drill that is reported as one that cannot mine rather than one given a rate.
     f32 dig_power = 0.0f;
+    /// "top_image" (a drill): the picture of the part that turns, drawn over "image" - which is the base
+    /// it turns on. Empty when the entry does not say, which is a drill drawn as one picture.
+    std::string top_image;
+    /// "spin" (a drill): how long one full turn of that part takes, in seconds. 0 when the entry does not
+    /// say, which is a drill whose top does not turn.
+    f32 spin = 0.0f;
     /// "hardness" (an ore): how long mining it takes, in power-seconds. 0 when the entry does not say.
     f32 hardness = 0.0f;
     /// "drop" (an ore): the name of the drop content it yields when it is mined. Empty when it does not
