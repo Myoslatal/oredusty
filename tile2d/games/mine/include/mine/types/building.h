@@ -40,6 +40,11 @@ struct Building {
     /// How long it takes to build, in seconds. Zero is a building that goes up at once.
     t2d::f32 seconds = 0.0f;
     BuildingCategory category = BuildingCategory::None;
+    /// Whether a **new save** starts with this building unlocked (docs/GAME_DESIGN.md section 1.44). It is
+    /// a **definition** attribute - what a save has unlocked is that save's own state
+    /// (mine/building_unlocks.h), and this is only the value a new one starts from. Data that does not say
+    /// is unlocked, so content written before the field existed stays visible.
+    bool default_unlock = true;
 
     [[nodiscard]] bool empty() const {
         return materials.empty() && seconds <= 0.0f && category == BuildingCategory::None;

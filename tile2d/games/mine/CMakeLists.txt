@@ -15,6 +15,7 @@ add_library(mine_core STATIC
     src/content_pack.cpp
     src/content_search.cpp
     src/double_click.cpp
+    src/game_save.cpp
     src/layer_rules.cpp
     src/menu.cpp
     src/mod_package.cpp
@@ -27,6 +28,7 @@ add_library(mine_core STATIC
     src/build_animation.cpp
     src/build_cost.cpp
     src/build_sidebar.cpp
+    src/building_unlocks.cpp
     src/types/building.cpp
     src/types/drill.cpp
     src/types/drop.cpp
@@ -82,6 +84,7 @@ set(MINE_TABLE_SOURCES
     src/content_pack.cpp
     src/content_search.cpp
     src/double_click.cpp
+    src/game_save.cpp
     src/layer_rules.cpp
     src/menu.cpp
     src/mod_package.cpp
@@ -94,6 +97,7 @@ set(MINE_TABLE_SOURCES
     src/build_animation.cpp
     src/build_cost.cpp
     src/build_sidebar.cpp
+    src/building_unlocks.cpp
     src/types/building.cpp
     src/types/drill.cpp
     src/types/drop.cpp

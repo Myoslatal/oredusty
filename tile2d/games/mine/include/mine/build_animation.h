@@ -4,6 +4,11 @@
 // line sweeps the plot from the bottom up and the part below the line is the part that is up. This is the
 // half of that which is not pixels - who is being built, how long it has been going, and when it is done -
 // so the sweep can be tested without a renderer, the way the sidebar's layout is (mine/build_sidebar.h).
+//
+// It is also what says a plot is **still going up** (types/scene_tile.h): the plot is placed at once and it
+// draws, but it does nothing until its sweep is over - no turn, no click, no dragged drop. That state is
+// turned on when a sweep starts and off when it ends (or when the sweeps are forgotten), because it is the
+// build that decides it, and it is state of one plot rather than of the entry they share.
 #pragma once
 
 #include <mine/types/scene_tile.h>
@@ -31,16 +36,29 @@ public:
         }
     };
 
-    /// Starts building \\p plot over \\p seconds. A plot that takes no time, one that is already being built,
-    /// and a null plot are all ignored: what this holds is exactly "plots with a sweep left to show".
+    /// Starts building \\p plot over \\p seconds, and marks it as **still going up** until the sweep is
+    /// over. A plot that takes no time, one that is already being built, and a null plot are all ignored -
+    /// and an ignored build leaves the plot finished rather than marking it: what this holds is exactly
+    /// "plots with a sweep left to show".
     void start(types::SceneTile* plot, t2d::f32 seconds);
 
-    /// Moves every build on by \\p delta_seconds and forgets the ones that are done.
+    /// Moves every build on by \\p delta_seconds and forgets the ones that are done. A plot whose sweep
+    /// has just ended is finished again: it may run, be clicked and take drops from here on.
     void advance(t2d::f32 delta_seconds);
 
+    /// Puts a build that was already going back: what loading a save does. Unlike start() it keeps the
+    /// elapsed time the save recorded, so a half finished sweep comes back where it was, and it does
+    /// **not** touch the plot's construction state - a loaded plot's state is the save's to restore.
+    /// Returns false, and restores nothing, for a record that is not a sweep in progress: a null plot, a
+    /// build that takes no time, a negative (or NaN) elapsed, one that has reached its seconds, or a plot
+    /// already in the list. The caller refuses a save whose BUIL records and plots disagree, so a false
+    /// here means the save cannot come back exactly.
+    [[nodiscard]] bool restore(types::SceneTile* plot, t2d::f32 seconds, t2d::f32 elapsed);
+
     /// Forgets everything: the layer those plots were on is not the layer on screen any more, so their
-    /// sweeps are about plots nobody is looking at.
-    void clear() { builds_.clear(); }
+    /// sweeps are about plots nobody is looking at. The plots are marked finished on the way out - a plot
+    /// outlives its build, and a forgotten sweep must not leave one "under construction" for ever.
+    void clear();
 
     [[nodiscard]] bool empty() const { return builds_.empty(); }
     [[nodiscard]] usize size() const { return builds_.size(); }

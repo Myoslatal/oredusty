@@ -18,8 +18,10 @@ that direction. What is left is what the game actually uses, and it is all teste
 | `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring) and the tileset (what a tile id means for physics, where it lives in an atlas) | `test_tilemap` |
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
+| `t2d/save` | the save archive: a versioned `.t2dsave` container (magic, game name and version, chunks with id/version/size/CRC-32) with encode/decode, file helpers and payload reader/writer; **header only**, so a game compiles it into itself | `test_save` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save` |
+| `games/mefemma` | a **second, independent game project**: its own scene stack, DrawList, 2D renderer, assets, input and settings — the framework a game is written on, with no world model and no content of its own | `test_draw_list`, `test_scene_stack`, `test_settings`, `test_input`, `test_data_paths`, `test_scenes` |
 
 ## Layout
 
@@ -27,8 +29,10 @@ that direction. What is left is what the game actually uses, and it is all teste
     include/t2d/sim       tile map (chunked, multi-layer, collision), tileset
     include/t2d/text      font engine (TrueType + CFF), rasterising, UTF-8, language tables
     include/t2d/net       ILink, shared-memory link (mmap + lock-free SPSC rings), KCP, UDP, protocol
+    include/t2d/save      the save archive: .t2dsave encode/decode, chunk payload writer/reader, CRC-32
     include/t2d/render    sprite batch, glyph atlas, text renderer, tile map renderer, bitmap font
     games/mine            the sandbox/industrial-automation game: registry, content packs, mod host, map grid, sandbox
+    games/mefemma         the second game project: scene stack, DrawList, 2D renderer, assets, settings, example scenes
     tools/codetab         the code table toolchain: source -> compiler -> object -> .codetab
     assets/text           the interface strings (ui.ecfg), looked for beside the executable at run time
     engine.api            the published surface: what a code table may ask the engine for
@@ -37,25 +41,28 @@ that direction. What is left is what the game actually uses, and it is all teste
 
 ## Build and test
 
-    cmake --preset debug      # also: release, asan, tsan, no-renderer
-    cmake --build build/debug
-    ctest --test-dir build/debug --output-on-failure
+    cmake --preset mine-debug      # mine: mine-debug, mine-release, mine-asan, mine-tsan
+    cmake --build build/mine/debug
+    ctest --test-dir build/mine/debug --output-on-failure
 
-    tools/verify.sh           # every preset at once, plus the engine's own suite
+    cmake --preset mefemma-debug   # the second game has its own tree: build/mefemma/debug
 
-`tools/verify.sh` verifies the seven targets (six presets here and the engine's suite next door) **in
+    tools/verify.sh           # every mine preset at once, plus the engine's own suite
+
+`tools/verify.sh` verifies the six targets (five mine presets here and the engine's suite next door) **in
 parallel** - the build trees are independent, and each target's tests run with `ctest -j` - so a run that
 takes about three minutes one at a time finishes in well under one. The job count is split between the
 targets (`VERIFY_JOBS=8 tools/verify.sh` to say how many cores to use); logs land in `build/verify/`.
 
-The whole suite is pure CPU work and finishes in about four seconds (25 suites, measured with `ctest` on
-the debug preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
+The whole suite is pure CPU work and finishes in about four seconds (35 suites, measured with `ctest` on
+the `mine-debug` preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
 interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
-without Vulkan, GLFW or the game — the split that lets a dedicated server exist later.
+without Vulkan, GLFW or either game — the split that lets a dedicated server exist later.
 
     tests/test_tilemap            17 cases / 359 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
     tests/test_camera2d            7 cases /1986 checks  screen/world mapping, zooming about an anchor, fitting a 512² map, bounding the view
     tests/test_ecfg               29 cases / 180 checks  the configuration format, `__include`, `__not_main`, and the shipped example.ecfg
+    tests/test_save               11 cases / 158 checks  the .t2dsave container: chunks, CRC-32, the limits, and two unrelated games sharing it
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
@@ -70,17 +77,19 @@ without Vulkan, GLFW or the game — the split that lets a dedicated server exis
     games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
-    games/mine/tests/test_mine_types     20 cases / 244 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
-    games/mine/tests/test_world          19 cases / 189 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index, placed blocks
-    games/mine/tests/test_layer_rules    25 cases / 830 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
+    games/mine/tests/test_mine_types     22 cases / 281 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
+    games/mine/tests/test_world          19 cases / 194 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index, placed blocks
+    games/mine/tests/test_layer_rules    25 cases / 831 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
-    games/mine/tests/test_drops           4 cases /  72 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
-    games/mine/tests/test_drills          7 cases /  98 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
-    games/mine/tests/test_warehouses      8 cases / 119 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
-    games/mine/tests/test_double_click    8 cases /  28 checks
-    games/mine/tests/test_build_sidebar  2 cases /  43 checks  the build sidebar: categories, picking, where its parts are, the pages  two presses on one cell inside a window: the gesture a selection is made of
+    games/mine/tests/test_drops           7 cases / 151 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
+    games/mine/tests/test_drills         10 cases / 132 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
+    games/mine/tests/test_warehouses      9 cases / 157 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
+    games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
+    games/mine/tests/test_build_sidebar  4 cases / 63 checks  the build sidebar: categories, picking, where its parts are, the pages
+    games/mine/tests/test_building_unlocks  8 cases / 100 checks  which buildings a save has unlocked: the data's defaults, a reload, and the save blob
+    games/mine/tests/test_game_save  9 cases / 152 checks  a mine saved to a .t2dsave and read back: session, world, plots, containers, drops, sweeps, unlocks - all of it or none of it
     games/mine/tests/test_sandbox        28 cases / 719 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
-    games/mine/tests/test_content_pack   18 cases / 265 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
+    games/mine/tests/test_content_pack   19 cases / 311 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
     games/mine/tests/test_mod_package     9 cases / 104 checks  mod manifests, dependency order, collisions, a native module
     games/mine/tests/test_content_list    9 cases / 238 checks  the list of sources a load came from, failures included
@@ -189,9 +198,9 @@ and prediction are M2/M3 work (`docs/GAME_DESIGN.md` §8).
 The engine renders text with its own font engine — no FreeType, no stb_truetype, no new dependency —
 and shows it through string tables, so adding a language means adding a table, not touching code.
 
-    ./build/debug/games/mine/mine_game --lang en
-    ./build/debug/games/mine/mine_game --lang zh-Hans
-    ./build/debug/games/mine/mine_game --lang zh-Hant
+    ./build/mine/debug/games/mine/mine_game --lang en
+    ./build/mine/debug/games/mine/mine_game --lang zh-Hans
+    ./build/mine/debug/games/mine/mine_game --lang zh-Hant
 
 ![English](games/mine/docs/images/ui_en.png)
 
@@ -276,8 +285,8 @@ mods** — and all three fill the same registry, so the game's ids stay stable a
         items.ecfg                   # content tables, as many files as you like
         art/wall.png                 # resources, named relative to the file that declares them
 
-    ./build/debug/games/mine/mine_game --world story --start 1 --packs packs
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/base_pack
+    ./build/mine/debug/games/mine/mine_game --world story --start 1 --packs packs
+    ./build/mine/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/base_pack
 
 ![Packs loaded by the game itself](games/mine/docs/images/session_packs_en.png)
 
@@ -287,7 +296,7 @@ A pack that has to *run* something is a mod package instead:
         mod.ecfg                 id, name, version, api, requires, content, native, data
         libexample_native.so     a shared library exporting mine_mod_entry()
 
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+    ./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
         --content games/mine/tests/data/placeholder_content --mods mods
 
 ![Content from the game, from packs and from two mods](games/mine/docs/images/sandbox_mods_en.png)
@@ -505,7 +514,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 929 sections, 2 932 symbols, 11 311 relocations (release)
+        mine.codetab         the game: 1025 sections, 3 268 symbols, 12 636 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -562,8 +571,8 @@ The demo mod is one function in `games/mine/tests/data/tables/mod_banner.cpp`, p
 
 Two zips come out of a build, and they are for different people:
 
-    cmake --build build/release --target mine_package   # mine-0.1.0-Release.zip   what a player runs
-    cmake --build build/debug   --target builddev       # mine-dev-0.1.0-Debug.zip what a mod author compiles against
+    cmake --build build/mine/release --target mine_package   # mine-0.1.0-Release.zip   what a player runs
+    cmake --build build/mine/debug   --target builddev       # mine-dev-0.1.0-Debug.zip what a mod author compiles against
 
 The **release package** is the launcher, the game's table, the surface, the interface strings, the game's
 own content pack, the shaders and the `packs/` template — stripped, because the debug information is 19.8 MiB
@@ -589,8 +598,8 @@ engineering constraints and the list of content the designer still has to supply
 
 What exists today is the shell and the content debugger, deliberately free of any game content:
 
-    ./build/debug/games/mine/mine_game                      # start screen
-    ./build/debug/games/mine/mine_game --world endless --seed 4242 --start 1
+    ./build/mine/debug/games/mine/mine_game                      # start screen
+    ./build/mine/debug/games/mine/mine_game --world endless --seed 4242 --start 1
 
 ![Start screen](games/mine/docs/images/start_screen.png)
 
@@ -670,9 +679,10 @@ The two passes are the reason there are two kinds of plot: `refresh()` walks eve
 only for the dirty ones, `tick(dt)` walks the plots that run and nothing else. Which plots those are
 is decided once, when they are created — never by asking a plot at runtime.
 
-    ./build/debug/games/mine/mine_game --world-view 1                    # into the mine, layer 0
-    ./build/debug/games/mine/mine_game --world endless --world-view 1    # an endless mine: no rules yet, so an empty layer
-    ./build/debug/games/mine/mine_game --world-view 1 --grid 64x40 --layer-fill scatter --seed 1
+    ./build/mine/debug/games/mine/mine_game --world-view 1                    # into the mine, layer 0
+    ./build/mine/debug/games/mine/mine_game --world endless --world-view 1    # an endless mine: no rules yet, so an empty layer
+    ./build/mine/debug/games/mine/mine_game --world-view 1 --grid 64x40 --layer-fill scatter --seed 1
+    ./build/mine/debug/games/mine/mine_game --load save.t2dsave             # start in a save, straight into the mine
 
 ![The world view: an empty layer, and it says so](games/mine/docs/images/world_empty_en.png)
 
@@ -685,6 +695,19 @@ drawn over its whole footprint, and half of the ones whose content allows it com
 (`random_reverse`, rolled once when the map is built). `[ ]` walks the mine's layers, `F5` reloads
 the content files and rebuilds the layer out of what is now registered.
 
+`F7` writes the whole mine to `save.t2dsave` (`--save <path>` says where) and `F8` reads it back: the
+archive holds the session, the content names, the unlocked buildings, every plot with its container,
+the drops, the sweeps in progress and the view ([docs/SAVE.md](docs/SAVE.md)). A run can start in one
+with `--load <path>`, which opens the world view directly instead of a new mine. Two things a save
+deliberately does not hold: the drill's RNG stream (it reseeds from the content and its anchor, so a
+reloaded drill's later drops are not promised bit for bit) and the interface's own state - the
+selection, the double click, the drop on the pointer, whether the sidebar is open.
+
+While a mine is being played it is also written by itself every five minutes (`--autosave-seconds`,
+0 turns it off), and once more when the game is left - closing the window keeps the mine that was on
+screen. A headless run does neither unless `--save` or `--load` named a file, so a screenshot or a
+script cannot overwrite somebody's save.
+
 ![Mirrored floor plots: the same picture, turned around](games/mine/docs/images/world_mirror_en.png)
 
 Guide: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §4 and §8, [docs/TYPES.md](docs/TYPES.md).
@@ -695,8 +718,8 @@ The sandbox is the **content debugger**: one map, no demands, no progression —
 whatever the designer's data registered (the game's own pack, a pack, or a mod). The map has tile
 layers, so ground, ore and structures can be painted and inspected separately.
 
-    ./build/debug/games/mine/mine_game --world sandbox --start 1
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+    ./build/mine/debug/games/mine/mine_game --world sandbox --start 1
+    ./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
         --content games/mine/tests/data/placeholder_content --tile-layers 3 --fill-layer all
 
 ![Sandbox, three tile layers](games/mine/docs/images/sandbox_layers_en.png)
@@ -748,19 +771,52 @@ layers, so ground, ore and structures can be painted and inspected separately.
 
 Usage, keys and limits: [docs/SANDBOX.md](docs/SANDBOX.md) (§10 is the list and the debug input server).
 
+## A second game project: mefemma
+
+`games/mefemma` is a **separate game project on the same engine**, not another mode of the mine and not a
+copy of its shell. It has its own screens, its own architecture and its own name for what a game is made of:
+
+* **scenes** instead of a start/session/sandbox screen set: a stack where only the top scene updates and
+  every scene draws, so a pause menu is one more push and a HUD is a scene that draws nothing else;
+* a **DrawList** instead of drawing from the application: a scene asks for rectangles, pictures and text,
+  and the renderer turns the list into batches (submission order is drawing order);
+* **assets** by name — pictures, interface strings and fonts — instead of the mine's content registry, packs
+  and per-save id tables;
+* no world, no layers, no plots, no content kinds: those are decisions a game makes, and Mefemma's job is
+  to leave the room for them ([games/mefemma/docs/FRAMEWORK.md](games/mefemma/docs/FRAMEWORK.md) says where
+  each would attach).
+
+What it ships is the framework and two worked examples of a scene — a title and a camera playground. It
+carries no gameplay and no game content: the designer writes those.
+
+    ./build/mefemma/debug/games/mefemma/mefemma_game                              # title
+    ./build/mefemma/debug/games/mefemma/mefemma_game --scene playground           # camera + pointer + HUD
+    ./build/mefemma/debug/games/mefemma/mefemma_game --lang zh-Hans               # the interface follows
+    ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 4 --size 1280x720 \
+        --scene playground --pointer 900,420 --screenshot out.png          # a scripted screenshot
+
+![Mefemma's title](games/mefemma/docs/images/title.png)
+
+![Mefemma's playground](games/mefemma/docs/images/playground.png)
+
+Like the mine, it arrives as a code table behind a launcher (`mefemma.codetab`, entry
+`mefemma_game_main`), and its table reports **0 symbols outside `engine.api`**. Its core has no graphics
+dependency at all: the settings, the input state, the draw list and the scene stack are tested in
+milliseconds, and a test drives a scene with a fake `GameServices` — no window and no GPU.
+
 ## Verification status
 
-Everything below was run in this checkout, on this machine, with the commands shown. No result here is
-estimated.
+The rows marked **run in this checkout** were repeated after the build trees were split by game; the
+others record the last run before the split. No result here is estimated.
 
 | Preset | Result |
 |---|---|
-| `debug` | 31/31 tests green |
-| `release` | 31/31 tests green |
-| `asan` (Address + UB sanitizers) | 31/31 tests green |
-| `tsan` (ThreadSanitizer) | 31/31 tests green |
-| `no-renderer` | 11/11 tests green, no Vulkan, GLFW or game binary |
-| `server-only` | 31/31 tests green |
+| `mine-debug` | 35/35 tests green (run in this checkout) |
+| `mine-release` | 35/35 tests green (run in this checkout) |
+| `mine-asan` (Address + UB sanitizers) | not re-run after the build trees were split |
+| `mine-tsan` (ThreadSanitizer) | not re-run after the build trees were split |
+| `no-renderer` | 12/12 tests green (previous run; not re-run after the split) |
+| `mefemma-debug` / `mefemma-release` | the second project's own presets (its 6 suites), not run here |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

@@ -1,5 +1,6 @@
 #include <mine/pointer_drag.h>
 
+#include <mine/types/drop.h>
 #include <mine/types/warehouse.h>
 
 namespace mine {
@@ -11,9 +12,21 @@ namespace {
 [[nodiscard]] types::Warehouse* warehouse_at(MineLayer& layer, GridPos cell) {
     for (i32 tile_layer = layer.layer_count() - 1; tile_layer >= 0; --tile_layer) {
         auto* warehouse = dynamic_cast<types::Warehouse*>(layer.plot_at(tile_layer, cell));
-        if (warehouse != nullptr) return warehouse;
+        // A warehouse that is still going up takes no dragged drop: the pointer looks further down the
+        // tile layers, and lets the drop go on the ground when there is nothing under it
+        // (types/scene_tile.h, docs/GAME_DESIGN.md section 1.37).
+        if (warehouse != nullptr && !warehouse->under_construction()) return warehouse;
     }
     return nullptr;
+}
+
+/// Lets \p entity go on the ground, joining a pile of its item nearby when there is one. After this the
+/// entity may be gone - what a merge destroys is dead, not just moved - so the caller must not touch it
+/// again (types/drop.h, docs/GAME_DESIGN.md section 1.43).
+void release_into_a_pile(MineLayer& layer, types::Entity& entity) {
+    auto* drop = dynamic_cast<types::Drop*>(&entity);
+    if (drop == nullptr) return;   // something draggable that is not a drop has no pile to join
+    (void)layer.merge_drop(*drop);
 }
 
 } // namespace
@@ -36,6 +49,19 @@ bool PointerDrag::begin(MineLayer& layer, t2d::Vec2 point, f32 radius) {
     });
     if (nearest == nullptr) return false;
     layer_ = &layer;
+    // A **pile** is dragged one item at a time: the pile stays where it is with one fewer, and the pointer
+    // carries a single drop made at the pile's own position (types/drop.h, docs/GAME_DESIGN.md 1.43).
+    auto* pile = dynamic_cast<types::Drop*>(nearest);
+    if (pile != nullptr && pile->count() > 1) {
+        pile->set_count(pile->count() - 1);
+        // Adopted **bare**, not through MineLayer::drop(): that one merges what it is handed into a nearby
+        // pile of the same item, and this drop would be merged straight back into the one it came from.
+        auto& taken =
+            layer.adopt(std::make_unique<types::Drop>(pile->kind(), pile->id(), pile->position(), 1));
+        held_ = &taken;
+        offset_ = held_->position() - point;
+        return true;
+    }
     held_ = nearest;
     offset_ = nearest->position() - point;
     return true;
@@ -78,11 +104,16 @@ ReleaseResult PointerDrag::end() {
 
     types::Warehouse* warehouse = warehouse_at(*layer, cell);
     if (warehouse == nullptr) {
+        // Let go on the ground: one item let go next to a pile of its item joins it (section 1.43). After
+        // this \p released may be dead, so nothing below touches it on this path.
+        release_into_a_pile(*layer, *released);
         last_release_.result = ReleaseResult::Left;
         return last_release_.result;
     }
     if (!warehouse->draginto().receive(*released)) {
-        // No room: the drop stays where it was let go, and the caller is told why (types/drag_into.h).
+        // No room: the drop stays where it was let go - or joins a pile of its item right next to it - and
+        // the caller is told why (types/drag_into.h).
+        release_into_a_pile(*layer, *released);
         last_release_.result = ReleaseResult::Refused;
         return last_release_.result;
     }

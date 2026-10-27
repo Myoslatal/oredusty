@@ -1,0 +1,48 @@
+# Interface strings of Mefemma's two example scenes, one table per language.
+#
+# Text is looked up by id, never stored in code: a language is a table, and a missing string shows its id
+# (a visible failure) instead of an empty label. A game adds its own ids here or in its own table.
+#
+# Ids are stable: a log refers to an id, never to the text, so the text can be reworded at any time.
+
+en::
+    title.name:"MEFEMMA"
+    title.tagline:"A GAME FRAMEWORK BUILT ON TILE2D"
+    title.start:"PRESS ENTER"
+    title.quit:"ESC TO QUIT"
+    title.language:"F2 SWITCHES LANGUAGE"
+    play.title:"PLAYGROUND"
+    play.note:"THIS SCENE IS YOURS TO REPLACE"
+    play.hint:"WASD / ARROWS PAN   WHEEL OR +/- ZOOM   C CENTRE   ESC BACK"
+    play.cell:"WORLD {:.0f}, {:.0f}   CELL {}, {}"
+    play.pointer.outside:"POINTER OUTSIDE THE WINDOW"
+    debug.line:"{:.0f} FPS   {:.2f} MS   {} DRAW CALL(S)   {} SCENE(S)   F1 HIDE"
+    debug.missing:"{} PICTURE(S) MISSING"
+
+zh-Hans::
+    title.name:"MEFEMMA"
+    title.tagline:"基于 TILE2D 的游戏框架"
+    title.start:"按 Enter 开始"
+    title.quit:"ESC 退出"
+    title.language:"F2 切换语言"
+    play.title:"试验场"
+    play.note:"这个场景留给你替换"
+    play.hint:"WASD / 方向键平移   滚轮或 +/- 缩放   C 居中   ESC 返回"
+    play.cell:"世界 {:.0f}, {:.0f}   格子 {}, {}"
+    play.pointer.outside:"指针在窗口外"
+    debug.line:"{:.0f} FPS   {:.2f} 毫秒   {} 次绘制   {} 个场景   F1 隐藏"
+    debug.missing:"缺少 {} 张图片"
+
+zh-Hant::
+    title.name:"MEFEMMA"
+    title.tagline:"基於 TILE2D 的遊戲框架"
+    title.start:"按 Enter 開始"
+    title.quit:"ESC 離開"
+    title.language:"F2 切換語言"
+    play.title:"試驗場"
+    play.note:"這個場景留給你替換"
+    play.hint:"WASD / 方向鍵平移   滾輪或 +/- 縮放   C 居中   ESC 返回"
+    play.cell:"世界 {:.0f}, {:.0f}   格子 {}, {}"
+    play.pointer.outside:"指標在視窗外"
+    debug.line:"{:.0f} FPS   {:.2f} 毫秒   {} 次繪製   {} 個場景   F1 隱藏"
+    debug.missing:"缺少 {} 張圖片"

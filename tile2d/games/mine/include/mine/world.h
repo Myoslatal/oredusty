@@ -169,6 +169,12 @@ public:
     /// instead of what the layer holds (docs/GAME_DESIGN.md section 2).
     static constexpr i32 kChunkSize = 32;
 
+    /// How close two drops of one item have to be to become one **pile** (types/drop.h): the same 0.75 a
+    /// grab reaches (pointer_drag.h), so "near enough to pick both up at once" and "near enough to be one
+    /// pile" are the same distance. A pile is one drop carrying a count, not a new kind of thing
+    /// (docs/GAME_DESIGN.md section 1.43).
+    static constexpr f32 kDropMergeRadius = 0.75f;
+
     MineLayer(i32 index, LayerShape shape, u64 seed);
 
     // --- what it is -------------------------------------------------------------------------------
@@ -281,6 +287,16 @@ public:
     /// did anything. Both are asked, because an interaction has two sides - and neither side has to
     /// know what the other one is (types/entity.h).
     bool interact(types::Entity& a, types::Entity& b);
+    /// Makes a drop of content \p kind and \p id at \p position carrying \p count, and **merges it into
+    /// a nearby pile** of the same item when there is one (merge_drop): two of one item lying close
+    /// together are one pile (kDropMergeRadius, docs/GAME_DESIGN.md section 1.43). Returns the drop that
+    /// now carries what it was given - the new one, or the pile it joined.
+    [[nodiscard]] types::Drop& drop(ContentKind kind, ContentId id, t2d::Vec2 position, usize count = 1);
+    /// Merges \p piece into the nearest **live** drop of the same kind and id within kDropMergeRadius: the
+    /// pile that stays keeps its position, \p piece's count is added to it and \p piece is destroyed.
+    /// Returns the pile it joined, or nullptr when there is nothing near enough (or when \p piece is not
+    /// this layer's, or is already dead). After a merge the caller must not touch \p piece again.
+    types::Drop* merge_drop(types::Drop& piece);
     /// Visits every entity within \p radius of \p center, in the tree's own order. A query does not
     /// change the layer, but what it finds is fair game: a caller may move it, ask it to interact, or
     /// destroy it.
@@ -298,6 +314,10 @@ public:
     [[nodiscard]] usize plot_count() const { return plots_.size(); }
     [[nodiscard]] usize ticking_count() const { return ticking_.size(); }
     [[nodiscard]] usize mirrored_count() const { return mirrored_; }
+    /// Recomputes that count from the plots themselves. MIRRORED is **derived**: the dice decided it while
+    /// the map was built, but a save restores the flags one plot at a time (set_mirrored), and a restored
+    /// layer has to report what it draws - not what the layer's own dice happened to roll this time.
+    void recount_mirrored();
     [[nodiscard]] usize filled_cells() const { return cells_.filled(); }
     [[nodiscard]] usize filled_cells(i32 layer) const { return cells_.filled(layer); }
     [[nodiscard]] usize cell_count() const { return cells_.cell_count(); }
@@ -407,6 +427,10 @@ public:
     /// of a hundred layers costs one layer, and entering a layer again builds the same mine back,
     /// because the generator only ever sees (seed, index).
     const MineLayer& enter(i32 index, const ContentRegistry& registry, const ContentDefinitions& definitions);
+    /// Takes a layer that was built somewhere else - a save, a tool - and makes it the layer being played,
+    /// with the report that came with it. Unlike enter() it builds nothing: what the layer is, it already
+    /// is (mine/game_save.h).
+    void install_layer(std::unique_ptr<MineLayer> layer, LayerBuildReport report);
     [[nodiscard]] bool has_layer() const { return layer_ != nullptr; }
     [[nodiscard]] const MineLayer& layer() const { return *layer_; }
     /// The same layer, for the one screen that **acts** on it: the world view moves a drop the pointer

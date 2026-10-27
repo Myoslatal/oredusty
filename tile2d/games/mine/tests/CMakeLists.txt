@@ -110,6 +110,16 @@ target_link_libraries(test_drills PRIVATE mine_core)
 t2d_add_test(test_warehouses test_warehouses.cpp)
 target_link_libraries(test_warehouses PRIVATE mine_core)
 
+# Which buildings a save has unlocked: the save attribute the build sidebar filters on, its defaults
+# from the data, and its blob (docs/GAME_DESIGN.md section 1.44).
+t2d_add_test(test_building_unlocks test_building_unlocks.cpp)
+target_link_libraries(test_building_unlocks PRIVATE mine_core)
+
+# A layer's whole state in a .t2dsave: plots, containers, drops, unlocks, sweeps, and a load that
+# refuses half a mine (docs/SAVE.md).
+t2d_add_test(test_game_save test_game_save.cpp)
+target_link_libraries(test_game_save PRIVATE mine_core)
+
 # Two presses on one cell are one gesture: the double click a selection is made of.
 t2d_add_test(test_double_click test_double_click.cpp)
 t2d_add_test(test_build_sidebar test_build_sidebar.cpp)

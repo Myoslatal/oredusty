@@ -19,6 +19,7 @@
 #include <mine/build_animation.h>
 #include <mine/build_cost.h>
 #include <mine/build_sidebar.h>
+#include <mine/building_unlocks.h>
 #include <mine/double_click.h>
 #include <mine/menu.h>
 #include <mine/mod_package.h>
@@ -109,6 +110,14 @@ struct MineOptions {
     /// as --layer-fill, for the things that are not on a cell - so a designer can see a drop and drag it
     /// before the data that places drops exists (docs/GAME_DESIGN.md section 1.25).
     bool layer_drops = false;
+    /// Where F7 writes the mine, and where F8 reads it: both go through t2d::save::with_extension, so a
+    /// path without .t2dsave gets one. --load reads its file once at startup; --save only sets the path.
+    std::string save_path;
+    std::string load_path;
+    /// How often a mine being played is written by itself, in seconds of world view time (default five
+    /// minutes); 0 turns the automatic save off. --autosave-seconds
+    /// (docs/GAME_DESIGN.md section 1.47).
+    f32 autosave_seconds = 300.0f;
     /// Lay out one of every registered drill in the layer the world view enters, each on a cell that has
     /// ore under it (world.h) - so the mining rule can be watched producing before the data that places
     /// drills exists (docs/GAME_DESIGN.md section 1.26).
@@ -157,11 +166,31 @@ private:
     /// Enters the mine: builds the world from the session and the options and steps into a layer. The
     /// session screen's Enter, and --world-view for a scripted run.
     void open_world();
+    /// Gives the world in memory the generator its other layers are built from: the story's rules, a
+    /// debug fill, or an empty layer. A world open_world() built and one a save brought back walk their
+    /// layers the same way (mine/world.h).
+    void configure_world_generator();
     /// Builds p index and makes it the layer being played. Only one layer is held, and the generator
     /// is deterministic, so walking layers and coming back gives the same mine (world.h).
     void enter_mine_layer(i32 index);
     /// The game's own input: the camera and the pointer, nothing else (docs/GAME_DESIGN.md section 3).
     void handle_world_input(f32 delta_seconds);
+    /// The file F7 writes and F8 reads: --save, or save.t2dsave in the working directory, with the
+    /// .t2dsave extension (t2d::save::with_extension).
+    [[nodiscard]] std::string save_file_path() const;
+    /// Writes the layer being played to save_file_path(). The status line says what happened either way
+    /// (mine/game_save.h); returns whether the file was written.
+    bool save_game();
+    /// Reads \p path and makes it the mine being played - the whole mine or not at all: a save that cannot
+    /// come back leaves the one being played alone (mine/game_save.h). Returns whether it loaded.
+    bool load_game_file(const std::string& path);
+    /// Whether an automatic save may be written at all: a window is a person playing, and their mine is
+    /// kept; a headless run is a script or a screenshot, and only a path named on the command line says
+    /// where writing is wanted (docs/GAME_DESIGN.md section 1.47).
+    [[nodiscard]] bool save_allowed() const;
+    /// Counts the time spent in the mine and writes a save when a period is up. Only the world view is
+    /// counted; every other screen clears the clock, and a run that may not write never starts it.
+    void maybe_autosave(f32 delta_seconds);
     /// Sizes the camera so the whole layer fits the window, then keeps the view inside the map.
     void fit_world_view();
     void clamp_world_view();
@@ -388,6 +417,10 @@ private:
     /// It is filled from the registry when a layer is entered, drawn over the map by the world view, and
     /// answered clicks there - the model itself knows nothing about pixels (mine/build_sidebar.h).
     BuildSidebar sidebar_{};
+    /// Which buildings this save has unlocked: what the sidebar offers and nothing else
+    /// (docs/GAME_DESIGN.md sections 1.36, 1.44). A new save starts from the data's defaults; a reload
+    /// carries the state across **by name** (mine/building_unlocks.h).
+    BuildingUnlocks unlocked_{};
     /// Draws it and answers a click on it. Returns true when the click was the sidebar's, so the map does
     /// not also act on it.
     /// What is going up and how far along it is (mine/build_animation.h): the world view draws the sweep, the
@@ -395,6 +428,9 @@ private:
     BuildAnimation building_{};
     /// Seconds of world time since the game started: what turns a drill's top (section 1.38).
     t2d::f32 world_seconds_ = 0.0f;
+    /// Seconds spent in the world view since the last save: what maybe_autosave() counts towards
+    /// options_.autosave_seconds. A save, a load and entering a mine all start it again (section 1.47).
+    f32 autosave_elapsed_ = 0.0f;
     /// The rectangle a plot covers on the screen, from the camera the map is drawn with.
     [[nodiscard]] t2d::Aabb2 plot_box_on_screen(const types::SceneTile& plot) const;
     void draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection);

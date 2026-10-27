@@ -261,6 +261,39 @@ T2D_TEST(a_long_frame_runs_a_plot_once_with_the_whole_span) {
     T2D_CHECK(waiting.advance(1.0f));
 }
 
+T2D_TEST(a_plot_that_is_still_going_up_does_not_update) {
+    // A plot being built is on the map and is drawn, but it does nothing yet: it is not brought up to
+    // date until its build is done (docs/GAME_DESIGN.md section 1.37).
+    CountingFloor floor(ContentKind::Structure, 1, 0, GridPos{0, 0});
+    floor.set_under_construction(true);
+    T2D_CHECK(floor.under_construction());
+    T2D_CHECK(floor.dirty());          // nothing has looked at it yet ...
+    T2D_CHECK_FALSE(floor.refresh());  // ... and nothing does while it is going up
+    T2D_CHECK_EQ(floor.refreshes, 0);
+    T2D_CHECK(floor.dirty());          // the dirty flag is kept, not forgotten
+
+    // Done: the next pass brings it up to date, once.
+    floor.set_under_construction(false);
+    T2D_CHECK_FALSE(floor.under_construction());
+    T2D_CHECK(floor.refresh());
+    T2D_CHECK_EQ(floor.refreshes, 1);
+    T2D_CHECK_FALSE(floor.dirty());
+
+    // A machine that is going up does not take its turn either, and the time it spent going up is not
+    // owed to it: its first turn is a whole period after it is finished (types/entity_tile.h).
+    CountingMachine machine(ContentKind::Machine, 2, 0, GridPos{0, 0});
+    machine.set_period_seconds(1.0f);
+    machine.set_under_construction(true);
+    T2D_CHECK_FALSE(machine.advance(5.0f));
+    T2D_CHECK_EQ(machine.runs, 0);
+    T2D_CHECK_NEAR(machine.since_last_update(), 0.0f, 1e-6f);   // five seconds, none of them kept
+    machine.set_under_construction(false);
+    T2D_CHECK_FALSE(machine.advance(0.5f));
+    T2D_CHECK(machine.advance(0.5f));
+    T2D_CHECK_EQ(machine.runs, 1);
+    T2D_CHECK_NEAR(machine.accounted, 1.0f, 1e-6f);
+}
+
 T2D_TEST(a_plot_is_a_plot_through_a_base_pointer) {
     bool destroyed = false;
     {
@@ -347,6 +380,53 @@ T2D_TEST(a_plot_can_be_told_to_turn_itself_around) {
     T2D_CHECK(turnable.mirrored());
     turnable.set_mirrored(false);
     T2D_CHECK_FALSE(turnable.mirrored());
+}
+
+T2D_TEST(a_plot_previews_the_pictures_it_draws) {
+    // A plot of no kind in particular has no art of its own, and neither has one whose entry names no
+    // "image": the complete preview of both is no pictures at all (types/tile.cpp).
+    SceneTile bare(ContentKind::Structure, 1, 0, GridPos{0, 0});
+    T2D_CHECK(bare.get_preview().empty());
+
+    TileDefinition pictureless;
+    pictureless.kind = ContentKind::Structure;
+    pictureless.name = "wall";
+    SceneTile no_art(ContentKind::Structure, 1, 0, GridPos{0, 0});
+    no_art.set_definition(&pictureless);
+    T2D_CHECK(no_art.get_preview().empty());
+
+    // Content that names a picture previews as that one picture: it is the entry's own image, so its part
+    // is empty, it is not turned, and it turns about its middle when anything asks it to (types/tile.h).
+    TileDefinition wall;
+    wall.kind = ContentKind::Structure;
+    wall.name = "wall";
+    wall.image = "art/wall.png";
+    SceneTile plot(ContentKind::Structure, 2, 0, GridPos{1, 1});
+    plot.set_definition(&wall);
+    const TilePreview preview = plot.get_preview();
+    T2D_REQUIRE(preview.images.size() == 1u);
+    T2D_CHECK(preview.images[0].part.empty());
+    T2D_CHECK_FALSE(preview.images[0].mirrored);
+    T2D_CHECK_EQ(preview.images[0].radians, 0.0f);
+    const t2d::Vec2 middle{0.5f, 0.5f};
+    T2D_CHECK_EQ(preview.images[0].pivot, middle);
+
+    // Whether a plot draws mirrored is the plot's own answer, so a preview says what the map would draw.
+    plot.set_mirrored(true);
+    T2D_CHECK_EQ(plot.get_preview().images.size(), 1u);
+    T2D_CHECK(plot.get_preview().images[0].mirrored);
+
+    // Scenery does not turn: asking for a moment of the clock is the same picture.
+    T2D_CHECK_EQ(plot.get_preview(3.5f).images.size(), 1u);
+    T2D_CHECK_EQ(plot.get_preview(3.5f).images[0].radians, 0.0f);
+
+    // What an interface holds is a plot as a Tile, so the answer has to come through the base class -
+    // which is the whole point of the interface.
+    const Tile& as_a_plot = plot;
+    const TilePreview through_the_base = as_a_plot.get_preview();
+    T2D_REQUIRE(through_the_base.images.size() == 1u);
+    T2D_CHECK(through_the_base.images[0].mirrored);
+    T2D_CHECK(through_the_base.images[0].part.empty());
 }
 
 T2D_TEST(a_floor_is_scenery_that_says_it_is_a_floor) {
@@ -657,6 +737,58 @@ machine::
     T2D_CHECK(first->building() == second->building());   // one building record, not one per plot
     T2D_CHECK(first->building()->category == BuildingCategory::Extraction);
     T2D_CHECK(first->building()->seconds == 5.0f);
+    // `default_unlock` is a **definition** attribute that says what a **new save** starts with
+    // (docs/GAME_DESIGN.md section 1.44). The data above did not say, so it starts unlocked.
+    T2D_CHECK(definition.building.default_unlock);
+    const auto read_building = [](std::string_view text,
+                                  std::string* error = nullptr) -> std::optional<TileDefinition> {
+        const std::optional<t2d::EcfgDocument> parsed = t2d::EcfgDocument::parse(text);
+        if (!parsed.has_value()) return std::nullopt;
+        std::vector<std::string> problems;
+        const std::vector<TileDefinition> read = tile_definitions(*parsed, &problems);
+        if (error != nullptr) *error = problems.empty() ? std::string{} : problems.front();
+        if (!problems.empty() || read.size() != 1u) return std::nullopt;
+        return read.front();
+    };
+    const std::optional<TileDefinition> locked = read_building(R"(
+machine::
+    press::
+        building::
+            category:"processing"
+            default_unlock:false
+)");
+    T2D_REQUIRE(locked.has_value());
+    T2D_CHECK_FALSE(locked->building.default_unlock);
+    // Two plots of that entry share the one record, and the field comes with it.
+    const std::unique_ptr<SceneTile> locked_first = make_tile(*locked, 3, 0, GridPos{0, 0});
+    const std::unique_ptr<SceneTile> locked_second = make_tile(*locked, 4, 0, GridPos{1, 0});
+    T2D_REQUIRE(locked_first != nullptr && locked_second != nullptr);
+    T2D_REQUIRE(locked_first->building() != nullptr);
+    T2D_CHECK(locked_first->building() == locked_second->building());
+    T2D_CHECK_FALSE(locked_first->building()->default_unlock);
+
+    // A value that is not true/false is refused where the file is, with the field named.
+    std::string error;
+    const std::optional<TileDefinition> wrong = read_building(
+        "machine::\n    press::\n        building::\n" "            default_unlock:1\n", &error);
+    T2D_CHECK_FALSE(wrong.has_value());
+    T2D_CHECK(error.find("default_unlock") != std::string::npos);
+    // The list of fields the building table accepts names it, so a wrong one is answered with the choices.
+    error.clear();
+    const std::optional<TileDefinition> unknown = read_building(
+        "machine::\n    press::\n        building::\n" "            unlock:false\n", &error);
+    T2D_CHECK_FALSE(unknown.has_value());
+    T2D_CHECK(error.find("default_unlock") != std::string::npos);
+    // Only the building table reads it: the same name at the entry's top level is the designer's, ignored.
+    const std::optional<TileDefinition> top_level = read_building(R"(
+machine::
+    press::
+        default_unlock:false
+        building::
+            category:"processing"
+)");
+    T2D_REQUIRE(top_level.has_value());
+    T2D_CHECK(top_level->building.default_unlock);
 }
 
 T2D_TEST(content_that_is_not_a_building_has_no_building_sub_object) {

@@ -139,6 +139,16 @@ extern "C" int mine_game_main(int argc, char** argv) {
     if (const auto drops = cli.bool_value("layer-drops"); drops.has_value()) options.layer_drops = *drops;
     if (const auto drills = cli.bool_value("layer-drills"); drills.has_value()) options.layer_drills = *drills;
 
+    // The save this run writes and reads, and the one it starts from (docs/SAVE.md): both are file
+    // paths, and the .t2dsave extension is added when the caller leaves it off.
+    if (const auto save = cli.value("save"); save.has_value()) options.save_path = *save;
+    if (const auto load = cli.value("load"); load.has_value()) options.load_path = *load;
+    // The automatic save's period, in seconds of time spent in the mine; 0 turns it off and 300 is the
+    // five minutes the designer asked for (docs/GAME_DESIGN.md section 1.47).
+    if (const auto seconds = cli.uint_value("autosave-seconds"); seconds.has_value()) {
+        options.autosave_seconds = static_cast<mine::f32>(*seconds);
+    }
+
     mine::MineApp application(std::move(options));
     return application.run(argc, argv);
 }

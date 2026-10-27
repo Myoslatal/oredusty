@@ -45,8 +45,8 @@ below that pen and inside the box it measured.
 
 ## Fonts
 
-    ./build/debug/games/mine/mine_game --lang zh-Hans            # picks a CJK face automatically
-    ./build/debug/games/mine/mine_game --font /path/latin.ttf --cjk-font /path/cjk.ttc
+    ./build/mine/debug/games/mine/mine_game --lang zh-Hans            # picks a CJK face automatically
+    ./build/mine/debug/games/mine/mine_game --font /path/latin.ttf --cjk-font /path/cjk.ttc
 
 The shell looks for a Latin font and a CJK font in the usual system locations, and picks the **face**
 inside a collection by name: Noto Sans CJK carries ten faces, and Simplified (SC) and Traditional (TC)

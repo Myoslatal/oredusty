@@ -29,4 +29,12 @@ bool Tile::within(i32 map_width, i32 map_height) const {
     return cells_.x >= 0 && cells_.y >= 0 && cells_.right() <= map_width && cells_.bottom() <= map_height;
 }
 
+TilePreview Tile::get_preview(t2d::f32 seconds) const {
+    // A plot of no kind in particular has no art to draw: it has no definition and so no picture, which
+    // is why its complete preview is no pictures at all. The kinds that do have art answer for themselves
+    // (types/scene_tile.cpp, types/drill.cpp).
+    (void)seconds;
+    return {};
+}
+
 } // namespace mine::types

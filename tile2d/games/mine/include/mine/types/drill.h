@@ -61,10 +61,20 @@ public:
     /// `spin_origin`, or the middle when it does not say (section 1.38).
     [[nodiscard]] t2d::Vec2 spin_origin() const;
 
+    /// The complete render preview of this drill (types/tile.h): the base it stands on, and - when its
+    /// entry gives it a "top_image" - the turning top over it, turned by spin_angle(seconds) about
+    /// spin_origin(). A drill whose base is missing previews as nothing rather than as a top with nothing
+    /// under it, which is the rule the world view follows too: it draws the fallback colour instead.
+    [[nodiscard]] TilePreview get_preview(t2d::f32 seconds = 0.0f) const override;
+
     /// True when it has something to mine: a drop to make, and a period to make it on.
     [[nodiscard]] bool ready() const { return job_.drop_id != kNoContent && job_.period_seconds > 0.0f; }
     /// How many drops it has thrown out so far.
     [[nodiscard]] usize produced() const { return thrown_; }
+    /// Puts that count back: what a save does when it restores the drill it wrote down. It is state of
+    /// this drill, not of the entry it shares with every other drill (docs/GAME_DESIGN.md section 1.35);
+    /// its dice are **not** saved, so a restored drill throws like a drill that was built there.
+    void set_produced(usize count) { thrown_ = count; }
 
 protected:
     /// Its turn: throw out what the time it was handed is worth. The cadence hands a long frame's whole

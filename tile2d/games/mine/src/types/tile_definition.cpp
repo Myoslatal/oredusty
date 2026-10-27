@@ -118,6 +118,15 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
                     definition.building.seconds = static_cast<f32>(field.as_float());
                     continue;
                 }
+                if (field.key() == "default_unlock") {
+                    // What a **new save** starts with (docs/GAME_DESIGN.md section 1.44). A field the engine
+                    // reads and cannot read is refused rather than guessed at, like every other one here.
+                    if (field.type() != t2d::EcfgType::Bool) {
+                        return fail(std::format("building '{}': default_unlock must be true or false", name));
+                    }
+                    definition.building.default_unlock = field.as_bool();
+                    continue;
+                }
                 if (field.key() == "category") {
                     if (!field.is_string()) {
                         return fail(std::format("building '{}': category must be a quoted name (storage, "
@@ -135,7 +144,7 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
                     continue;
                 }
                 return fail(std::format("building '{}': the building table has no field '{}' (materials, time, "
-                                        "category)",
+                                        "category, default_unlock)",
                                         name, field.key()));
             }
         }

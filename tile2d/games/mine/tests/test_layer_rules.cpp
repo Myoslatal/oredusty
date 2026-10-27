@@ -3,6 +3,7 @@
 //
 // The content in here is a **test double**: names like "dirt" or "rock" are the fixture's, not the
 // game's - the game names no content at all (docs/GAME_DESIGN.md section 7).
+#include <mine/building_unlocks.h>
 #include <mine/content_pack.h>
 #include <mine/layer_rules.h>
 
@@ -1165,6 +1166,12 @@ T2D_TEST(the_games_own_story_layer_is_the_first_one_and_the_fixture_follows_it) 
     T2D_REQUIRE(building != nullptr);
     T2D_REQUIRE(building->container() != nullptr);
     T2D_CHECK_EQ(building->container()->total(), 10u);
+    // The stone warehouse is a **building**, and a new save has it locked (docs/GAME_DESIGN.md 1.44,
+    // 1.45) - and that changes nothing here: `place_block` puts content down directly, it does not go
+    // through the build menu, and being unlocked is not a placement condition.
+    BuildingUnlocks unlocks;
+    unlocks.reset(registry, report.definitions);
+    T2D_CHECK_FALSE(unlocks.unlocked(ContentKind::Warehouse, registry.find(ContentKind::Warehouse, "stone")));
     T2D_CHECK(first.plot_at(0, GridPos{50, 50}) != nullptr);   // the floor is still under it
     T2D_CHECK_GE(stone.size(), 20u);
     T2D_CHECK(stone.size() <= 35u);

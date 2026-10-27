@@ -1,5 +1,7 @@
 // Content packs: a directory per pack, an optional header that says who it is, and a pipeline that
 // puts the game's own content, the packs and the mods into one registry in a defined order.
+#include <mine/build_sidebar.h>
+#include <mine/building_unlocks.h>
 #include <mine/types/tile_definition.h>
 #include <mine/content_pack.h>
 #include <mine/content_loader.h>
@@ -505,16 +507,23 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     // What it drops is an **item**, and the thing that lands on the ground is made out of it: there is
     // no drop:: entry to look for (sections 1.23, 1.25).
     T2D_CHECK(registry.find(ContentKind::Item, vein.drop) != kNoContent);
-    // The warehouse the designer asked for (docs/GAME_DESIGN.md section 1.28), with the picture the
-    // designer put into the pack themselves: it is a plot - scenery that holds things - and the one
-    // number its entry carries is its capacity.
+    // The warehouse the designer asked for (docs/GAME_DESIGN.md sections 1.28, 1.45), with the picture the
+    // designer put into the pack themselves: it is a plot - scenery that holds things - and it is a
+    // **building** now: 20 stone, ten seconds, `storage`, and locked in a new save.
     T2D_CHECK_EQ(registry.count(ContentKind::Warehouse), 1u);
     T2D_CHECK(registry.find(ContentKind::Warehouse, "stone") != kNoContent);
     T2D_CHECK_EQ(report.images[5].kind, ContentKind::Warehouse);
     T2D_CHECK_EQ(report.images[5].content, std::string("stone"));
     T2D_CHECK(report.images[5].resolved.find("capacity_stone_warehouse.png") != std::string::npos);
     T2D_REQUIRE(report.definitions.find_tile(ContentKind::Warehouse, "stone") != nullptr);
-    T2D_CHECK_EQ(report.definitions.find_tile(ContentKind::Warehouse, "stone")->capacity, 100u);
+    const types::TileDefinition& store = *report.definitions.find_tile(ContentKind::Warehouse, "stone");
+    T2D_CHECK_EQ(store.capacity, 100u);
+    T2D_CHECK(store.building.category == types::BuildingCategory::Storage);
+    T2D_CHECK_FALSE(store.building.default_unlock);
+    T2D_REQUIRE(store.building.materials.size() == 1u);
+    T2D_CHECK_EQ(store.building.materials[0].name, std::string("stone"));
+    T2D_CHECK_EQ(store.building.materials[0].count, 20);
+    T2D_CHECK_EQ(store.building.seconds, 10.0f);
     // The drill the designer asked for ("创建石头钻头，挖掘能力为1,材料10石头"): digging power 1, a base
     // and a top, and what it costs to build (docs/GAME_DESIGN.md sections 1.34, 1.38).
     T2D_CHECK_EQ(registry.count(ContentKind::Drill), 1u);
@@ -529,6 +538,57 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_EQ(drill.building.materials[0].count, 10);
     T2D_CHECK_EQ(drill.building.seconds, 5.0f);   // five seconds to build, so it goes up behind a sweep
     T2D_CHECK_EQ(report.definitions.size(), 4u);   // four plots: the floor, the ore, the warehouse, the drill
+    // What the sidebar draws for it comes from the plot itself (docs/GAME_DESIGN.md section 1.39), and a
+    // drill's preview is **both** of its pictures: the base, then the top over it. This is the
+    // end-to-end evidence for the designer's "钻头的预览图要带上top": the game's own pack, the definition
+    // it shipped, the plot made from it, and the entry the picker shows (docs/GAME_DESIGN.md section 1.40).
+    BuildingUnlocks unlocks;
+    unlocks.reset(registry, report.definitions);
+    // Both of the game's own buildings have a row now: the drill is unlocked by default, the stone
+    // warehouse is locked (section 1.45). A new save's picker therefore shows Extraction only - Storage is
+    // not a category at all while its only building is locked.
+    T2D_REQUIRE(unlocks.size() == 2u);
+    T2D_CHECK(unlocks.unlocked(ContentKind::Drill, registry.find(ContentKind::Drill, "stone")));
+    const ContentId warehouse_id = registry.find(ContentKind::Warehouse, "stone");
+    T2D_CHECK_FALSE(unlocks.unlocked(ContentKind::Warehouse, warehouse_id));
+    BuildSidebar sidebar;
+    sidebar.rebuild(registry, report.definitions, unlocks);
+    T2D_REQUIRE(!sidebar.entries().empty());
+    T2D_REQUIRE(sidebar.categories().size() == 1u);
+    T2D_CHECK(sidebar.categories()[0] == types::BuildingCategory::Extraction);
+    // The drill is a building, and it is the first entry: the drill table is walked before the warehouse
+    // table, so Extraction is the first category with something in it.
+    T2D_CHECK_EQ(sidebar.entries().front().kind, ContentKind::Drill);
+    T2D_CHECK_EQ(sidebar.entries().front().name, std::string("stone"));
+    T2D_REQUIRE(sidebar.entries().front().preview.images.size() == 2u);
+    T2D_CHECK(sidebar.entries().front().preview.images[0].part.empty());
+    T2D_CHECK_EQ(sidebar.entries().front().preview.images[1].part, std::string("top"));
+
+    // Unlocking the stone warehouse puts Storage on offer: the entry is what the data says - 20 stone, ten
+    // seconds, the warehouse's own picture - and locking it again takes the category away with it
+    // (docs/GAME_DESIGN.md section 1.45). The content never changed, only the save's state.
+    T2D_CHECK(unlocks.set_unlocked(ContentKind::Warehouse, warehouse_id, true));
+    sidebar.rebuild(registry, report.definitions, unlocks);
+    T2D_REQUIRE(sidebar.categories().size() == 2u);
+    T2D_CHECK(sidebar.categories()[1] == types::BuildingCategory::Storage);
+    sidebar.select_category(types::BuildingCategory::Storage);
+    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    const BuildEntry& store_entry = sidebar.entries()[0];
+    T2D_CHECK_EQ(store_entry.kind, ContentKind::Warehouse);
+    T2D_CHECK_EQ(store_entry.name, std::string("stone"));
+    T2D_REQUIRE(store_entry.materials.size() == 1u);
+    T2D_CHECK_EQ(store_entry.materials[0].name, std::string("stone"));
+    T2D_CHECK_EQ(store_entry.materials[0].count, 20);
+    T2D_CHECK_EQ(store_entry.seconds, 10.0f);
+    T2D_REQUIRE(store_entry.preview.images.size() == 1u);
+    T2D_CHECK(store_entry.preview.images[0].part.empty());
+
+    T2D_CHECK(unlocks.set_unlocked(ContentKind::Warehouse, warehouse_id, false));
+    sidebar.rebuild(registry, report.definitions, unlocks);
+    T2D_REQUIRE(sidebar.categories().size() == 1u);
+    T2D_CHECK(sidebar.categories()[0] == types::BuildingCategory::Extraction);
+    T2D_CHECK_EQ(sidebar.entries().front().kind, ContentKind::Drill);
+
     // And it ships the story's **first layer**: how big it is, what its floor is made of, what is
     // scattered on it and how much. That is the designer's data (docs/GAME_DESIGN.md sections 7.3, 7.8,
     // 7.10); what the engine owns is the format, and what this pins is the data as written.
@@ -763,6 +823,49 @@ T2D_TEST(a_part_that_asks_to_be_skipped_is_left_out_quietly) {
     const ContentPack* pack = find_pack(pipeline, "pack");
     T2D_REQUIRE(pack != nullptr);
     T2D_CHECK_EQ(pack->files.size(), 1u);   // the skipped file is not one of the pack's files
+}
+
+T2D_TEST(a_building_the_data_locks_is_not_offered_until_it_is_unlocked) {
+    // `default_unlock` is a **definition** attribute: it says what a new save starts with, and the build
+    // sidebar offers only what that save has unlocked (docs/GAME_DESIGN.md section 1.44). A real .ecfg
+    // pack, read by the real pipeline: the entry reads, the save starts locked, and the picker leaves it
+    // out until something unlocks it - no technology system exists yet, set_unlocked() is its door.
+    Scratch scratch;
+    scratch.write("locked/pack.ecfg", "id:\"locked\"\nname:\"Locked building\"\n");
+    scratch.write("locked/content/buildings.ecfg",
+                  "warehouse::\n    vault::\n        building::\n            category:\"storage\"\n"
+                  "            default_unlock:false\n");
+    ContentRegistry registry;
+    ContentPipeline pipeline;
+    pipeline.set_pack_directories({scratch.root()});
+    const ContentPipelineReport& report = pipeline.load(registry);
+    T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
+
+    const types::TileDefinition* vault = report.definitions.find_tile(ContentKind::Warehouse, "vault");
+    T2D_REQUIRE(vault != nullptr);
+    T2D_CHECK_FALSE(vault->building.default_unlock);
+    T2D_CHECK_FALSE(vault->building.empty());
+    const ContentId vault_id = registry.find(ContentKind::Warehouse, "vault");
+    T2D_CHECK_NE(vault_id, kNoContent);
+
+    // A new save over this content starts with the one building locked, so the picker is empty -
+    // categories included.
+    BuildingUnlocks unlocks;
+    unlocks.reset(registry, report.definitions);
+    T2D_CHECK_EQ(unlocks.size(), 1u);
+    T2D_CHECK_FALSE(unlocks.unlocked(ContentKind::Warehouse, vault_id));
+    BuildSidebar sidebar;
+    sidebar.rebuild(registry, report.definitions, unlocks);
+    T2D_CHECK(sidebar.entries().empty());
+    T2D_CHECK(sidebar.categories().empty());
+
+    // Unlocked: a building like any other, in the category the data gave it.
+    T2D_CHECK(unlocks.set_unlocked(ContentKind::Warehouse, vault_id, true));
+    sidebar.rebuild(registry, report.definitions, unlocks);
+    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("vault"));
+    T2D_REQUIRE(sidebar.categories().size() == 1u);
+    T2D_CHECK(sidebar.categories()[0] == types::BuildingCategory::Storage);
 }
 
 T2D_TEST_MAIN

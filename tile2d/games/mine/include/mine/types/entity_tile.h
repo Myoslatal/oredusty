@@ -50,6 +50,9 @@ public:
 
     /// The time that has piled up since the last run.
     [[nodiscard]] f32 since_last_update() const { return cadence_.since_last_update(); }
+    /// Puts the remainder back: what a save does when it restores a plot that was half way through its
+    /// period. It is instance state, not a definition attribute (docs/GAME_DESIGN.md section 1.35).
+    void set_since_last_update(f32 seconds) { cadence_.set_since_last_update(seconds); }
 
 protected:
     /// What the plot does when its turn comes. \p elapsed is how much time this run accounts for: the

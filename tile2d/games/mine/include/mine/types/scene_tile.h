@@ -45,6 +45,16 @@ public:
     /// Brings the plot up to date if it needs it, and returns whether on_refresh() ran.
     bool refresh();
 
+    /// True while the plot has been placed but is **still going up**: it covers its cells and is drawn
+    /// like any other, but it does nothing yet - it is not brought up to date, not ticked, takes no click
+    /// and no dragged drop until its build is done (docs/GAME_DESIGN.md section 1.37). It is **state of
+    /// this plot** and not a definition attribute: two plots of one entry can be at different stages
+    /// (docs/GAME_DESIGN.md section 1.35).
+    [[nodiscard]] bool under_construction() const { return under_construction_; }
+    /// Sets it, which the build animation does when the sweep starts and when it is done. Content that
+    /// takes no time to build is never under construction: being finished is the default.
+    void set_under_construction(bool value) { under_construction_ = value; }
+
     /// The container this plot holds things in, when it has one (types/container.h): it is what a double
     /// click selects, and what the panel that selection opens shows (docs/GAME_DESIGN.md section 1.31).
     /// Scenery that keeps nothing - a floor, an ore vein, a wall - holds none, and the default says so;
@@ -62,6 +72,11 @@ public:
     /// The building sub-object of this plot, when its content declares one (types/building.h).
     [[nodiscard]] const Building* building() const;
 
+    /// The complete render preview of this scene plot (types/tile.h): its own picture, drawn the way the
+    /// map draws it - mirrored when this plot is (set_mirrored). A plot with no definition, or one whose
+    /// entry names no "image", previews as nothing. \p seconds is not read: scenery does not turn.
+    [[nodiscard]] TilePreview get_preview(t2d::f32 seconds = 0.0f) const override;
+
 protected:
     const TileDefinition* definition_ = nullptr;
     /// What the plot recomputes when it is brought up to date. The default does nothing: content that
@@ -70,6 +85,9 @@ protected:
 
 private:
     bool dirty_ = true;
+    /// Whether its build is still going. Off by default, and off for everything that is not being built:
+    /// a plot is finished unless something says otherwise (mine/build_animation.h).
+    bool under_construction_ = false;
 };
 
 } // namespace mine::types

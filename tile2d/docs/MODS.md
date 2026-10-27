@@ -41,7 +41,7 @@
 * **模组包目录不会被当成内容包扫描**：它的内容文件由模组宿主按清单里 `content:` 的顺序加载（§2）。
   没有这条规则，同一个名字会被注册两次，第二次会被报成"已注册、未替换"的冲突——所以一个目录里
   同时放包和模组是安全的。
-* **工作目录下的 `packs/` 也自动加载**（第二顺位）：`cd tile2d && ./build/debug/games/mine/mine_game`
+* **工作目录下的 `packs/` 也自动加载**（第二顺位）：`cd tile2d && ./build/mine/debug/games/mine/mine_game`
   会同时看到 `tile2d/packs`（你的工作区）和游戏目录下的 `packs`；两条规则指向同一个目录时只算一次。
 * 两条都是**缺省**，只有不写 `--packs` / `--mods` 时才生效：目录不存在**不报错**（没人要求它存在），
   而显式写出来的路径不存在**会**报错。两个开关各自独立——只写 `--packs` 时，模组仍然从默认目录找。
@@ -65,8 +65,8 @@
       art/wall.png            # 资源：内容条目用相对**声明它的那个文件**的路径引用
       README.md               # 不是 .ecfg 的东西都是你的（说明、草稿、配色表……）
 
-    ./build/debug/games/mine/mine_game --world story --start 1 --packs packs
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/my_pack
+    ./build/mine/debug/games/mine/mine_game --world story --start 1 --packs packs
+    ./build/mine/debug/games/mine/mine_game --world sandbox --start 1 --packs packs/my_pack
 
 ![会话界面里的内容包](../games/mine/docs/images/session_packs_en.png)
 
@@ -153,7 +153,7 @@ __not_main:"false"     # 与不写一样：普通文件（`true` / `false` 两�
 
   ```sh
   # 本体占位内容 + 仓库里的三个测试包（其中两个带 art/*.png），bands 填充：每项内容一条横带
-  ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+  ./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
       --content games/mine/tests/data/placeholder_content \
       --packs games/mine/tests/packs --fill bands
   ```
@@ -297,11 +297,11 @@ warehouse::
 
 ```sh
 # 本体自己的故事：第 1 层 100x100，地板泥地，20 到 35 块石头（content/layers.ecfg）
-./build/debug/games/mine/mine_game --world story --world-view 1
+./build/mine/debug/games/mine/mine_game --world story --world-view 1
 
 # 一个包往故事里加层（games/mine/tests/data/story_content 是测试替身）：
 # 它加的两层排在本体那层后面，成为第 2、3 层
-./build/debug/games/mine/mine_game --world story --world-view 1 \
+./build/mine/debug/games/mine/mine_game --world story --world-view 1 \
     --packs games/mine/tests/data/story_content
 ```
 
@@ -327,7 +327,7 @@ warehouse::
         mod.ecfg
         native.cpp -> libexample_native.so
 
-    ./build/debug/games/mine/mine_game --world sandbox --start 1 \
+    ./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
         --content <一个内容包目录> --mods mods
 
 `--mods` 可重复。不写 `--mods` 时用默认目录（与内容包同一批，见 §0 开头），所以模组也可以直接
@@ -338,9 +338,9 @@ warehouse::
 ```sh
 # 上图（仓库里的两个示例模组，原生模块在构建目录里）：本体 6 项 + 游戏自带的 5 项（泥地、石头、第 1 层、
 # 物品石头、石头仓库）+ 模组 6 项 = 17 项，bands 填充（M2.16 重出：这一屏的状态栏写着 17 CONTENT）
-./build/debug/games/mine/mine_game --world sandbox --start 1 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
     --content games/mine/tests/data/placeholder_content \
-    --mods build/debug/games/mine/tests/mods --fill bands
+    --mods build/mine/debug/games/mine/tests/mods --fill bands
 ```
 
 上图里 `structure #1..#3`、`machine #1..#2` 是本体内容，`structure #4..#5`、`machine #3..#6` 来自两个模组；
@@ -554,8 +554,8 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 上面这些图不是手点出来的，而是**脚本隔着网络按键**跑出来的（调试输入服务器，见 `docs/SANDBOX.md` §10）：
 
 ```sh
-./build/debug/games/mine/mine_game --world sandbox --start --content <本体内容.ecfg> \
-    --packs games/mine/tests/packs --mods build/debug/games/mine/tests/mods \
+./build/mine/debug/games/mine/mine_game --world sandbox --start --content <本体内容.ecfg> \
+    --packs games/mine/tests/packs --mods build/mine/debug/games/mine/tests/mods \
     --input-server 7777 --headless --frames 100000 &
 printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0.1 7777
 ```

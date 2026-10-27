@@ -635,15 +635,20 @@ T2D_TEST(the_sweep_of_a_build_is_the_models_to_answer_for) {
     sweep.start(nullptr, 5.0f);
     sweep.start(plot.get(), 0.0f);                       // an entry that says time:0 goes up at once
     T2D_CHECK(sweep.empty());
+    // An ignored build leaves the plot finished: it is a plot that takes no time, not one going up.
+    T2D_CHECK_FALSE(plot->under_construction());
 
     sweep.start(plot.get(), 4.0f);
     T2D_REQUIRE(sweep.size() == 1u);
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.0f);
+    // The sweep is the build: while it runs the plot is **still going up**, which is what stops it from
+    // running, taking clicks and taking drops (types/scene_tile.h).
     sweep.start(plot.get(), 4.0f);                       // placing it twice does not build it twice
     T2D_CHECK_EQ(sweep.size(), 1u);
 
     sweep.advance(1.0f);
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.25f);
+    T2D_CHECK(plot->under_construction());   // half way up is still not up
     sweep.advance(1.0f);
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.5f);
     sweep.advance(0.5f);
@@ -652,11 +657,15 @@ T2D_TEST(the_sweep_of_a_build_is_the_models_to_answer_for) {
     sweep.advance(10.0f);
     T2D_CHECK(sweep.empty());
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 1.0f);
+    T2D_CHECK_FALSE(plot->under_construction());   // done: the plot is a finished plot again
 
-    // Leaving the layer forgets the sweeps: those plots are not the ones on screen any more.
+    // Leaving the layer forgets the sweeps: those plots are not the ones on screen any more - and a
+    // forgotten sweep finishes its plot, because a plot outlives the build it was on.
     sweep.start(plot.get(), 4.0f);
+    T2D_CHECK(plot->under_construction());
     sweep.clear();
     T2D_CHECK(sweep.empty());
+    T2D_CHECK_FALSE(plot->under_construction());
 }
 
 T2D_TEST(paying_for_a_build_that_cannot_be_paid_for_leaves_the_stock_alone) {

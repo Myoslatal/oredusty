@@ -192,7 +192,118 @@
     `SpriteBatch::draw_quad_rotated` 多一个带中心点的重载（原来那个等于"以正中为心"）。实测：`x:0.25` 的钻头转起来横杆会
     **甩出格子外**，以正中为心时不会。
 
-以上三十八条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
+39. **地块的完整渲染预览（`get_preview`），与从它取图的建筑侧边栏**（原话）："为地块基类添加get_preview接口，可以通过该接口
+    获取地块的完整渲染预览，然后修改建筑侧边栏显示的建筑图标从该接口获取"。于是：地块基类 `Tile` 多了一个接口
+    `[[nodiscard]] virtual TilePreview get_preview(秒 = 0)`（`types/tile.h`）。`TilePreview` 是一张**绘制清单**：按绘制顺序
+    排好的图片（**第一张在最下面**），每张写清 `part`（空 = 条目自己的 `image`；`"top"` = 钻头会转的顶部，§1.38）、
+    `mirrored`（是否左右翻转绘制）、`radians` 与 `pivot`（绕**图片自身坐标**里的一点转，`(0,0)` 左下、`(1,1)` 右上，§1.38）。
+    它是**绘制清单不是像素**：逻辑层只说"画哪些图、怎么摆"，不碰纹理与 GPU——`types/tile.cpp` 里基类的默认实现返回空
+    （基类没有定义，所以没有图）。`SceneTile` 答自己的 `image`，并按 `mirrored()` 决定是否翻转（§1.35 的定义属性；`秒` 不用：
+    景物不转）；`Drill` 先答底座，**只有底座存在时**才把顶部追加成第二张——`radians = spin_angle(秒)`、`pivot = spin_origin()`，
+    所以一次调用就得到"此刻完整的一台钻头"；没有底座时顶部**不单独出现**（世界视图此刻画的是回退色，预览跟着它）。建筑侧边栏
+    不再自己按 `kind + name` 只查一张 `image`：`rebuild()` 用 `make_tile()` 造出该条目会放置的地块、问它的 `get_preview()`，
+    存一份**0 秒静帧**（`BuildEntry::preview`，`mine/build_sidebar.h`），绘制时逐张画（`draw_quad_rotated`，查不到纹理的那张跳过）。
+    **钻头的侧边栏图标因此第一次同时有底座和顶部**；世界视图的地图绘制路径本次不动。顺带修了一处页码 bug：图标与名字两个
+    绘制循环原先拿**布局槽位下标**直接索引 `entries()`，第 2 页会画出第 1 页的条目，现在按 `page() * kPageSize + slot` 取
+    （与模型自己的 `entry_at()` 一致）。
+
+40. **建造中的建筑不更新、不接受交互；钻头预览带顶部**（原话）："钻头的预览图要带上top，以及建筑在建造过程中不应该更新/接受点击等，
+    必须等到建造完成"。于是：① **钻头的完整预览就是两张图**——底座加会转的顶部（§1.39 的 `get_preview`，侧边栏 `rebuild()` 取 0 秒
+    静帧），并且用**本体内容**（`content/` 里的石头钻头）钉了一条端到端断言；② 新增一个**地块实例状态**
+    `SceneTile::under_construction()`——不是 `building::` 里的定义属性：同一种建筑的两块地可以一块在建、一块已完成（§1.35）。
+    `BuildAnimation::start()` 真正开始扫线时置 true，扫线走完（`advance()` 到 `progress() >= 1`）或 `clear()`（离开这一层）时置回
+    false；`time:0` 或没有时间的建筑一放下就是完成态；③ **建造中一律不做事**：`EntityTile::advance()` 不取回合，**时间也不攒**
+    （cadence 不推进，所以建成后的第一回合是完整周期之后）、`SceneTile::refresh()` 跳过但把 dirty 留着（建成后补做）、仓库
+    `Warehouse::on_click()` 不打开面板（已经打开的会关掉）、`PointerDrag` 跳过建造中的仓库（拖入判定当没人接，drop 留在原地）、
+    app 的 `selected_plot()` / `select_at()` 不把建造中的建筑当选中、也不当付款仓库；④ **建造中的贴图用的是完整预览**：世界层
+    跳过建造中的地块（`draw_world_layer`），由扫描线那一趟（`draw_builds`）拿 `get_preview(0 秒)` 的**每一张图**按线截断地画
+    出来——钻头因此是底座**加顶部**的下半截，而不是只有底座；线上（还没扫到的地方）露出下面的地层。顶部取 0 秒静帧（不转），
+    建成后照旧用世界时钟。
+
+41. **建造菜单里选中的建筑要高亮**（原话）："建造菜单选中的建筑要高亮"。于是：§1.36 说的**强调色方框**现在真的看得见——
+    方框原来在**界面那一趟**（`draw_build_sidebar`）画，而建筑的贴图在**图片那一趟**（`draw_panel_images`）画，贴图铺满整个格子，
+    把先画的方框盖住了；现在方框改到图片那一趟里、**在该条目的贴图画完之后**再画（选中项指针比较，不再从槽位反推），所以
+    有贴图的建筑选中时也有一圈强调色。格子里的名字仍在图片下面（本体的做法是名字与材料写在栏底那一行），本次只动方框。
+
+42. **建造侧边栏的收起/返回按钮在任何选中状态下都可见**（原话）："修复选择建筑或建造时建造侧边栏返回按钮可见性切换的问题"。于是：
+    侧边栏（展开时在面板左上、收起时在屏幕右边缘）的那个 `<`/`>` 按钮**始终画出来**，不随"有没有选中建筑"变化——原来
+    `draw_build_sidebar()` 在"没选中建筑"的分支里提前 `return`，把末尾的 `draw_sidebar_button()` 一起跳过了，所以默认看不见、
+    选中建筑才出现、放下建筑后选中被清空又消失；同一条提前返回也吞掉了翻页标签。现在**页码与按钮在分支之前无条件画**，
+    详情行再按有无选中分别处理。
+
+43. **掉落物堆：同物品靠近就自动合成一堆，一次只拖一个出来**（原话）："添加多个相同物品的靠得很近的掉落物自动合成一个掉落物堆的
+    机制，掉落物堆和掉落物其他性质相同，但每次只能从中拖出一个物品来"。于是：`Drop` 多了一个 `count`（默认 1，**始终 >=1**），
+    `count > 1` 就是**掉落物堆**——不新增子类，"堆"和"单个掉落物"是同一个类。判定与合并：同 `kind + id` 的两个 Drop 距离
+    **<= `MineLayer::kDropMergeRadius`（0.75 格，与指针抓取距离是同一个数）** 时自动合成一个，**最近优先、距离相同取 serial 小者**，
+    存活者**保持自己的位置**（后到的走进来，先到的不动）。谁会触发：钻头每次抛出改走 `MineLayer::drop()`（落地即并）；指针把东西
+    **放开在堆旁**也会并回去（`Left` / `Refused` 两种结果都并，`Stored` 不并——它已经进仓库了）。**从堆里拖永远只拿 1 个**：按住
+    一堆时堆自己 `count - 1` 留在原地，指针拿着一个**新造的 `count = 1`** 的 Drop 走（所以原地放回会并回去、拖远则地上变成
+    "堆 + 单个"、总数守恒）；拖进仓库也只存 1 个（`DragInto` 一直是按 1 件收），**绝不可能一次存整堆**。堆的其它性质与掉落物
+    完全一样：同一张图、同样大小、不被层 tick、identity 与位置就是它自己的（§1.25）。调试用：`MineLayer::dump_text()` 的实体行
+    在堆上写成 ` at x,y xN`。
+
+44. **建筑解锁：unlocked 是共享存档属性，只有解锁的建筑进建造栏**（原话）："为建筑子对象添加一个unlocked共享属性，进入存档，
+    只有解锁的建筑才会出现在建造菜单里，可以通过定义器的default_unlock字段设置初始解锁状态"。于是：① `building::` 多了一个
+    定义字段 `default_unlock`（bool，**默认 true**，不写就是解锁——老内容照旧可见，不会因为加了新字段突然从建造栏消失）；
+    `unlocked` 本身**不是定义属性**，是**每份存档、每个建筑内容一份**的共享状态（不是每块地一份，也不是常量），住在
+    `mine/building_unlocks.h` 的 `BuildingUnlocks` 里，key 是 `kind + id`，同一建筑的所有实例读同一份答案。② 建造栏（§1.36）
+    只收 `unlocked` 的条目，所以一个类别里只有锁着的建筑时它整列都不出现；页面、选中、点击逻辑不变。③ 新存档 `reset()` 用
+    每个建筑定义的 `default_unlock`；内容重载 `refresh()` 保留已有状态、新内容取默认、消失的丢掉（只适合 id 不变的重载）；
+    游戏里的 F5 会重排 id，走的是**按名字**的存档路径：旧表 + blob → `ContentRemap::build(旧表, 新注册表)` → `apply_saved()`，
+    这也是以后读存档的路径。④ 存档侧是版本化 blob：magic `'UNL1'`（`0x314C4E55`）+ version 1 + varint 条数 + 每行
+    `kind(u8)` / `id(varint)` / `unlocked(u8)`；写**全部**条目（锁着的也写，否则默认值一改就丢信息）；读的时候 blob 里的 id
+    属于存档自己的 `ContentTable`，所以必须经 `ContentRemap` 翻成当前 id——只改当前存在的建筑，解析不完整（magic/版本不对、
+    截断、kind 越界、id 为 0 或过大、bool 不是 0/1、重复 kind+id、尾部多余字节）就**一行都不改**并返回 false。⑤ **本轮不落盘**：
+    游戏还没有完整存档系统（设计者已确认），blob 与读回路径都已就绪，等存档接进来直接写。⑥ `set_unlocked()` 是以后科技/
+    需求系统接进来的门（现在没有解锁 UI/触发器）。
+45. **石头仓库成为建筑：造价 20 石头、10 秒、默认不解锁**（原话）："设置石头仓库为建筑，造价20石头，10s，默认不解锁"。于是：
+    本体内容 `content/warehouses.ecfg` 的 `warehouse:: stone` 多了 `building:: materials:["stone",20] time:10
+    category:"storage" default_unlock:false`（`image` 与 `capacity:100` 不变）——石头仓库现在是**存储类建筑**，而且是
+    **默认锁定**的：新存档的建造栏里只有 Extraction（石头钻头，§1.34/§1.38），**Storage 整类都不出现**，直到以后有东西
+    调用 `set_unlocked()`（§1.44）解锁它。造价 20 石头、10 秒建好；解锁后与别的建筑一样走"从选中的仓库里付钱 + 扫描线
+    建造"（§1.37）。仓库本身的语义不变（场景地块、容器、拖入、点击，§1.27/§1.28）：**故事层里 `place_block` 直接放下的
+    那块仓库不受影响**——层规则直接放置内容，不走建造栏，解锁与否不是放置条件。
+
+46. **存档功能：`.t2dsave` 做成独立模块，Mine 的存/读入口接上**（原话）："做存档功能，格式命名为.t2dsave，存档做成单独的模块方便多个游戏，甚至是多个机制不同的游戏复用"。于是：
+    ① **容器是框架的，内容是游戏的**：`t2d/save/archive.h`（header-only，CMake 的 `INTERFACE` target `t2d::save`）只做容器——
+    magic、格式版本、游戏名、游戏版本、chunk 表；每个 chunk 是四字符 id + 游戏自己的版本 + 长度 + CRC-32 + payload，它不认识任何
+    游戏的名字、格子或实体。格式、限制与"第二个游戏怎么复用"的完整说明在 `docs/SAVE.md`。
+    ② **Mine 的六个 chunk**：`META`（会话、世界/层的种子与形状、世界时钟、镜头）、`CONT`（注册表名字表）、`UNLK`
+    （`BuildingUnlocks`）、`PLOT`（按放置顺序的每块地：容器、计时、钻头产量、建造中）、`ENTT`（掉落物）、`BUIL`（进行中的
+    扫描线）；`game` 是 `"mine"`，`game_version` 与每个 chunk 的版本都是 1。读档按**名字**把存档 id 翻成本次构建的 id，
+    名字缺一个就整档拒绝（不会退回 id 相同的别的东西）。
+    ③ **要么整座矿，要么什么都没有**：地块经 `MineLayer::place` 按存档顺序重放，放置规则第二次也照样生效——一块放不下、
+    容器装不下存档里的东西，整档拒绝；`BUIL` 与 `PLOT` 的"建造中"必须一一对应（每块建造中的地恰好一条能恢复的扫描线）；
+    只写 `alive()` 的掉落物；镜像计数在地块全部放好后用 `MineLayer::recount_mirrored()` 重算（放置时掷的骰子不是存档里的那个）。
+    ④ **界面入口**：F7 保存、F8 读取，默认 `save.t2dsave`（当前工作目录），`--save <path>` 改路径、没写扩展名由
+    `t2d::save::with_extension` 补上；`--load <path>` 启动即读档并直接进入世界视图（跳过开始/会话界面），失败回开始界面并报错。
+    读档失败**不动当前世界**：`load_game_save` 先完整读、完整校验，成功才替换——替换前先 `building_.clear()`（旧地块还活着）、
+    丢掉指针上拖着的掉落物，换世界后恢复会话/解锁/时钟/镜头、重建建造栏、清选中与双击。状态行文案进 `assets/text/ui.ecfg`
+    （`world.save.ok/failed/no_layer`、`world.load.ok/failed/no_file`，三种语言）。
+    ⑤ **不保存**：钻头的 RNG 流（读档后按内容 id/锚点重新播种，产出序列不保证逐位相同）、界面状态（选中、双击计时、
+    拖拽、建造栏开合）；内容包/模组的加载列表本身也不进存档——存的是内容**名字**，读档用当前进程加载的那一套。
+    ⑥ **测试**：容器 `tile2d/tests/test_save.cpp` 11/158（chunk、CRC、限制、两个机制完全不同的游戏共用一个容器）；模型
+    `games/mine/tests/test_game_save.cpp` 9/152（会话/世界/地块/容器/掉落/建造/解锁/镜头的往返、换注册表按名字、缺内容/
+    放不下/装不下/`BUIL` 不一致/坏容器整档拒绝、dead drop 不写、mirrored 计数重算）；全量 **35/35**（debug 与 release）。
+    app 侧没有单测：存读入口靠模型测试 + 真机（见（三十六））。
+
+47. **自动存档：每 5 分钟一次，手动退出游戏再存一次**（原话）："设置每5分钟/手动退出游戏（例如点窗口的叉）存档一次"。于是：
+    ① **计时自动存档**：`MineOptions::autosave_seconds`（默认 300 秒，0 关闭；`--autosave-seconds <秒>`）与
+    `MineApp::autosave_elapsed_`；`on_update()` 在世界视图的这一帧走完之后调 `maybe_autosave(dt)`：只有 `screen_ == World`
+    且世界里还有层才累计，其它界面清零（**只在矿里计时**），到时先清零再 `save_game()`（失败不会每帧重试，等下一个周期）。
+    手动 F7、成功的 `save_game`、`load_game_file`、`open_world` 都把计时清零——周期从最后一次存档起算。
+    ② **退出存档**：窗口的叉（GLFW should_close -> 循环 break -> `on_shutdown`）与 `quit()`/调试 quit 都走 `on_shutdown`；
+    在释放 `batch_` / `text_` 等 GPU 资源之前，只要内存里还有层（世界视图、会话/内容界面都算）且允许写，就 `save_game()`
+    一次；失败只 warn，不阻止退出。开始界面没有层，所以不存。
+    ③ **headless 约束**：headless 运行默认**不写存档**（截图/脚本不该污染 `save.t2dsave`），只有命令行显式给了 `--save` 或
+    `--load` 才允许自动/退出写；窗口模式始终允许。判断集中在 `save_allowed()`，自动存档与退出存档共用；F7 是玩家明确按下
+    的，不受这条限制。
+    ④ **文案/日志**：成功沿用 `world.save.ok`（自动存档每 5 分钟在状态行显示一次 SAVED...），失败走 `world.save.failed`；
+    自动触发与退出存档各多一条 `T2D_INFO("autosave: ...")`。没有新增语言键。
+    ⑤ **没做**：存档槽位、自动存档的界面开关（只有命令行）、网络同步存档；本轮不新增测试二进制（app 无单测），靠模型层
+    与既有的 F7/F8 真机路径验证。
+
+以上四十七条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
 
 ---
 
@@ -1438,6 +1549,230 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
 
 ![拖进来的石头现在是物品，第二台钻头就是用它们建的](../games/mine/docs/images/world_drop_paid_built_en.png)
 
+### M2 交付状态（二十九）：地块的完整渲染预览，与从它取图的建筑侧边栏（已落地，含单测）
+
+设计者原话："为地块基类添加get_preview接口，可以通过该接口获取地块的完整渲染预览，然后修改建筑侧边栏显示的建筑图标从该接口获取"
+（§1.39）。
+
+* **接口切在基类，答案留在各种地块里**：`Tile::get_preview(秒)` 返回 `TilePreview`——按绘制顺序的图片清单
+  （`types/tile.h`：`PreviewImage{part, mirrored, radians, pivot}`），基类默认返回空；`SceneTile` 答自己的 `image`（并按
+  `mirrored()` 决定翻转），`Drill` 在底座之上追加绕 `spin_origin` 转 `spin_angle(秒)` 的 `"top"`。**没有底座时不单独出顶部**
+  ——世界视图此刻画的是回退色，预览跟着它，不发明第二种画法。
+* **侧边栏只消费**：`BuildEntry` 多一个 `preview` 字段（`mine/build_sidebar.h`），`rebuild()` 用
+  `make_tile(*definition, id, 0, {0,0})` 造出该条目会放置的地块再问它（`src/build_sidebar.cpp`），存 0 秒静帧；`app.cpp` 的
+  图片绘制循环遍历 `entry.preview.images`，用 `image_key(kind, name, part)` 查纹理、
+  `draw_quad_rotated(格子, uv, pivot, radians, 颜色)` 逐张画。**侧边栏里不再有第二个"这个建筑长什么样"的答案**：
+  以后一种新的绘制方式（多张图、会转的部件）只要地块自己会答，侧边栏就画得对。
+* **顺带修的页码 bug**：图标与名字两个绘制循环原先用布局槽位下标直接索引 `sidebar_.entries()`，第 2 页画的是第 1 页的条目；
+  现在按 `page() * kPageSize + slot` 取并做上界判断，与模型自己的 `entry_at()` 一致。
+* **单测**：`test_mine_types` 20 → 21 用例 / 244 → 256 断言（无定义、无图皆为空；有 `image` 时一张、`part` 空、`pivot` 正中、
+  `set_mirrored` 后镜像、经 `const Tile&` 调用一致）；`test_drills` 7 → 8 用例 / 98 → 113 断言（底座+顶部两张、
+  `part` `""`/`"top"`、`radians == spin_angle(秒)`、`pivot == spin_origin`、镜像对两张同时生效、无 `top_image` 一张、
+  有 `top_image` 无 `image` 为空、无定义为空）；`test_build_sidebar` 2 → 3 用例 / 43 → 52 断言（`rebuild` 后带 `image` 的条目
+  一张、无图条目为空、钻头条目两张且第二张 `part == "top"`——证明预览真的来自 `get_preview()`）。`mine_app` 在 `-Werror` 下
+  零警告编译，三个测试套件全绿。
+* **没做**：世界视图的地图绘制路径（`draw_world_layer`）仍按纹理分组批处理（一张纹理一次 draw call），没有改走
+  `get_preview()`——改成逐地块问预览会把批处理拆散，是**下一轮**的事，先记在这里不装作没看见。
+
+### M2 交付状态（三十）：建造中的建筑不更新、不接受交互；钻头预览带顶部（已落地，含单测）
+
+设计者原话："钻头的预览图要带上top，以及建筑在建造过程中不应该更新/接受点击等，必须等到建造完成"（§1.40）。
+
+* **状态放在地块实例上，不放定义**：`SceneTile::under_construction()`（`types/scene_tile.h`）是一块地自己的事——同一种建筑
+  的两块地可以一块在建、一块已完成，而 `TileDefinition` 是**享元**、是所有同种地块共享的那一份记录（§1.35）。
+  `BuildAnimation::start()` 真正开始扫线时置 true，`advance()` 走到 `progress() >= 1` 或 `clear()`（离开这一层）置回 false；
+  `time:0` 与被忽略的 start 保持完成态。
+* **建造中一律不做事**：`EntityTile::advance()` 直接返回 false（**cadence 不推进**，所以建成后的第一回合是完整周期之后，
+  建造花掉的时间不算欠它的）；`SceneTile::refresh()` 跳过但**不消费 dirty**；仓库 `on_click()` 当成"点在别处"（不打开、
+  已经打开的关掉）；`PointerDrag` 的仓库查找跳过建造中的仓库（拖入判定当没人接，`ReleaseResult::Left`，drop 留在原地）；
+  app 的 `selected_plot()` / `select_at()` 不选中它、也不拿它当付款仓库（§1.36 的"钱从选中的仓库里出"因此不会用一栋没建完的
+  仓库付账）。点击循环与拖入路径本身不用改：拦截在模型里。
+* **建造中的贴图 = 完整预览按线截断**：世界层不再整块画建造中的地块（`draw_world_layer` 跳过它），扫描线那一趟
+  （`draw_builds`）用 `get_preview(0 秒)` 逐张图截断绘制——钻头因此是**底座 + 顶部**的下半截而不是只有底座，镜像与旋转
+  中心照旧；线上露出下面的矿/地板（没扫到的地方就是没建成）。顶部在建成前是静帧（0 秒），建完照旧用世界时钟。
+* **设计者第一句的端到端证据**：`test_content_pack` 的 `the_games_own_content_is_a_pack_that_ships_its_own_art` 现在从
+  **本体内容**一路断言到侧边栏条目——`content/` 里的石头钻头 → 定义 → `make_tile()` + `get_preview()` → `BuildSidebar` 的
+  第一条：`preview.images.size() == 2`、第一张 `part` 空、第二张 `part == "top"`。
+* **单测**：`test_mine_types` 22/272（建造中 refresh 不干活且 dirty 留着、机器不取回合也不攒时间）；`test_world` 19/194
+  （扫线用例补：start 置位、半程仍置位、走完与 clear 复位）；`test_drills` 9/123（建造中 tick 不出料、建成后整周期才出料）；
+  `test_warehouses` 8/138（建造中点击不打开、已打开的关掉；建造中拖到仓库格得 Left 且 drop 留在原地、建成后 Stored）；
+  `test_content_pack` 18/281（上一条）。`mine_app` 在 `-Werror` 下零警告，五个套件全绿。
+* **实测**（本机 Vulkan，1280×720、80 px/格，一份带本体美术的验证包）：建造中的钻头只显示扫描线以下的**底座+顶部**，
+  线上是它下面的矿；点击建造中的仓库没有任何面板，建成后再点出现 `WAREHOUSE 0/50 EMPTY`；建成后钻头顶部开始转并丢出掉落物。
+* **没做**：`draw_world_layer` 的**普通**绘制仍按纹理分组批处理，没有改走 `get_preview()`（只有建造中那一趟用）；没有新增截图文件。
+
+### M2 交付状态（三十一）：修——建造菜单里选中的建筑没有高亮（已落地，实测）
+
+设计者报的："建造菜单选中的建筑要高亮"。
+
+* **根因是两趟绘制的顺序**：选中的方框在 `draw_build_sidebar()`（界面那一趟，字形图集）里画，建筑的贴图在
+  `draw_panel_images()`（图片那一趟，每张内容图一张纹理）里画；贴图铺满整格，于是**先画的方框被后画的图标盖住**。
+  本体内容都有 `image`，所以真机上选中建筑时看不到方框；没有贴图的内容（比如测试夹具）反而看得见——这正是截图里的差别。
+* **修法**：方框挪进图片那一趟，在**该条目的贴图之后**画（`sidebar_.selected() == &entry` 直接比指针，页内槽位与条目下标
+  仍按 `page() * kPageSize + slot` 对齐）；界面那一趟不再画第二个方框。栏底那一行的名字与材料本来是读选中项，不受影响。
+* **实测**（本机 Vulkan，1280×720、80 px/格，本体美术验证包）：选中第二个钻头（`demo`）时它的格子上有一圈强调色方框，
+  栏底写 `demo  COST STONE x10  5s`；改选第一个钻头（`stone`）后框跟着换，栏底写 `STONE  COST STONE x10  5s`。
+* **没做**：格子里的名字仍在图标下面（视觉上被贴图盖住），本体靠栏底那一行读名字；如果需要名字浮在图标上也说一声。
+
+### M2 交付状态（三十二）：修——建造侧边栏返回按钮随选中状态忽隐忽现（已落地，实测）
+
+设计者报的："修复选择建筑或建造时建造侧边栏返回按钮可见性切换的问题"。
+
+* **根因是一处提前返回**：`draw_build_sidebar()` 末尾才画 `draw_sidebar_button(layout)`，但"没选中建筑"的分支（栏底写
+  `pick a building`）先 `draw_fitted(... build.none ...)` 然后 **`return`**——按钮、以及同一段里的**翻页标签**都被跳过。
+  于是默认（刚展开）看不到按钮；选中建筑走正常路径，按钮出现；放下建筑后 `clear_selection()` 清空选中，下一帧又回到提前返回，
+  按钮再次消失——正是设计者说的"选择建筑或建造时可见性切换"。
+* **修法**：把**页码与按钮移到详情的选中分支之前**，无条件绘制；详情行仍按有无选中分别写名字/材料或 `pick a building`。
+  模型与布局没动（`BuildSidebar::layout()` 两种状态本来都有 `toggle` 矩形，点击路径也一直在）。
+* **实测**（本机 Vulkan，1280×720、80 px/格，本体美术验证包）：
+  展开未选建筑 → `>` 在面板左上；选中 `demo` → `>` 仍在；点地图放下钻头（选中被清空）→ `>` 仍在；建造中 → `>` 仍在；
+  按 B 收起 → 右边缘竖直居中的 `<` 仍在。四条展开态截图里按钮完全一样，不再忽隐忽现。
+* **没做**：按钮外观/位置未改（仍是 §1.36 的小方块）；没有新增截图文件。
+
+### M2 交付状态（三十三）：掉落物堆（已落地，含单测）
+
+设计者原话："添加多个相同物品的靠得很近的掉落物自动合成一个掉落物堆的机制，掉落物堆和掉落物其他性质相同，但每次只能从中拖出
+一个物品来"（§1.43）。
+
+* **做法**：`Drop` 加 `count`（默认 1；`set_count` 钳到 >=1，`add` 忽略 0）——**不新增子类**，堆就是"一个大`count` 的 Drop"，
+  所以位置、identity、图、可拖、不被 tick 全都原样复用。`MineLayer` 加 `kDropMergeRadius = 0.75f`、`drop(kind, id, pos, count)`
+  （adopt 之后立刻尝试合并，返回最终承载 count 的那个）与 `merge_drop(Drop&)`（本层内最近的同 kind+id、存活、距离 <= 半径的
+  那个；最近优先、距离相同取 serial 小者；把 count 加给目标并 destroy 被合并者；返回目标或 nullptr）。
+* **谁会让它发生**：① 钻头 `throw_one()` 改走 `layer->drop(...)`，抛出即并；② `PointerDrag::end()` 在 `Left` / `Refused` 之后、
+  返回之前 `merge_drop(*released)`（放回堆旁会并回去；合并后不再碰它）；③ `Stored` 不并——已经进仓库了。
+* **从堆里拖一次只拿 1 个**：`PointerDrag::begin()` 发现最近的可拖实体是 `count > 1` 的 Drop 时，先把它 `set_count(count - 1)`，
+  再在**同一位置裸 adopt** 一个 `count = 1` 的新 Drop 当 held（**不走** `layer->drop`，否则会立刻被并回去），抓取偏移按新 Drop 算。
+  于是"原地松手并回去 / 拖远后堆+单个 / 拖进仓库只 +1"三件事都是同一个机制推出来的。
+* **单测**：`test_drops` 4 → 7 用例 / 72 → 151 断言（合堆规则：同物品、不同物品、不同 kind、超距、正好在半径上、最近优先、
+  死的不并、无可并不为 nullptr；从堆里拖：原地放回并回 3、拖远守恒、拖进仓库 +1、剩 1 时拖走堆本身；放开在堆旁会并、
+  不同物品不并）；`test_warehouses` 8 → 9 用例 / 138 → 157 断言（堆 3 拖三次进仓库：仓库依次 1/2/3、堆 3 → 2 → 1 → 消失、
+  三次都 `Stored`、最后地面 0 个实体）；`test_drills` 9 → 10 用例 / 123 → 132 断言（20 个周期：所有存活 Drop 的 count 之和 ==
+  `produced()`、至少一个堆、地面 Drop 数 < 抛出数、全部 `kind == Item`；另外两个既有钻头用例改为按"物品数/存活堆"断言）。
+  其余套件计数不变；全量 **debug 32/32、release 32/32** 绿。
+* **实测**（本机 Vulkan，1280×720、80 px/格，本体美术验证包；起始仓库 10 石，建钻头花掉 10）：钻头 `demo`（1 秒一抛）
+  5 秒建成后再跑约 9 秒，地面只有 **4 个掉落物**（按物品图的颜色连通块数；9 次抛出若不合堆应是 9 个），说明落地即并；
+  对着同一个堆连拖三次进仓库，仓库面板依次 `1/100`、`2/100`、`3/100`（每次只 +1，堆一直留在地上），第四次换另一个堆再
++1 到 `4/100`，每次底部状态行都是 `STORED item #1 STONE`——**一次只拖出一个**，没有整堆进仓库。截图在
+  `build/verify-shots/pile_after.png`、`pile_drag1..3.png`、`pile_drag4_other.png`（build 目录，未入库）。
+* **没做**：① **堆没有数量角标**——图与单个掉落物完全一样（同一张图、同样大小），看不出堆里有几个；② **没有做堆与堆的自动
+  合并**：正常玩法里堆不可整体拖动，一个堆不会自己跑到另一个堆旁边，所以不会出现"两个靠得太近的堆"；若以后有东西推着堆走
+  （传送带之类），需要在移动路径上也调 `merge_drop`。
+
+### M2 交付状态（三十四）：建筑解锁（已落地，含单测）
+
+设计者原话："为建筑子对象添加一个unlocked共享属性，进入存档，只有解锁的建筑才会出现在建造菜单里，可以通过定义器的default_unlock
+字段设置初始解锁状态"（§1.44）。范围已与设计者确认：unlocked 是**存档属性**（可版本化序列化、按 ContentRemap 读回），但游戏
+本体还没有完整存档系统，所以**不落盘**；等完整存档接进来时直接写入。
+
+* **定义侧**：`Building` 加 `default_unlock`（`types/building.h`），`building::` 里可写 `default_unlock:true|false`，不写就是
+  true（老内容保持可见）；不是 bool 在读文件时报错，`building::` 表的未知字段报错里补上了它（materials, time, category,
+  default_unlock）。只读 `building::` 里面，条目顶层的同名字段仍按"设计者的字段"忽略。
+* **存档侧**：新类 `mine::BuildingUnlocks`（`mine/building_unlocks.h` + `src/building_unlocks.cpp`）：一个建筑内容（kind+id）
+  一份 unlocked，所有实例共享；只收 `definition->building` 非空的内容，遍历顺序与建造栏相同（Structure/Machine/Drill/
+  Warehouse/Floor/Ore，注册顺序）。`reset()` = 新存档按 `default_unlock` 建表；`refresh()` = id 不变的重载保留状态、新内容
+  取默认、消失的丢掉；`unlocked()` / `set_unlocked()`（未知建筑 false、不改表）/ `size()` / `entries()`；`serialize()` =
+  `'UNL1'` + version 1 + varint 条数 + 每行 kind/id/unlocked（全部条目）；`apply_saved(blob, ContentRemap)` = 按名字翻 id、
+  只改当前存在的建筑、消失的跳过、未提到的保留默认，解析不完整就什么都不改。
+* **建造栏**：`BuildSidebar::rebuild(registry, definitions, unlocks)` 只收 unlocked 的条目，类别因此只保留有已解锁建筑的
+  （选中/翻页不变）。**app 接线三处**（`app.h` 的 `unlocked_`）：`open_world()` 建层前 `reset()`（新会话）；`reload_content()`
+  先存 `ContentTable` + blob，load 后 `reset()` 再 `apply_saved(blob, ContentRemap::build(before, registry))`——F5 会重排 id，
+  按 kind+id 的 `refresh()` 会把状态贴到别的建筑上，所以重载走按名字的路径（这也正是以后读存档的路径）；`enter_mine_layer()`
+  把状态传给 `rebuild()`。sandbox 不受影响。
+* **单测**：`test_building_unlocks`（新，8/100）覆盖默认值、共享、refresh 的保留/新增/删除、同注册表 blob 往返、换注册表
+  （同名不同 id、顺序变化、消失与新增）的 remap 往返、空表往返，以及 12 种坏 blob 返回 false 且状态不变；`test_mine_types`
+  22/281（新增 default_unlock 的读取/缺省/错值/未知字段/共享断言）；`test_build_sidebar` 4/63（locked 不出现、只有 locked
+  建筑的类别消失、解锁后出现、页码与选中不受影响）；`test_content_pack` 19/295（真实 `.ecfg` 里 `default_unlock:false` 的
+  端到端：定义读到 → 新存档锁着 → 建造栏空 → 解锁后出现）。其余套件计数不变；全量 **debug 33/33、release 33/33** 绿。
+* **实测**（本机 Vulkan，1280×720、80 px/格，验证包 9 个 plot 定义；F6 内容列表里能看到 `drill #3 locked_by_default_copy`、
+  `warehouse #3 locked_vault`、`structure #1 locked_bench` 三条锁定内容）：建造栏的 EXTRACTION 只出现 `stone` 与 `demo` 两个
+  图标（`locked_by_default_copy` 不在），STORAGE 只出现 `vault_demo`（`locked_vault` 不在），只有 `locked_bench` 的 PROCESSING
+  整列不出现；`demo` 不写字段（默认 true）和 `vault_demo` 显式 `default_unlock:true` 都能看到。解锁后出现的路径只有单测
+  （`set_unlocked` + rebuild），真机没有解锁触发器/界面。截图在 `build/verify-shots/` 的 `unlock2_content_verify.png`、
+  `unlock_extraction.png`、`unlock3_demo.png`、`unlock3_vault.png`（build 目录，未入库）。
+* **没做**：① **没有落盘**——游戏还没有完整存档系统（设计者已确认），blob 与 `apply_saved()` 已就绪，接存档时直接写；
+  ② **没有解锁触发器/界面**——`set_unlocked()` 留给以后的科技/需求系统；
+  ③ 本体 `games/mine/content` 当时没改——后来 §1.45 把石头仓库改成了**默认锁定的建筑**（见（三十五））。
+
+### M2 交付状态（三十五）：石头仓库成为建筑（已落地，含单测）
+
+设计者原话："设置石头仓库为建筑，造价20石头，10s，默认不解锁"（§1.45）。
+
+* **内容**：`games/mine/content/warehouses.ecfg` 的 `warehouse:: stone` 增加
+  `building:: materials:["stone",20] time:10 category:"storage" default_unlock:false`；`image` 与 `capacity:100` 不变，
+  文件头注释补了"默认锁定的存储建筑"。**没有改任何代码**：建筑字段解析、解锁状态与建造栏过滤都是 §1.44 已经落地的
+  机制，这条需求是**用数据**把它们串起来。
+* **效果**：新存档 `BuildingUnlocks::reset()` 后有两行（钻头 unlocked、仓库 locked）；建造栏只有 Extraction 一个类别、
+  一个条目（石头钻头），Storage 整类不出现；`set_unlocked(Warehouse, stone, true)` 后 Storage 出现，条目是 stone×20 /
+  10s / 仓库自己的图；再锁回去又消失。**故事层不受影响**：`place_block` 直接放内容，仓库照常放下、照常装着那 10 块石头
+  （`test_layer_rules` 里补了一条断言钉住"锁定不影响直接放置"）。
+* **单测**：`test_content_pack` 19/295 → 19/311（warehouse 定义多出的 building 字段、reset 后 2 行、菜单只有
+  Extraction、解锁后的条目与再锁回去）；`test_layer_rules` 25/830 → 25/831（故事层那块仓库照常工作，且它在新存档里是
+  锁着的）。其余套件计数不变；全量 **debug 33/33、release 33/33** 绿。
+* **实测**（本机 Vulkan，本体内容、不带验证包）：F6 内容列表里 `warehouse #1 STONE WAREHOUSE` 仍在；建造栏只有
+  EXTRACTION（石头钻头），**没有 STORAGE**（仓库是唯一 storage 且默认锁着）；故事层 `place_block` 放下的那块仓库在
+  (50,50) 照常显示，双击出现 `STONE WAREHOUSE 10/100`——**锁定不是放置条件**。截图在 `build/verify-shots/` 的
+  `stone2_content.png`、`stone2_menu.png`、`stone3_panel.png`（build 目录，未入库）。
+* **没做**：不落盘、没有解锁触发器/UI（与 §1.44 一样）——仓库要等以后的科技/需求系统解锁；本轮只改内容数据与断言。
+
+### M2 交付状态（三十六）：存档模块与 Mine 的存/读入口（已落地，含单测）
+
+设计者原话："做存档功能，格式命名为.t2dsave，存档做成单独的模块方便多个游戏，甚至是多个机制不同的游戏复用"（§1.46）。
+
+* **框架：容器独立成模块**。新头文件 `tile2d/include/t2d/save/archive.h`（506 行，**header-only**；CMake 里是一个
+  `INTERFACE` target `t2d::save`，alias `t2d_save`）：`.t2dsave` = magic `T2DS` + 格式版本 + 游戏名 + 游戏版本 +
+  chunk 表（四字符 id / 游戏自己的版本 / 长度 / CRC-32 / payload），`encode` / `decode` / `read_file` / `write_file` /
+  `Writer` / `Reader` / `with_extension`；坏 magic、坏 CRC、截断、超限、重复 chunk、尾部多余字节都明确拒绝。容器不认识任何
+  游戏的名字、格子或实体，第二个机制的游戏的用法在 `docs/SAVE.md`（`test_save` 里就是两个机制完全不同的游戏共用一个容器）。
+* **Mine 模型**：`games/mine/include/mine/game_save.h` + `src/game_save.cpp`（99 + 575 行）——`make_game_save` 把会话
+  （`META`）、注册表名字表（`CONT`）、建筑解锁（`UNLK`）、按放置顺序的地块与容器/计时/钻头产量（`PLOT`）、掉落物（`ENTT`）、
+  进行中的扫描线（`BUIL`）写进六个 chunk；`load_game_save` 先完整解析、再把内容 id 按**名字**重映射、再按存档顺序
+  `MineLayer::place` 重放（放置规则第二次也生效），任何一步不成立都整档拒绝并给出原因，绝不返回半座矿。复核时补了三处边界：
+  只写 `alive()` 的掉落物（销毁后未 tick 的不复活）、`BUIL` 与 `PLOT` 的"建造中"严格一一对应（每块建造中的地恰好一条能恢复
+  的扫描线，否则拒绝）、镜像计数在全部放置后用新入口 `MineLayer::recount_mirrored()` 重算（`place()` 掷的骰子不是存档里的）。
+* **入口**：世界视图 F7 保存、F8 读取；文件默认 `save.t2dsave`（当前工作目录），`--save <path>` 改路径（`with_extension`
+  补扩展名）；`--load <path>` 启动即读档、直接进入世界视图（跳过开始/会话界面），失败回开始界面并报错。读档失败不动当前
+  世界：成功才替换，替换前 `building_.clear()`（旧地块还活着）、丢掉指针上拖着的掉落物，然后恢复会话/解锁/时钟/镜头、
+  重建建造栏、清选中与双击；`world_.set_generator` 在启动新世界与读档后走同一个入口（`configure_world_generator()`），
+  所以读档后 `[ ]` 换层仍是同一座矿的层。状态行文案 `world.save.ok/failed/no_layer`、`world.load.ok/failed/no_file` 进
+  `assets/text/ui.ecfg`（en / zh-Hans / zh-Hant），底部提示行加 `F7 SAVE F8 LOAD`。
+* **单测**：新 `tile2d/tests/test_save.cpp` **11 例 / 158 断言**；新 `games/mine/tests/test_game_save.cpp` **9 例 / 152 断言**
+  （会话/世界/地块/容器/掉落/建造/解锁/镜头的往返与"回来再存字节相同"、换注册表按名字、缺内容/地块放不下/容器装不下/
+  `BUIL` 不一致/坏容器整档拒绝、dead drop 不写、mirrored 计数重算、无层世界写出的档读不回来）；其余套件计数不变。
+  全量 **debug 35/35、release 35/35** 绿（`-DT2D_BUILD_MEFEMMA=OFF` 的独立目录）。
+* **实测**（本机 Vulkan，1280×720，验证包）：① F7 存出 `roundtrip.t2dsave`（4 915 字节；头 `5432 4453 0100
+  0400 6d69 6e65 0100 0000 0600 0000 4d45 5441` = `T2DS` / format 1 / `mine` / game version 1 / 6 chunks / `META`），
+  状态行 `SAVED 148 PLOT(S) AND 4 DROP(S)`（截图 `build/verify-shots/save_before.png`）；② 新进程 `--load` 同一文件：
+  `LOADED 148 PLOT(S) AND 4 DROP(S)`，同一层同一相机，vault_demo(3,4)、demo(8,4) 两座建筑与 4 个 drop 都在（`load_after.png`），
+  F8 再读一次同样成功（日志两条 load）；③ 中途建造：drill 放 2 秒后 F7，读档后 drill 是下半截+扫描线，再跑几秒完成
+  （`save_mid.png`、`load_mid.png`、`load_mid_done.png`）；④ 坏档翻一位后 `--load` 被 CRC 拒绝、回开始界面并在底部显示
+  `COULD NOT LOAD ... a chunk payload does not match its checksum`（`load_corrupt2.png`）；⑤ `--save .../noext` 实际写
+  `noext.t2dsave`。不保存：钻头 RNG 流、界面选中/拖拽（见 docs/SAVE.md）。
+* **没做**：网络同步存档、存档槽位、界面里的存档菜单（只有 F7/F8 与命令行；自动/退出存档随后在（三十七）接上）。
+### M2 交付状态（三十七）：每 5 分钟自动存档 + 退出即存（已落地）
+
+设计者原话："设置每5分钟/手动退出游戏（例如点窗口的叉）存档一次"（§1.47）。
+
+* **计时自动存档**：`MineOptions::autosave_seconds`（默认 300 秒，0 关闭）与 `--autosave-seconds <n>`（`game_main.cpp`）；
+  `MineApp::maybe_autosave(dt)` 在 `on_update()` 的世界视图这一帧走完后调用（`app.cpp`），只在 `screen_ == World` 且
+  `world_.has_layer()` 时累计，其它界面清零；到时清零计时再 `save_game()`。F7、成功的 `save_game()`、`load_game_file()`、
+  `open_world()` 都清零，周期从最后一次存档起算。
+* **退出即存**：`on_shutdown()` 在 `batch_.reset()` 之前，若世界里还有层且 `save_allowed()`，`save_game()` 一次；窗口叉与
+  `quit()`/调试 quit 都走这里，会话/内容界面（世界还在内存里）也存，开始界面没有层不存。失败只 warn，不阻止退出。
+* **headless 约束**：`save_allowed()` = 窗口模式恒真；headless 只有显式 `--save`/`--load` 才为真——自动与退出存档共用它，
+  截图/脚本默认不写 `save.t2dsave`。手动 F7 不受限制。
+* **日志/文案**：自动触发 `T2D_INFO("autosave: ...")`、退出存档成功再一条 `T2D_INFO`；成功状态行沿用 `world.save.ok`，
+  失败 `world.save.failed`；没有新增语言键。
+* **验证**：不新增测试二进制（app 无单测）；`mine_game --help` 已有 `--autosave-seconds`；全量 debug 35/35、release 35/35
+  绿（`-DT2D_BUILD_MEFEMMA=OFF` 的独立目录）。
+* **实测**（本机 Vulkan，1280×720，验证包）：① 自动：`--autosave-seconds 2 --save build/verify-shots/auto.t2dsave`，
+  进入矿后 2 秒日志出现 `autosave: 2 second(s) in the mine` + `save: 146 plot(s) and 0 drop(s)`，进程退出前文件已存在
+  （`auto_shot.png`）；② 退出：`--autosave-seconds 0 --save .../exit.t2dsave`，放置 drill 后**不按 F7**直接 quit，日志
+  `autosave: the mine was saved on exit` + `save: 147 plot(s) and 1 drop(s)`；`--load` 后 drill 与 drop 都在
+  （`exit_after.png`）；③ headless 不给 `--save`/`--load` 时 quit 后没有 `save.t2dsave`（不污染），给了才写；
+  ④ `--help` 显示 `--autosave-seconds ... (0 off; default 300)`。窗口叉与 quit 共用 `on_shutdown()`，本轮用 quit 验证的是
+  同一条退出路径。
+* **没做**：存档槽位、自动存档的界面开关、网络同步存档。
+
 ### M1 验收标准（已满足）
 
 1. 本文档存在，且代码中**没有任何预设的游戏内容**（资源/结构/配方/建筑清单均无硬编码）。
@@ -1638,7 +1973,7 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
 | 地块（Tile） | 地图中占据格子的**固定物体**（地板、矿物、机器…），可以占 1 格或 2×2、3×3、2×3 等；基类 `mine::types::Tile`（§1.12） |
 | 场景地块（SceneTile） | 构成矿场的地块（场景、矿物、地板）：**仅在需要时更新**，没有每帧成本（§1.13） |
 | 实体地块（EntityTile） | 功能地块（机器…）：**继承场景地块**，在此之上**每 tick 或每 xx 秒更新**，节奏由地块自己持有（§1.13、§1.14） |
-| 渲染翻转（random_reverse） | 地块基类上的开关：为真时地图初始化随机决定是否**左右翻转渲染**（50%），只影响渲染（§1.14）；**由内容作者在数据里写**，`mirrored` 不进存档（§1.15） |
+| 渲染翻转（random_reverse） | 地块基类上的开关：为真时地图初始化随机决定是否**左右翻转渲染**（50%），只影响渲染（§1.14）；**由内容作者在数据里写**，`mirrored` 由 `PLOT` chunk 保存、读档时 `recount_mirrored()` 重新统计（§1.15、§1.46） |
 | 地板（Floor） | 其他东西站上去的那一层：`SceneTile` 的子类，只多一个 `is_floor()` 标记；`floor::` 表声明（§1.16） |
 | 矿物（SingleOre） | 一格一块、可以挖出来的东西：`SceneTile` 的子类，只多一个 `is_ore()` 标记；`ore::` 表声明，散点生成器撒的就是它（§1.19） |
 | 散点生成器（ScatterRule） | 层创建器的一种（`layer::` 的 `scatter::`）：在指定瓦片层上按**平均密度**撒指定内容，**最小/最大数量**夹住结果，**地板限制**决定哪些格子可用（`mine/layer_rules.h`） |
@@ -1659,6 +1994,72 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
 
 | 版本 | 变更 |
 |---|---|
+| M2.40 | **自动存档：每 5 分钟 + 退出即存**（设计者新要求，§1.47）：`MineOptions::autosave_seconds`（默认 300，0 关）+
+`--autosave-seconds <n>`；`MineApp::maybe_autosave(dt)` 只在世界视图、有层时累计，到时清零再 `save_game()`，F7/成功存档/
+读档/进世界都重新计时；`on_shutdown()` 在释放 GPU 资源前存一次（窗口叉、quit 都走这里，开始界面无层不存）；新增
+`save_allowed()`：窗口恒真、headless 仅显式 `--save`/`--load` 才写，自动与退出共用；自动/退出各一条 `T2D_INFO("autosave: ...")`，
+不新增语言键。**验证**：`--help` 列出 `--autosave-seconds`；全量 debug 35/35、release 35/35 绿。**实测**：2 秒周期自动
+  写出 `auto.t2dsave`、退出（quit，同窗口叉的 on_shutdown）在不按 F7 时写出 `exit.t2dsave` 并可 `--load` 恢复 drill+drop；
+  headless 无显式路径不写档 |
+| M2.39 | **存档模块与 Mine 的存/读入口**（设计者新要求，§1.46）：新 header-only 容器 `t2d/save/archive.h`（`.t2dsave`：
+magic、格式版本、游戏名与版本、chunk 表 + CRC-32；CMake `INTERFACE` target `t2d::save`）；Mine 侧 `mine/game_save.h` 六个 chunk
+`META`/`CONT`/`UNLK`/`PLOT`/`ENTT`/`BUIL`：读档按名字把内容 id 重映射、按存档顺序 `place` 重放、`BUIL` 与“建造中”严格一致、
+只写 `alive()` 的掉落物、`recount_mirrored()` 重算镜像计数，任何不一致整档拒绝；世界视图 F7 保存 / F8 读取（默认
+`save.t2dsave`，`--save` 改路径），`--load` 启动即读档、失败不动当前世界；文案进 `ui.ecfg` 三语言。**单测**：新 `test_save`
+11/158、新 `test_game_save` 9/152；全量 debug 35/35、release 35/35 绿。**实测**：F7 存 148 plots/4 drops -> `--load` 恢复同层
+  同相机、两座建筑与 4 个 drop，F8 重读成功；中途建造的扫描线进度恢复；坏 CRC 被拒绝并在开始界面显示原因；`--save noext`
+  补成 `.t2dsave`（截图 `save_before.png`、`load_after.png`、`load_mid.png`、`load_corrupt2.png`） |
+| M2.38 | **石头仓库成为建筑**（设计者新要求，§1.45）：本体 `content/warehouses.ecfg` 的 `warehouse:: stone` 加
+  `building:: materials:["stone",20] time:10 category:"storage" default_unlock:false`，`image`/`capacity:100` 不变——它是
+  **默认锁定的存储建筑**：新存档的建造栏只有 Extraction（石头钻头），Storage 整类不出现，等以后解锁；故事层 `place_block`
+  直接放下的仓库不受影响。没有代码改动（§1.44 的机制用数据串起来）。**单测**：`test_content_pack` 19/311、
+  `test_layer_rules` 25/831；全量 debug 33/33、release 33/33 绿。**实测**：本体菜单只有 EXTRACTION、无 STORAGE；F6 里
+  `warehouse stone` 仍在；故事层那块仓库照常 10/100（锁定不是放置条件） |
+| M2.37 | **建筑解锁：unlocked 是共享存档属性，只有解锁的建筑进建造栏**（设计者新要求，§1.44）：`Building` 加定义字段
+  `default_unlock`（bool，默认 true，不写就是解锁；只读 `building::` 里面）；新类 `mine::BuildingUnlocks` 按 kind+id 存每份
+  存档的建筑状态：`reset`（新存档按 default_unlock）/ `refresh`（id 不变的重载保留）/ `unlocked` / `set_unlocked`（留给科技
+  系统）/ `serialize`（'UNL1' + version + varint 条数 + kind/id/unlocked，写全部条目）/ `apply_saved(blob, ContentRemap)`
+  （按名字翻 id、只改当前存在的建筑、坏 blob 一行不改）。`BuildSidebar::rebuild` 只收 unlocked 的条目与类别；app 的
+  `open_world` reset、`reload_content` 走"旧 ContentTable + blob → ContentRemap → apply_saved"（F5 会重排 id，不能按 kind+id
+  refresh）、`enter_mine_layer` 传状态。**单测**：新 `test_building_unlocks` 8/100、`test_mine_types` 22/281、
+  `test_build_sidebar` 4/63、`test_content_pack` 19/295；全量 debug 33/33、release 33/33 绿。**没做**：不落盘（完整存档系统
+  未实现）、没有解锁触发器/UI、本体 content 不改。**实测**：验证包的 F6 内容列表里有 locked_by_default_copy / locked_vault /
+  locked_bench，建造栏只出现 stone/demo 与 vault_demo，PROCESSING 整列不出现（`unlock2_content_verify.png`、
+  `unlock_extraction.png`） |
+| M2.36 | **掉落物堆：同物品靠近自动合成一堆，一次只拖一个出来**（设计者新要求，§1.43）：`Drop` 加 `count`（默认 1，
+  `set_count` 钳到 >=1，`add` 忽略 0），`count > 1` 就是堆，**不新增子类**。`MineLayer` 加 `kDropMergeRadius = 0.75f`、
+  `drop(kind, id, pos, count)` 与 `merge_drop(Drop&)`：同 kind+id、距离 <= 半径、最近优先、等距取 serial 小者，
+  存活者位置不变、被合并者 destroy。钻头 `throw_one` 改走 `layer->drop(...)`；`PointerDrag::end` 在 `Left` / `Refused`
+  时把放下的东西并入附近堆（`Stored` 不并）；`begin` 从 `count > 1` 的堆里拿时堆 `count - 1`、指针拿一个**裸 adopt** 的
+  `count = 1` 新 Drop（不走 `layer->drop`，否则立刻并回去）。**单测**：`test_drops` 7/151、`test_warehouses` 9/157、
+  `test_drills` 10/132（两个既有钻头用例改为按物品数/存活堆断言）；全量 debug 32/32、release 32/32 绿。**没做**：
+  堆没有数量角标（图与单个掉落物相同）、堆与堆不自动合并。**实测**（本机 Vulkan）：约 9 次抛出后地面只有 4 个掉落物
+  （按物品图连通块数），同一堆连拖三次仓库依次 1/100、2/100、3/100 且堆一直在，第四次换堆到 4/100——一次只存 1 个 |
+| M2.35 | **修：建造侧边栏返回按钮随选中状态忽隐忽现**（设计者报的，§1.42）。根因：`draw_build_sidebar()` 在"没选中建筑"的
+  分支里提前 `return`，把末尾的 `draw_sidebar_button(layout)`（以及同段的翻页标签）跳过了——默认看不到按钮，选中建筑才出现，
+  放下建筑后选中清空又消失。修法：**页码与按钮移到详情分支之前无条件绘制**，详情仍按有无选中分别处理。实测：展开未选 /
+  选中 `demo` / 放下钻头后 / 建造中，四种展开态按钮完全一样；收起态右边缘 `<` 不变。只动绘制顺序，模型与单测不变 |
+| M2.34 | **修：建造菜单里选中的建筑没有高亮**（设计者报的，§1.41）。根因是**两趟绘制的顺序**：选中方框画在界面那一趟
+  （`draw_build_sidebar`），建筑贴图画在图片那一趟（`draw_panel_images`），贴图铺满整格把先画的框盖住了——本体内容都有
+  贴图，所以真机上选中时看不到框，没有贴图的内容反而看得见。修法：方框挪到图片那一趟、在该条目贴图之后画
+  （`sidebar_.selected() == &entry`，页内槽位仍按 `page() * kPageSize + slot`）。实测：选中 `demo` 时它格子上有强调色框、
+  栏底 `demo COST STONE x10 5s`，改选 `stone` 框跟着换。只动绘制，模型与单测不变 |
+| M2.33 | **建造中的建筑不更新、不接受交互（附：钻头预览带顶部的端到端断言）**（设计者新要求，§1.40）：
+  `SceneTile::under_construction()` 是**地块实例状态**（不是享元定义里的属性）：`BuildAnimation::start` 置 true，
+  `advance` 走到 `progress() >= 1` 或 `clear()` 置回 false。建造中：`EntityTile::advance` 不取回合且**不攒时间**、
+  `SceneTile::refresh` 跳过但保留 dirty、`Warehouse::on_click` 不打开（已开则关）、`PointerDrag` 跳过建造中的仓库
+  （drop 留在原地）、app 的 `selected_plot`/`select_at` 不选中也不当付款仓库。**建造中的贴图改用完整预览**：世界层跳过建造中的
+  地块，扫描线那趟用 `get_preview(0 秒)` 逐张截断画（钻头=底座+顶部的下半截，线上露出地层；顶部建成前不转）。实测截图：建造中
+  只显示下半截、点击建造中的仓库无面板、建成后顶部转起来并丢出石头。**端到端**：
+  `test_content_pack` 从本体内容断言到侧边栏条目 `preview = [底座, "top"]`。**单测**：`test_mine_types` 22/272、
+  `test_world` 19/194、`test_drills` 9/123、`test_warehouses` 8/138、`test_content_pack` 18/281，`mine_app` 零警告 |
+| M2.32 | **地块的完整渲染预览 `Tile::get_preview()`，与从它取图的建筑侧边栏**（设计者新要求，§1.39）：`TilePreview` 是按绘制
+  顺序的图片清单（`part` / `mirrored` / `radians` / `pivot`），基类默认空、`SceneTile` 答自己的 `image`、`Drill` 先底座再追加
+  绕 `spin_origin` 转 `spin_angle(秒)` 的 `"top"`（**无底座不出顶部**）。侧边栏 `BuildEntry::preview` 在 `rebuild()` 里由
+  `make_tile() + get_preview()` 填成 0 秒静帧，`app.cpp` 逐张 `draw_quad_rotated` 画——**钻头图标第一次底座+顶部一起显示**。
+  顺带修了第 2 页图标/名字错位（拿布局槽位下标当条目下标用，改成 `page() * kPageSize + slot`）。**单测**：`test_mine_types`
+  21/256、`test_drills` 8/113、`test_build_sidebar` 3/52，`mine_app` 零警告。**没做**：`draw_world_layer` 的地图绘制仍按纹理
+  分组批处理，未改走预览 |
 | M2.31 | **掉落物按物品生成**（设计者更正 §1.25 的模型）：**没有 `drop::` 表了**——矿物的 `drop:` 写的是**物品**名，
   钻头丢出去的那件东西**就是那个物品**（同名、同图、同一个 id，`Drop` 的 kind 传 `ContentKind::Item`），`content/drops.ecfg`
   删除。这从根上解决了"仓库里明明有石头却说 0/10"：拖进仓库的是**物品**，价格数得到；上一轮"同名物品与掉落物都算"的
@@ -1972,7 +2373,7 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
   ③ **一个 `packs/` 放两种东西**：`*.ecfg` 是内容包，带 `mod.ecfg` 的子目录是模组包；
   `ContentPack::scan_directory` 不再递归进模组包目录（否则模组的内容文件会被当成包再注册一次，
   报成"已注册、未替换"）；④ `main.cpp` 里包与模组**各自独立**套用默认目录（只写 `--packs` 时模组仍自动找），
-  并在启动日志里说明这次看了哪些目录。真机验证：把包与模组放进 `build/debug/games/mine/packs/`，
+  并在启动日志里说明这次看了哪些目录。真机验证：把包与模组放进 `build/mine/debug/games/mine/packs/`，
   **从 `/tmp` 启动**仍然加载（1 包 + 1 模组 + 本体 = 3 项内容，0 错误；内容列表 3 个来源全 OK）。
   单测 `test_executable`（2 用例 / 18 断言）、`test_content_search`（5 用例 / 41 断言）；
   Tile2D 套件 21 → **23 个测试**（no-renderer 9 → 10）全绿；文档 `docs/MODS.md` §0、
@@ -2005,7 +2406,7 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
   开关，所以机器问脚下、寻路问前面时不需要知道任何一块地板的名字。② **`ContentKind::Floor`** 追加在类别表
   末尾（类别值进地图格与存档，插中间等于重编号），`floor::` 表就是它的 **`.ecfg` 定义器**；
   沙盒把 `floor` 也算作占格子的类别，所以泥地可以直接铺出来看。③ **引擎会读的字段变成两个**：
-  `image` 与 **`random_reverse`**（§1.15：由内容作者定义；`mirrored` 不进存档）；读不懂的字段**报告**
+  `image` 与 **`random_reverse`**（§1.15：由内容作者定义；`mirrored` 由存档保存，§1.46）；读不懂的字段**报告**
   （`random_reverse:1` 不当成假），本体内容/内容包/模组三处都在加载时读一遍。④ **定义器**
   （`types/tile_definition.h`）：`read_tile_definition`（读引擎字段）→ `tile_definitions`（走一份
   `.ecfg`，只收占格子的类别）→ `make_tile`（按类别造对象：floor→`Floor`、machine→`EntityTile`、

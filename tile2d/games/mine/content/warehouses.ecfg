@@ -1,7 +1,11 @@
-# 本体内容 —— 仓库（docs/GAME_DESIGN.md §1.27、§1.28）。
+# 本体内容 —— 仓库（docs/GAME_DESIGN.md §1.27、§1.28、§1.45）。
 #
 # 仓库用 warehouse:: 表声明：它是**场景地块**——不跑、不自动更新，有人把掉落物拖到它上面、或者点它一下，
-# 才有事情发生。引擎为它读的字段只有一个：capacity（装得下多少件东西）。
+# 才有事情发生。引擎为它读的字段是 capacity（装得下多少件东西），以及 building::（它是**建筑**：造价、
+# 建造时间、分类、新存档默认解不解锁——分类决定它在建造栏的哪一列）。
+#
+# 石头仓库是**默认锁定的存储建筑**（§1.45）：造价 20 石头、10 秒建好，新存档的建造栏里只有石头钻头，
+# 仓库要等以后解锁；故事层里 place_block 直接放下的那块仓库不受影响（它不走建造栏/解锁）。
 #
 # 贴图 art/capacity_stone_warehouse.png 是设计者放进本体包的图（128×128；一块内容一张图，§1.18）。
 
@@ -9,3 +13,8 @@ warehouse::
     stone::
         image:"art/capacity_stone_warehouse.png"
         capacity:100
+        building::
+            materials:["stone",20]
+            time:10
+            category:"storage"
+            default_unlock:false

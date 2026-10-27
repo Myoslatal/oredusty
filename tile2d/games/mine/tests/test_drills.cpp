@@ -3,6 +3,7 @@
 //
 // The content in here is a **test double**: names like "vein" or "rig" are the fixture's, not the game's -
 // the game names no content at all (docs/GAME_DESIGN.md section 7).
+#include <mine/build_animation.h>
 #include <mine/types/tile_definition.h>
 #include <mine/world.h>
 
@@ -12,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace mine;
@@ -165,9 +167,15 @@ T2D_TEST(a_drill_is_an_entity_plot_that_mines_what_is_under_it) {
     // from the outside, and what four sides could never do. The stream is the drill's own and seeded from
     // what it is and where it stands, so this is the same sequence every run.
     for (i32 turn = 0; turn < 15; ++turn) (void)rig.layer.tick(2.0f);
-    T2D_REQUIRE(rig.layer.entity_count() >= 16u);
+    const usize thrown = rig.drill->produced();
     std::vector<f32> angles;
-    for (const std::unique_ptr<Entity>& drop : rig.layer.entities()) {
+    usize items = 0;
+    usize piles = 0;
+    for (const std::unique_ptr<Entity>& entity : rig.layer.entities()) {
+        const auto* drop = dynamic_cast<const Drop*>(entity.get());
+        T2D_REQUIRE(drop != nullptr);
+        items += drop->count();
+        if (drop->count() > 1) ++piles;
         const t2d::Vec2 at = drop->position();
         T2D_CHECK(is_on_the_ring(at));
         const f32 angle = std::atan2(at.y - 5.5f, at.x - 5.5f);
@@ -175,39 +183,59 @@ T2D_TEST(a_drill_is_an_entity_plot_that_mines_what_is_under_it) {
         for (const f32 other : angles) seen = seen || std::abs(other - angle) < 1e-4f;
         if (!seen) angles.push_back(angle);
     }
+    // Drops of one item that landed close together became one **pile** (section 1.43): what was mined is
+    // all there (the counts add up), and there are fewer drops on the ground than throws.
+    T2D_CHECK_EQ(items, thrown);
+    T2D_CHECK_GT(piles, 0u);
+    T2D_CHECK_LT(rig.layer.entity_count(), thrown);
     // Sixteen throws that only ever used four directions would give at most four angles; a random angle
-    // gives sixteen different ones (two of them landing on the same float is not going to happen).
-    T2D_CHECK_MSG(angles.size() >= 12u, "the 16 drops only took {} different directions", angles.size());
+    // gives more, and every pile still lies on the ring where its first item landed.
+    T2D_CHECK_MSG(angles.size() >= 5u, "the {} throws only took {} different directions", thrown,
+                  angles.size());
 
     // A frame that swallowed three periods is worth three drops: a hitch must not change what the mine
-    // produces (types/entity_tile.h), and the cadence hands over the whole span for exactly this.
-    const usize before = rig.layer.entity_count();
+    // produces (types/entity_tile.h), and the cadence hands over the whole span for exactly this. Items are
+    // counted again, because what the three throw may land on is a pile.
+    const usize items_before = items;
     T2D_CHECK_EQ(rig.layer.tick(6.0f), 1u);   // the drill takes its turn once, with six seconds in hand
-    T2D_CHECK_EQ(rig.layer.entity_count(), before + 3u);
-    T2D_CHECK_EQ(rig.drill->produced(), before + 3u);
+    usize items_after = 0;
+    for (const std::unique_ptr<Entity>& entity : rig.layer.entities()) {
+        items_after += static_cast<const Drop&>(*entity).count();
+    }
+    T2D_CHECK_EQ(items_after, items_before + 3u);
+    T2D_CHECK_EQ(rig.drill->produced(), thrown + 3u);
 }
 
 T2D_TEST(the_same_drill_throws_the_same_way_every_time_it_is_built) {
     // The dice are the drill's own, seeded from what it is and where it stands: two layers built from the
     // same data throw alike, so a map is reproducible even though the direction is random (section 1.21).
+    // What a throw leaves behind is what is compared: drops of one item that landed close together became
+    // one pile, and where those piles lie is as reproducible as where the throws went (section 1.43).
     const auto throws_of = [] {
         Rig rig(2.0f, 1.0f, "chunk");
-        std::vector<t2d::Vec2> where;
+        std::vector<std::pair<t2d::Vec2, usize>> left;
         for (i32 turn = 0; turn < 6; ++turn) (void)rig.layer.tick(2.0f);
-        for (const std::unique_ptr<Entity>& drop : rig.layer.entities()) where.push_back(drop->position());
-        return where;
+        for (const std::unique_ptr<Entity>& entity : rig.layer.entities()) {
+            const auto* drop = dynamic_cast<const Drop*>(entity.get());
+            if (drop == nullptr) continue;
+            left.push_back({drop->position(), drop->count()});
+        }
+        return left;
     };
-    const std::vector<t2d::Vec2> first = throws_of();
-    const std::vector<t2d::Vec2> second = throws_of();
-    T2D_REQUIRE(first.size() == 6u);
+    const auto first = throws_of();
+    const auto second = throws_of();
+    T2D_CHECK_GT(first.size(), 0u);
     T2D_REQUIRE(second.size() == first.size());
     for (usize index = 0; index < first.size(); ++index) {
-        T2D_CHECK_NEAR(first[index].x, second[index].x, 1e-5f);
-        T2D_CHECK_NEAR(first[index].y, second[index].y, 1e-5f);
+        T2D_CHECK_NEAR(first[index].first.x, second[index].first.x, 1e-5f);
+        T2D_CHECK_NEAR(first[index].first.y, second[index].first.y, 1e-5f);
+        T2D_CHECK_EQ(first[index].second, second[index].second);   // and a pile is as big the second time
     }
     // And they are not all the same direction, or the seed would be doing nothing at all.
     bool differs = false;
-    for (const t2d::Vec2& at : first) differs = differs || at.x != first.front().x || at.y != first.front().y;
+    for (const std::pair<t2d::Vec2, usize>& at : first) {
+        differs = differs || at.first.x != first.front().first.x || at.first.y != first.front().first.y;
+    }
     T2D_CHECK(differs);
 }
 
@@ -400,6 +428,143 @@ T2D_TEST(a_drill_with_no_speed_in_its_entry_does_not_turn) {
     Drill bare(ContentKind::Drill, id, 1, GridPos{0, 0});
     T2D_CHECK_EQ(bare.spin_seconds(), 0.0f);
     T2D_CHECK_EQ(bare.spin_angle(3.0f), 0.0f);
+}
+
+T2D_TEST(a_drills_preview_is_its_base_and_the_turning_top_over_it) {
+    const std::optional<TileDefinition> rig = read_one(R"(
+drill::
+    rig::
+        image:"art/rig_base.png"
+        top_image:"art/rig_top.png"
+        dig_power:2
+        spin:4
+        spin_origin::
+            x:0.25
+            y:0.75
+)",
+                                                      ContentKind::Drill);
+    T2D_REQUIRE(rig.has_value());
+    const std::unique_ptr<SceneTile> plot = make_tile(*rig, 1, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr);
+    const auto* drill = dynamic_cast<const Drill*>(plot.get());
+    T2D_REQUIRE(drill != nullptr);
+
+    // Two pictures, drawn bottom up: the base, then the top that turns over it (section 1.38). The base is
+    // the entry's own "image" and so has no part name; the top is the part called "top".
+    const TilePreview at_rest = drill->get_preview();
+    T2D_REQUIRE(at_rest.images.size() == 2u);
+    T2D_CHECK(at_rest.images[0].part.empty());
+    T2D_CHECK_EQ(at_rest.images[1].part, std::string("top"));
+    T2D_CHECK_EQ(at_rest.images[1].radians, 0.0f);
+
+    // The top is where the clock has turned it to, about the point of its own picture the entry named -
+    // and neither is state the drill carries: the same query at another moment answers that moment.
+    constexpr f32 kTau = 6.283185307179586f;
+    const TilePreview turned = drill->get_preview(1.0f);
+    T2D_REQUIRE(turned.images.size() == 2u);
+    T2D_CHECK_EQ(turned.images[1].radians, drill->spin_angle(1.0f));
+    T2D_CHECK_EQ(turned.images[1].radians, kTau * 0.25f);
+    const t2d::Vec2 origin{0.25f, 0.75f};
+    T2D_CHECK_EQ(turned.images[1].pivot, origin);
+    T2D_CHECK_EQ(at_rest.images[1].pivot, origin);
+    T2D_CHECK_EQ(turned.images[0].radians, 0.0f);   // the base does not move
+
+    // A plot draws mirrored when it is mirrored - both pictures alike: the top turns on its base and is not
+    // turned about by the mirror separately.
+    plot->set_mirrored(true);
+    const TilePreview mirrored = drill->get_preview(2.0f);
+    T2D_REQUIRE(mirrored.images.size() == 2u);
+    T2D_CHECK(mirrored.images[0].mirrored);
+    T2D_CHECK(mirrored.images[1].mirrored);
+    T2D_CHECK_EQ(mirrored.images[1].radians, drill->spin_angle(2.0f));
+
+    // One picture when the entry names no top, and nothing at all when it names no base: a top with no base
+    // under it is not a picture the drill draws - the world view draws the fallback colour there.
+    const std::optional<TileDefinition> plain = read_one(R"(
+drill::
+    plain::
+        image:"art/rig_base.png"
+        dig_power:2
+)",
+                                                         ContentKind::Drill);
+    T2D_REQUIRE(plain.has_value());
+    const std::unique_ptr<SceneTile> plain_plot = make_tile(*plain, 2, 1, GridPos{1, 1});
+    T2D_REQUIRE(plain_plot != nullptr);
+    T2D_REQUIRE(dynamic_cast<const Drill*>(plain_plot.get()) != nullptr);
+    T2D_CHECK_EQ(plain_plot->get_preview(3.0f).images.size(), 1u);
+    T2D_CHECK(plain_plot->get_preview(3.0f).images[0].part.empty());
+
+    const std::optional<TileDefinition> top_only = read_one(R"(
+drill::
+    head::
+        top_image:"art/rig_top.png"
+        dig_power:2
+        spin:4
+)",
+                                                             ContentKind::Drill);
+    T2D_REQUIRE(top_only.has_value());
+    const std::unique_ptr<SceneTile> head_plot = make_tile(*top_only, 3, 1, GridPos{2, 2});
+    T2D_REQUIRE(head_plot != nullptr);
+    T2D_CHECK(head_plot->get_preview(1.0f).empty());
+
+    // And a drill built without a definition at all - a test's own - has no art to answer with.
+    Drill bare(ContentKind::Drill, 4, 1, GridPos{3, 3});
+    T2D_CHECK(bare.get_preview().empty());
+}
+
+T2D_TEST(a_drill_that_is_still_going_up_does_not_mine) {
+    Rig rig(2.0f, 1.0f, "chunk");
+    T2D_REQUIRE(rig.drill != nullptr);
+
+    // A drill being built is on the map, but it does not run: a machine that mined while it was still
+    // going up would produce out of nothing (docs/GAME_DESIGN.md section 1.37).
+    BuildAnimation sweep;
+    sweep.start(rig.drill, 5.0f);
+    T2D_CHECK(rig.drill->under_construction());
+    T2D_CHECK_EQ(rig.layer.tick(10.0f), 0u);   // it does not even take its turn ...
+    T2D_CHECK_EQ(rig.drill->produced(), 0u);   // ... and throws nothing out
+    T2D_CHECK_EQ(rig.layer.entity_count(), 0u);
+
+    // Done: the five seconds it spent going up are not owed to it, so its first turn is a whole period
+    // (2 s: hardness 2 / power 1) after it is finished, not at once.
+    sweep.advance(5.0f);
+    T2D_CHECK_FALSE(rig.drill->under_construction());
+    T2D_CHECK_EQ(rig.layer.tick(1.0f), 0u);
+    T2D_CHECK_EQ(rig.drill->produced(), 0u);
+    T2D_CHECK_EQ(rig.layer.tick(1.0f), 1u);
+    T2D_CHECK_EQ(rig.drill->produced(), 1u);
+    T2D_CHECK_EQ(rig.layer.entity_count(), 1u);
+}
+
+T2D_TEST(a_drill_piles_up_what_it_throws) {
+    Rig rig(2.0f, 1.0f, "chunk");
+    T2D_REQUIRE(rig.drill != nullptr);
+
+    // A drill throws its drops into the ring around it, and one item landing near another of its item is
+    // one **pile** (types/drop.h, docs/GAME_DESIGN.md section 1.43). Twenty turns is enough for the ring
+    // to fill up and for throws to land on top of piles.
+    for (i32 turn = 0; turn < 20; ++turn) (void)rig.layer.tick(2.0f);
+    const usize thrown = rig.drill->produced();
+    T2D_CHECK_EQ(thrown, 20u);
+
+    usize items = 0;
+    usize piles = 0;
+    usize ground = 0;
+    for (const std::unique_ptr<Entity>& entity : rig.layer.entities()) {
+        const auto* drop = dynamic_cast<const Drop*>(entity.get());
+        T2D_REQUIRE(drop != nullptr);
+        // A pile is a drop in everything else: what it is, and how it may be dragged, is unchanged.
+        T2D_CHECK_EQ(drop->kind(), ContentKind::Item);
+        T2D_CHECK(drop->draggable());
+        ++ground;
+        items += drop->count();
+        if (drop->count() > 1) ++piles;
+    }
+    // Nothing was lost to the merging and nothing was made up: the counts hold every item that was
+    // thrown, the piles are real, and there are fewer drops on the ground than throws.
+    T2D_CHECK_EQ(items, thrown);
+    T2D_CHECK_GT(piles, 0u);
+    T2D_CHECK_LT(ground, thrown);
 }
 
 T2D_TEST_MAIN

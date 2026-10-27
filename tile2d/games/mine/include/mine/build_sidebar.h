@@ -6,9 +6,11 @@
 // renderer (the rule the rest of the game's screen code follows).
 #pragma once
 
+#include <mine/building_unlocks.h>
 #include <mine/content_loader.h>
 #include <mine/registry.h>
 #include <mine/types/building.h>
+#include <mine/types/tile.h>
 
 #include <t2d/core/math2d.h>
 
@@ -26,15 +28,23 @@ struct BuildEntry {
     types::BuildingCategory category = types::BuildingCategory::None;
     std::vector<ContentStack> materials;     ///< what it costs, for the line under the grid
     t2d::f32 seconds = 0.0f;                 ///< how long it takes to build
+    /// What the building is drawn as, as the plot itself answers it: the complete render preview of the
+    /// plot this entry would place, at zero seconds - a still frame of it (types/tile.h). It is kept here
+    /// so the drawing pass does not have to build a plot per frame to know what to draw
+    /// (docs/GAME_DESIGN.md section 1.39).
+    types::TilePreview preview;
 };
 
 /// The sidebar's state and its layout. The categories are its left column, the buildings of the selected
 /// category its right, and what the selected one costs is a line under both.
 class BuildSidebar {
 public:
-    /// Fills it from what is registered: every plot content whose definition is a building, in registration
-    /// order, and the categories that end up with something in them. A reload calls this again.
-    void rebuild(const ContentRegistry& registry, const ContentDefinitions& definitions);
+    /// Fills it from what is registered and **unlocked**: every plot content whose definition is a
+    /// building and whose save state says it may be built, in registration order, and the categories that
+    /// end up with something in them - a category with only locked buildings is not there at all. A reload
+    /// calls this again (docs/GAME_DESIGN.md sections 1.36, 1.44).
+    void rebuild(const ContentRegistry& registry, const ContentDefinitions& definitions,
+                 const BuildingUnlocks& unlocks);
 
     [[nodiscard]] bool open() const { return open_; }
     void set_open(bool open) { open_ = open; }

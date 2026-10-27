@@ -32,7 +32,13 @@ using namespace mine::types;
   不重叠，因为它们在两层。
 * **渲染朝向**：基类带一个 `random_reverse` 开关与一个 `mirrored()` 结果（§5）：为真时，**地图初始化**
   用层自己的随机数决定这个地块是否**左右翻转渲染**（50%），从此不再变。这个开关**由内容作者在数据里写**
-  （`random_reverse:true`），`mirrored` 不进存档。
+  （`random_reverse:true`）；`mirrored` 由存档的 `PLOT` chunk 保存、读档时按地块重新统计（§1.46）。
+* **渲染预览（`get_preview`）**：地块自己回答"我画成什么样"——`get_preview(秒)` 返回 `TilePreview`，一张**绘制清单**：
+  按绘制顺序排好的图片（第一张在最下面），每张写清 `part`（空 = 条目自己的 `image`；`"top"` = 钻头会转的顶部）、
+  `mirrored`（左右翻转）、`radians` 与 `pivot`（绕**图片自身坐标**里的一点转，`(0,0)` 左下、`(1,1)` 右上）。它是
+  **清单不是像素**：逻辑层不碰纹理与 GPU，界面拿它去查图、画四边形。基类默认返回空（没有定义就没有图）；`SceneTile`
+  答自己的 `image`（§2），`Drill` 先答底座、再追加绕 `spin_origin` 转 `spin_angle(秒)` 的 `"top"`（§9）——没有底座时
+  顶部不单独出现。建筑侧边栏的建筑图标就是这么来的（`mine/build_sidebar.h` 的 `BuildEntry::preview`，0 秒静帧）。
 * **"我是不是地板"**：基类带一个 `is_floor()` 标记（默认假），地板类型（§4）把它答成真。
 * 基类**没有公开构造函数**：地块一定是场景地块（可能还是"会跑的"场景地块，见 §3），没有"既不是场景
   也不是机器"的地块。
@@ -42,6 +48,14 @@ using namespace mine::types;
 SceneTile big(ContentKind::Structure, id, 0, GridPos{10, 20}, 3, 3);
 big.covers(GridPos{11, 21});     // true
 big.within(512, 512);            // 整块都在图里吗
+```
+
+```cpp
+// 完整渲染预览：一次调用拿到"此刻的一台钻头"——底座 + 绕 spin_origin 转过的顶部
+const TilePreview preview = plot->get_preview(seconds);
+for (const PreviewImage& image : preview.images) {
+    paint(plot_box, image.part, image.mirrored, image.pivot, image.radians);   // 纹理由界面自己查
+}
 ```
 
 ## 2. 场景地块（`SceneTile`）：只在需要时更新
@@ -71,6 +85,10 @@ if (vein.refresh()) { }   // 这一帧真的干了活；没脏就是一次判断
 * **它有没有"容器"是可问的**（`container()`，`types/scene_tile.h`）：默认没有，仓库（`types/warehouse.h`）
   覆盖它返回自己的容器。问这一句是**界面的动作**——双击选中一个地块就是问它（`docs/GAME_DESIGN.md`
   §1.31）——所以它返回指针而不是引用："地板没有容器"这件事要说得出来。
+* **"我建完了没有"**（`under_construction()`）：建造中的地块被放在图上、照常绘制，但**什么都不做**——不刷新、不取回合、
+  不接受点击、也不收拖入，直到 `mine/build_animation.h` 的扫线走完（`docs/GAME_DESIGN.md` §1.40）。它是**地块实例状态**：
+  同一种建筑的两块地可以一块在建、一块已完成，所以它不能进共享的定义（§5 的 `random_reverse` 是定义属性，这条不是）。
+  `time:0` 的建筑一放下就是完成态；建造中 `refresh()` 被跳过但**脏标记留着**，建成后的下一次刷新把欠的活补上。
 
 ## 3. 实体地块（`EntityTile`）：场景地块 + 自己的节奏
 
@@ -235,8 +253,12 @@ drop.draggable();     // true  —— 指针可以拖它（普通实体是 false
 drop.position();      // 10, 10 —— 自由位置，不与瓦片地图对齐
 drop.name(registry);  // "scrap"；内容没了就是 "#<id>"（与地块、物品同一段文字）
 
+// 同一物品落在 0.75 格以内：并成一个堆（count 相加，先来的位置不动）
+Drop& pile = layer.drop(ContentKind::Drop, registry.find(ContentKind::Drop, "scrap"), t2d::Vec2{10.4f, 10.0f});
+pile.count();         // 2 —— 与 drop 是同一个对象
+
 PointerDrag drag;                              // pointer_drag.h
-drag.begin(layer, t2d::Vec2{10.25f, 10.0f});   // 取最近的、可拖的那个（0.75 格以内）
+drag.begin(layer, t2d::Vec2{10.25f, 10.0f});   // 取最近的可拖的那个（0.75 格以内）；堆的话只拿 1 个
 drag.move_to(t2d::Vec2{20.25f, 15.0f});        // 跟着指针走，抓取偏移保留，夹在地图内
 drag.end();                                    // 放下：它停在放下它的地方
 ```
@@ -249,6 +271,13 @@ drag.end();                                    // 放下：它停在放下它的
   就像一块地板不能靠数据让自己每帧跑一次（§2）。
 * **数据侧**（`drop::` 表，`types/drop_definition.h`）：`read_drop_definition()` / `drop_definitions()` /
   `make_drop()`，与物品那一半同一个形状（§9）。
+* **掉落物堆**：`Drop` 有一个 `count`（默认 1，永远 >=1）；`count > 1` 就是**堆**——**没有子类**，堆就是一个"拿着好几件的
+  Drop"，位置、identity、图、可拖、不被 tick 全部照旧。**同 kind + id** 的两个 Drop 距离 `<= MineLayer::kDropMergeRadius`
+  （0.75 格，和指针抓取距离是同一个数）时自动合成一个：最近优先、距离相同取 serial 小者、**存活者保持自己的位置**。
+  `MineLayer::drop(kind, id, pos, count)` 造出来就地尝试合并（钻头抛出、以及以后任何"产出一个掉落物"的代码都该走它）；
+  `merge_drop(Drop&)` 就是那一步本身。指针从堆里拖**一次只拿 1 个**：堆 `count - 1` 留在原地，指针拿的是一个新造的
+  `count = 1` 的 Drop（原地放回会并回去、拖进仓库也只存 1 个）。堆与单个掉落物**画得一模一样**（同一张图、同样大小，
+  没有数量角标）。
 * **世界视图怎么画它**：一格大、**以位置为中心**——所以它躺在四格之间时就是压在四格上，这正是"位置不是
   格子"的样子；它画在所有地块之后，因为躺在地上的东西在上面。
 
@@ -287,6 +316,9 @@ layer.entity_count();      // 1 —— 就是那个掉落物，落在钻头旁�
   引擎现在只按时间出料，不减少矿。
 * **地块第一次够得到世界**：`Tile::owner()` 是它所在的层（`types/tile.h`），钻头就是靠它把掉落物放进层里
   （`owner()->adopt(...)`）。在这之前只有实体有这条路（§7）。
+* **建成之前它不跑**：正在建造的地块（§2 的 `under_construction()`）不取回合、顶部也不转——世界视图只画扫描线以下的
+  那部分，而且画的是 `get_preview(0 秒)` 的**完整预览**截断（底座加顶部，§1），建成之后才整块显示、按世界时钟转起来
+  （`docs/GAME_DESIGN.md` §1.40）。
 
 ## 10. 仓库（`Warehouse`）：场景地块 + 三个子对象
 
@@ -354,6 +386,12 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
   `item_definitions()` / `make_item()`，读的字段只有 `image`（物品不在图上），加载时同样读一遍并留下
   （`ContentDefinitions::find_item()`）。两个定义器**各走各的表**：`item_definitions()` 只收 `item::`，
   `tile_definitions()` 只收占格子的类别，所以一份文档里叫同一个名字的地板与物品互不干扰。
+* **建筑子对象（`building::`，`types/building.h`）**：一条内容在 `building::` 里声明自己是**建筑**：`materials`（造价，
+  物品名与数量的成对列表，用时按名字解析）、`time`（建造时间，秒；0 是立刻建好）、`category`（storage / processing /
+  extraction，决定它在建造栏的哪一列）、以及 `default_unlock`（**新存档**默认解不解锁，默认 true——老内容因此照旧可见；
+  `docs/GAME_DESIGN.md` §1.44）。前三个字段有一个非空 `building` 才算存在（`Building::empty()`）；四个字段读错都在读文件时
+  报错，`building::` 表里不认识的字段也在报错里列出允许列表。`Building` 是**定义属性**（§5 那种共享记录）：同一条内容的所有
+  地块读同一份；唯一"会变"的是解锁状态，而它属于**每份存档**，不是定义（`mine/building_unlocks.h`，§14）。
 
 ## 12. 加一个新类型
 
@@ -409,7 +447,39 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
 单测 `test_world`（13 用例 / 146 断言）覆盖上面每一条，包括**同一 `(seed, 层号)` 两次生成逐字节相同**；
 实体那半边是 `test_entities`（8 用例 / 129 断言，§7）。
 
-## 14. 现在还没有的
+## 14. 建筑解锁（`BuildingUnlocks`）：每份存档的建筑状态
+
+**解锁**是**存档属性**：一条建筑内容在一份存档里解没解锁，是那份存档自己的事（`mine/building_unlocks.h`），不是定义里的
+常量，也不是每块地一份。一个建筑一行，key 是 `kind + id`，所有实例共享同一个答案。
+
+```cpp
+BuildingUnlocks unlocks;
+unlocks.reset(registry, definitions);                    // 新存档：每个建筑按 building:: default_unlock 起
+unlocks.set_unlocked(ContentKind::Drill, id, true);      // 以后的科技/需求系统从这扇门进来
+unlocks.unlocked(ContentKind::Drill, id);                // true —— 只有解锁的才进建造栏
+
+// 存档：magic 'UNL1' + version + varint 条数 + 每行 (kind, id, unlocked)
+const std::vector<u8> blob = unlocks.serialize();
+BuildingUnlocks loaded;
+loaded.reset(registry, definitions);                     // 先拿新存档的默认值……
+loaded.apply_saved(blob, ContentRemap::build(saved_table, registry));   // ……再按名字把旧状态盖上去
+```
+
+* `reset()` 是新存档：每个建筑取自己定义的 `default_unlock`。`refresh()` 是**id 没变**的内容重载：还在的保留状态、新内容取
+  默认、消失的丢掉；**id 会重排**的重载（游戏里 F5 就是）不能用它——状态会贴到别的建筑上——要走 `serialize()` +
+  `ContentRemap` + `apply_saved()`（`app.cpp` 的 `reload_content()` 就是这么做的）。
+* `serialize()` 写**全部**条目（锁着的也写）：只写解锁的那些，等于默认值一改就丢信息。
+* `apply_saved()` 的 blob 里是**存档自己的 id**，所以必须给 `ContentRemap`：按名字翻成当前 id，只改当前表里存在的建筑；
+  消失的跳过、当前新出现的保留默认。**读不完整就什么都不改**（magic/版本不对、截断、kind 越界、id 为 0 或过大、bool 不是 0/1、
+  同一个建筑出现两次、尾部多余字节）。
+* **只影响建造栏**：`BuildSidebar::rebuild()` 只收 `unlocked()` 的条目，所以一个类别里只有锁着的建筑时它整列都不出现
+  （`docs/GAME_DESIGN.md` §1.44）。**已经落盘**：完整存档系统在 §1.46 接入，`UNLK` chunk 直接写这份 blob
+  （`mine/game_save.h` 的 `make_game_save`）；F5 的重载路径（`app.cpp` 的 `reload_content()`）用同一个 `ContentRemap` +
+  `apply_saved()`。
+* 单测：`test_building_unlocks` 8 用例 / 100 断言（默认值、共享、refresh 保留/新增/删除、同注册表往返、换注册表按名字往返、
+  空表、12 种坏输入不改状态）；建造栏那一侧在 `test_build_sidebar`（4/63）。
+
+## 15. 现在还没有的
 
 * **没有内容规则**：谁在什么时候把哪些内容放到哪些格子上，是**设计者的层规则**（`docs/GAME_DESIGN.md`
   §7.3/§7.4/§7.8/§7.9）。世界已经能把一条内容变成地块、把一层建出来、把两条推进路径跑起来；
@@ -433,9 +503,9 @@ floor::                          TileDefinition{ kind=Floor, name="dirt",
   物流与机器取料都还没有。
 * **地块没有世界访问**：`EntityTile::on_update(elapsed)` 现在只拿到时间（实体有 `layer()`，§7）。
   机器要读邻居、背包、需求时，那个上下文随模拟一起设计，而不是现在猜。
-* **没有存档**：地块怎么进快照（含"哪一格是它的锚点"）等模拟的形状定了再说。现在的地图格只存
-  "这一格是哪条内容"，地块列表在内存里；一层从**当前**注册表建出来，所以内容没了是"放不下并报告"，
-  而不是留下一块过期的东西——按名字修好旧地块是**存档**那条路的事（`docs/GAME_DESIGN.md` §6）。
+* **存档已有，但只有手动一份**：`mine/game_save.h` 的 `PLOT` chunk 存每块地（锚点、镜像、建造中、容器、钻头产量），
+  读档按名字把内容翻回当前 id——名字对不上就整档拒绝，而不是丢掉地块。还没有自动存档、存档槽位与界面里的
+  存档菜单（只有 F7/F8 与 `--save`/`--load`，见 `docs/SAVE.md`）。
 * **模组的逻辑不在这里**：`mine::types` 是**本体**自己的内容逻辑。原生模组跨的是 C ABI
   （`docs/MODS.md` §3），跨过那条线的只能是纯数据与函数指针，所以 `dlopen` 进来的模组提供不了
   `Tile` 子类——它的定义进同一个注册表（数据侧完全一样），行为走它自己的模块。**代码表模组**

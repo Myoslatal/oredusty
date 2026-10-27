@@ -1,10 +1,14 @@
 #include <mine/build_sidebar.h>
 
+#include <mine/types/tile_definition.h>
+
 #include <algorithm>
+#include <memory>
 
 namespace mine {
 
-void BuildSidebar::rebuild(const ContentRegistry& registry, const ContentDefinitions& definitions) {
+void BuildSidebar::rebuild(const ContentRegistry& registry, const ContentDefinitions& definitions,
+                           const BuildingUnlocks& unlocks) {
     all_.clear();
     categories_.clear();
     // Registration order, so the grid is the order the designer's files declare: a picker that shuffles
@@ -14,6 +18,9 @@ void BuildSidebar::rebuild(const ContentRegistry& registry, const ContentDefinit
         for (const ContentEntry& entry : registry.entries(kind)) {
             const types::TileDefinition* definition = definitions.find_tile(kind, entry.name);
             if (definition == nullptr || definition->building.empty()) continue;
+            // Only what this save has unlocked is on offer; a locked building is not a building the player
+            // may pick yet (docs/GAME_DESIGN.md section 1.44).
+            if (!unlocks.unlocked(kind, entry.id)) continue;
             BuildEntry building;
             building.kind = kind;
             building.id = entry.id;
@@ -21,6 +28,13 @@ void BuildSidebar::rebuild(const ContentRegistry& registry, const ContentDefinit
             building.category = definition->building.category;
             building.materials = definition->building.materials;
             building.seconds = definition->building.seconds;
+            // What the entry is drawn as is the plot's own answer, not a second reading of the definition's
+            // picture fields here: the sidebar builds the plot it would place and asks it for its complete
+            // render preview (docs/GAME_DESIGN.md section 1.39). A definition that is not a plot at all
+            // answers with nothing to draw, which is what the name alone is for.
+            const std::unique_ptr<types::SceneTile> plot =
+                types::make_tile(*definition, entry.id, 0, GridPos{0, 0});
+            if (plot != nullptr) building.preview = plot->get_preview();
             all_.push_back(std::move(building));
         }
     }

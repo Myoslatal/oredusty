@@ -394,7 +394,7 @@ ELF 规则是 101 先跑，实测是 **41（"D,A"）**——`run_initialisers()`
 ## 5. 复现（全部夹具都是"编一个目标文件 + `codetab pack` + 一个 20 行宿主"）
 
 宿主是一个最小程序：`CodeImage image; image.declare_host("engine", "1.0");` 逐个 `image.add(load(表))`，
-`load()` 后 `image.find(符号)` 再调用。链接 `build/release/src/libt2d_core.a` 与 `-ldl`，需要宿主导出符号时加
+`load()` 后 `image.find(符号)` 再调用。链接 `build/mine/release/src/libt2d_core.a` 与 `-ldl`，需要宿主导出符号时加
 `-rdynamic`。夹具编译开关分两种，正是 §H4 说的那两种：
 
     # 本体表的开关（Release）

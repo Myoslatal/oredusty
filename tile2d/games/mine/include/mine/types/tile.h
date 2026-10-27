@@ -22,6 +22,7 @@
 #include <t2d/core/rng.h>
 
 #include <string>
+#include <vector>
 
 namespace mine {
 
@@ -33,8 +34,10 @@ class MineLayer;
 
 namespace mine::types {
 
+using t2d::f32;
 using t2d::i32;
 using t2d::TileRect;
+using t2d::Vec2;
 
 /// The cells a plot of \p width x \p height anchored at \p anchor covers. A plot always covers at
 /// least the cell it is anchored at, so a size below one cell is read as one cell rather than as a
@@ -42,6 +45,30 @@ using t2d::TileRect;
 [[nodiscard]] constexpr TileRect footprint(GridPos anchor, i32 width = 1, i32 height = 1) {
     return TileRect{anchor.x, anchor.y, width < 1 ? 1 : width, height < 1 ? 1 : height};
 }
+
+/// One picture of a plot's complete render preview (get_preview): which picture it is, whether it is drawn
+/// mirrored, how far it is turned and about which point of itself.
+struct PreviewImage {
+    /// Which picture of the content this is: empty for the entry's own "image", "top" for the part a drill
+    /// turns over its base (docs/GAME_DESIGN.md section 1.38).
+    std::string part;
+    /// Whether the picture is drawn mirrored left to right, the way the plot draws itself (mirrored()).
+    bool mirrored = false;
+    /// How far the picture is turned, in radians, about \p pivot.
+    f32 radians = 0.0f;
+    /// The point the picture turns about, in the picture's own coordinates: (0, 0) is its bottom left
+    /// corner and (1, 1) its top right.
+    Vec2 pivot{0.5f, 0.5f};
+};
+
+/// The **complete render preview** of a plot: the pictures it draws, in the order it draws them - the
+/// first one at the bottom, each one after it over that. It is a drawing list and not pixels: what the
+/// pictures are is the logic layer's answer, and it never touches a texture or the GPU.
+struct TilePreview {
+    std::vector<PreviewImage> images;
+
+    [[nodiscard]] bool empty() const { return images.empty(); }
+};
 
 /// The base class of everything that occupies cells of a mine.
 class Tile {
@@ -117,6 +144,13 @@ public:
     /// (docs/GAME_DESIGN.md section 2). A plot that may not be turned around draws nothing from the
     /// generator, so it cannot shift the dice for the plots after it.
     void randomise_mirror(t2d::Rng& rng);
+
+    /// The **complete render preview** of this plot: every picture it draws, in drawing order, as it would
+    /// be drawn at \p seconds of the world's clock. It is what an interface draws a plot with when the map
+    /// itself is not being drawn - the building sidebar draws a building's icon this way - so the answer
+    /// comes from the plot and not from a caller looking up its pictures again. The base has no art of its
+    /// own, so it previews as nothing (tile.cpp).
+    [[nodiscard]] virtual TilePreview get_preview(t2d::f32 seconds = 0.0f) const;
 
 protected:
     /// A plot is constructed where it is: it has no place until it has one. \p width and \p height

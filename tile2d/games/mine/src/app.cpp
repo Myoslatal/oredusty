@@ -1,6 +1,7 @@
 #include <mine/app.h>
 
 #include <mine/content_name.h>
+#include <mine/game_save.h>
 
 #include <mine/content_search.h>
 
@@ -10,6 +11,8 @@
 #include <t2d/core/executable.h>
 #include <t2d/core/log.h>
 #include <t2d/core/time.h>
+
+#include <t2d/save/archive.h>
 
 #include <ore/core/image.h>
 
@@ -212,6 +215,10 @@ ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
         {"layer-fill", "<none|bands|scatter>", "world view debug fill: the registry laid out in the layer"},
         {"layer-drops", "<0|1>", "world view debug fill: one of every registered drop, laid out in the layer"},
         {"layer-drills", "<0|1>", "world view debug fill: one of every registered drill, each on a cell that has ore"},
+        {"save", "<path>", "where F7 writes and F8 reads the mine (default save.t2dsave)"},
+        {"load", "<path>", "start in this save, straight into the world view; F7/F8 use --save"},
+        {"autosave-seconds", "<n>",
+         "save the mine by itself this often while it is played (0 off; default 300)"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
@@ -322,8 +329,14 @@ void MineApp::on_start() {
     image_sampler_ = ore::rhi::Sampler::create(context.device(), image_sampler_desc);
     if (screen_ == Screen::Sandbox) open_sandbox();
     // The mine, when a scripted run asks to be taken straight into it: the session screen's Enter is
-    // the same call.
-    if (options_.world_view) open_world();
+    // the same call. A save it names is the whole mine, so it is read instead of a new world being
+    // built: loading one file twice has to give the same mine (docs/SAVE.md). A file that cannot be
+    // read leaves the start screen, which is where the log and the status line say why.
+    if (!options_.load_path.empty()) {
+        if (!load_game_file(options_.load_path)) screen_ = Screen::Start;
+    } else if (options_.world_view) {
+        open_world();
+    }
     // The list is opened last: it reports what the load above actually put in the registry, and a
     // scripted run has no keyboard to press the key that opens it on.
     if (options_.content_list) open_content_list(screen_ == Screen::Sandbox ? Screen::Sandbox : Screen::Start);
@@ -341,6 +354,9 @@ void MineApp::on_update(f32 delta_seconds) {
         case Screen::Content: handle_content_input(); break;
         case Screen::World: handle_world_input(delta_seconds); break;
     }
+    // The automatic save counts this frame after the world has taken its turn, so a period is a period of
+    // the mine and not of the loop (docs/GAME_DESIGN.md section 1.47).
+    maybe_autosave(delta_seconds);
     // Headless runs have no vsync: without pacing the loop would spin and a screenshot would be taken
     // before the interface settled.
     if (config().headless) {
@@ -537,6 +553,16 @@ void MineApp::draw_start_screen() {
     y += kBeforeHints;
     y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.rows")) + kBetweenHints;
     draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.actions"));
+
+    // A failed --load happens before there is a world to show a status line in: the start screen is
+    // where the reason has to be readable, not only in the log (docs/SAVE.md).
+    if (!status_.empty()) {
+        const f32 status_top = height - padding - line_for(body_px_);
+        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{0.0f, status_top - padding * 0.5f}, t2d::Vec2{width, height}},
+                          kPalette.panel_fill);
+        draw_fitted(padding, status_top, body_px_,
+                    status_is_error_ ? kPalette.error : kPalette.text_dim, status_, width - 2.0f * padding);
+    }
 }
 
 void MineApp::draw_session_screen() {
@@ -1050,33 +1076,22 @@ t2d::Aabb2 MineApp::world_area() const {
 }
 
 void MineApp::open_world() {
+    // A new mine starts the automatic save's clock again: the period counts from the last save, and
+    // this is a fresh world (docs/GAME_DESIGN.md section 1.47).
+    autosave_elapsed_ = 0.0f;
+    // A new mine replaces the one that was in memory, **plots and all**: a sweep still running belongs to a
+    // plot that is about to be destroyed, so the sweeps are forgotten *before* the world is replaced.
+    // BuildAnimation::clear() finishes the plots it holds and therefore needs them to still be alive
+    // (mine/build_animation.h); enter_mine_layer() would call it, but by then the old layer is gone.
+    building_.clear();
     const LayerShape shape{options_.grid_width, options_.grid_height, options_.tile_layers};
     world_ = MineWorld(session_.seed, shape);
-    // Which content a layer holds is the designer's (docs/GAME_DESIGN.md sections 7.3, 7.4, 7.8, 7.9).
-    // A story reads it from the designer's own data (layer_rules.h); endless mode would derive it from
-    // (seed, index), which is not designed yet, so it enters an empty layer. The debug fills are there to
-    // look at content before the rules exist, and they name no content of their own - they lay out
-    // whatever the registry holds - so a run that asks for one gets one.
-    //
-    // The generator borrows the rules, so they have to outlive the world they are installed in: they live
-    // in the pipeline report, which is a member of this app and outlives the world (world.h says the same
-    // about the registry a debug generator reads).
-    const LayerRules& story = content_.report().layers;
-    if (options_.layer_fill == "bands") {
-        world_.set_generator(debug_band_generator(registry_, shape));
-    } else if (options_.layer_fill == "scatter") {
-        world_.set_generator(debug_scatter_generator(registry_, shape));
-    } else if (session_.mode == Mode::Story && !story.empty()) {
-        world_.set_generator(story_layer_generator(story, shape));
-        T2D_INFO("world: the story describes {} layer(s)", story.size());
-    } else {
-        if (!options_.layer_fill.empty() && options_.layer_fill != "none") {
-            set_status(format_localized(locale_.text("world.fill.unknown"), options_.layer_fill), true);
-        }
-        world_.set_generator(empty_layer_generator(shape));
-    }
+    configure_world_generator();
     screen_ = Screen::World;
     world_pointer_.reset();
+    // A new mine is a **new save**: every building starts at the state its definition says, and whatever
+    // an earlier session unlocked is not carried over (docs/GAME_DESIGN.md section 1.44).
+    unlocked_.reset(registry_, content_.report().definitions);
     enter_mine_layer(options_.mine_layer);
     if (options_.has_view) {
         world_camera_.look_at(
@@ -1092,9 +1107,149 @@ void MineApp::open_world() {
     }
 }
 
+void MineApp::configure_world_generator() {
+    // Which content a layer holds is the designer's (docs/GAME_DESIGN.md sections 7.3, 7.4, 7.8, 7.9).
+    // A story reads it from the designer's own data (layer_rules.h); endless mode would derive it from
+    // (seed, index), which is not designed yet, so it enters an empty layer. The debug fills are there to
+    // look at content before the rules exist, and they name no content of their own - they lay out
+    // whatever the registry holds - so a run that asks for one gets one.
+    //
+    // The generator borrows the rules, so they have to outlive the world they are installed in: they live
+    // in the pipeline report, which is a member of this app and outlives the world (world.h says the same
+    // about the registry a debug generator reads).
+    const LayerShape shape = world_.shape();
+    const LayerRules& story = content_.report().layers;
+    if (options_.layer_fill == "bands") {
+        world_.set_generator(debug_band_generator(registry_, shape));
+    } else if (options_.layer_fill == "scatter") {
+        world_.set_generator(debug_scatter_generator(registry_, shape));
+    } else if (session_.mode == Mode::Story && !story.empty()) {
+        world_.set_generator(story_layer_generator(story, shape));
+        T2D_INFO("world: the story describes {} layer(s)", story.size());
+    } else {
+        if (!options_.layer_fill.empty() && options_.layer_fill != "none") {
+            set_status(format_localized(locale_.text("world.fill.unknown"), options_.layer_fill), true);
+        }
+        world_.set_generator(empty_layer_generator(shape));
+    }
+}
+
+std::string MineApp::save_file_path() const {
+    // A save the player names is theirs; one they did not still has a home, so F7 always has somewhere
+    // to write (docs/SAVE.md). A run started from --load keeps writing **that** file, so F7 after a load
+    // is a save and not a second file the player never named; F8 reads the same one.
+    if (!options_.save_path.empty()) return t2d::save::with_extension(options_.save_path);
+    if (!options_.load_path.empty()) return t2d::save::with_extension(options_.load_path);
+    return t2d::save::with_extension("save.t2dsave");
+}
+
+bool MineApp::save_game() {
+    if (!world_.has_layer()) {
+        set_status(locale_.text("world.save.no_layer"), true);
+        return false;
+    }
+    const t2d::save::File save =
+        make_game_save(world_, session_, unlocked_, building_, world_seconds_, world_camera_.centre(),
+                       world_camera_.zoom(), registry_);
+    const std::string path = save_file_path();
+    std::string error;
+    if (!t2d::save::write_file(path, save, &error)) {
+        set_status(format_localized(locale_.text("world.save.failed"), path, error), true);
+        return false;
+    }
+    T2D_INFO("save: {} plot(s) and {} drop(s) to '{}'", world_.layer().plot_count(),
+             world_.layer().entity_count(), path);
+    set_status(format_localized(locale_.text("world.save.ok"), world_.layer().plot_count(),
+                                world_.layer().entity_count(), path));
+    autosave_elapsed_ = 0.0f;   // the next period counts from this write
+    return true;
+}
+
+bool MineApp::save_allowed() const {
+    // A headless run is a script or a screenshot, and it must not write over somebody's save behind their
+    // back: only a path named on the command line says where an automatic save belongs. A window is a
+    // person playing, and their mine is kept for them (docs/GAME_DESIGN.md section 1.47).
+    if (!config().headless) return true;
+    return !options_.save_path.empty() || !options_.load_path.empty();
+}
+
+void MineApp::maybe_autosave(f32 delta_seconds) {
+    // Only time in the mine counts: the menus are not the game, and a visit starts a full period. A run
+    // that may not write never starts the clock, and 0 turns the automatic save off.
+    if (screen_ != Screen::World || !world_.has_layer() || !save_allowed() ||
+        !(options_.autosave_seconds > 0.0f)) {
+        autosave_elapsed_ = 0.0f;
+        return;
+    }
+    autosave_elapsed_ += delta_seconds;
+    if (autosave_elapsed_ < options_.autosave_seconds) return;
+    // Cleared **before** the write, so a save that fails waits a full period instead of retrying every
+    // frame; the status line already said what went wrong (docs/SAVE.md).
+    autosave_elapsed_ = 0.0f;
+    T2D_INFO("autosave: {} second(s) in the mine, writing the save", options_.autosave_seconds);
+    save_game();
+}
+
+bool MineApp::load_game_file(const std::string& path) {
+    const std::string file_path = t2d::save::with_extension(path);
+    std::error_code code;
+    if (!std::filesystem::is_regular_file(file_path, code)) {
+        set_status(format_localized(locale_.text("world.load.no_file"), file_path), true);
+        return false;
+    }
+    std::string error;
+    const std::optional<t2d::save::File> save = t2d::save::read_file(file_path, &error);
+    if (!save.has_value()) {
+        set_status(format_localized(locale_.text("world.load.failed"), file_path, error), true);
+        return false;
+    }
+    GameLoadReport report;
+    std::optional<GameSaveData> loaded =
+        load_game_save(*save, registry_, content_.report().definitions, &report);
+    if (!loaded.has_value()) {
+        // A save that cannot come back as it was is refused as a whole, and the mine being played is
+        // left alone: half a mine is worse than the one that was there (mine/game_save.h).
+        set_status(format_localized(locale_.text("world.load.failed"), file_path, report.error), true);
+        return false;
+    }
+    // A save is the whole mine: the sweeps of the old one belong to plots that are about to be
+    // destroyed, and a drag in progress belongs to a drop in it. Both are let go while that layer is
+    // still alive (mine/build_animation.h, mine/pointer_drag.h).
+    building_.clear();
+    world_drag_ = PointerDrag{};
+    world_ = std::move(*loaded->world);
+    // The session is the save's, and the generator is chosen from it: a story save walks the story's
+    // layers, an endless one the empty layer endless mode has until its rules are designed.
+    session_ = loaded->session;
+    // The one layer came back from the save; the generator is what the layers around it are built
+    // from when the player walks to one (mine/world.h).
+    configure_world_generator();
+    unlocked_ = std::move(loaded->unlocks);
+    building_ = std::move(loaded->builds);
+    world_seconds_ = loaded->world_seconds;
+    // The camera comes back where it was, in the window that is drawing it: the save holds the view,
+    // not the window, so the viewport is this frame's size (the first frame after a load is drawn at it).
+    const t2d::Aabb2 view_area = world_area();
+    world_camera_.set_viewport(
+        t2d::Vec2{view_area.max.x - view_area.min.x, view_area.max.y - view_area.min.y});
+    world_camera_.look_at(loaded->camera_center);
+    if (loaded->camera_zoom > 0.0f) world_camera_.set_zoom(loaded->camera_zoom);
+    clamp_world_view();
+    sidebar_.rebuild(registry_, content_.report().definitions, unlocked_);
+    // A selection and a press in progress are about the layer that was just replaced.
+    clear_selection();
+    double_click_.reset();
+    world_pointer_.reset();
+    screen_ = Screen::World;
+    T2D_INFO("load: {} plot(s) and {} drop(s) from '{}'", loaded->plots, loaded->entities, file_path);
+    set_status(format_localized(locale_.text("world.load.ok"), loaded->plots, loaded->entities, file_path));
+    autosave_elapsed_ = 0.0f;   // a loaded mine starts a fresh period
+    return true;
+}
+
 void MineApp::enter_mine_layer(i32 index) {
     building_.clear();
-    sidebar_.rebuild(registry_, content_.report().definitions);
+    sidebar_.rebuild(registry_, content_.report().definitions, unlocked_);
     // A new layer is another mine: whatever was selected belongs to the one being left, and the press
     // that is halfway through a double click does too (docs/GAME_DESIGN.md section 1.31).
     clear_selection();
@@ -1257,11 +1412,17 @@ const types::SceneTile* MineApp::selected_plot() const {
     if (!has_selection_ || !world_.has_layer()) return nullptr;
     if (!world_.layer().inside(selected_cell_)) return nullptr;
     const types::SceneTile* plot = world_.layer().top_plot_at(selected_cell_);
+    // A plot that is still going up is not a selection: it is not finished, so it is not something the
+    // player has, and it is not the warehouse a build is paid out of either (docs/GAME_DESIGN.md 1.40).
+    if (plot != nullptr && plot->under_construction()) return nullptr;
     return plot != nullptr && plot->container() != nullptr ? plot : nullptr;
 }
 
 void MineApp::select_at(GridPos cell) {
     const types::SceneTile* plot = world_.layer().top_plot_at(cell);
+    // A building that is still going up cannot be selected - it is in the same class as scenery that holds
+    // nothing: the double click is ignored and does not change what is selected (docs/GAME_DESIGN.md 1.40).
+    if (plot != nullptr && plot->under_construction()) plot = nullptr;
     if (plot == nullptr || plot->container() == nullptr) {
         // A double click on scenery, or on ground, selects nothing - and it does **not** put down what is
         // selected either: the designer asked for the selection to stay when the pointer looks elsewhere,
@@ -1356,22 +1517,51 @@ MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const
     const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
     // One panel's pictures, at the rows the layout gave them. The words are the overlay's (draw_container_panel),
     // and both come out of the same layout, so a picture cannot land on another line's name.
-    // The build sidebar's pictures, one batch per entry, in the cells the layout gave them: the same texture
-    // the map draws that content with (docs/GAME_DESIGN.md section 1.36).
+    // The build sidebar's pictures, one batch per picture, in the cells the layout gave them: the same
+    // textures the map draws that content with (docs/GAME_DESIGN.md sections 1.36 and 1.39).
     if (sidebar_.open()) {
         const BuildSidebar::Layout layout =
             sidebar_.layout(t2d::Vec2{static_cast<f32>(renderer().width()), static_cast<f32>(renderer().height())},
                             unit_);
-        for (usize index = 0; index < layout.entries.size(); ++index) {
+        const t2d::Aabb2 mirrored_uv{t2d::Vec2{1.0f, 0.0f}, t2d::Vec2{0.0f, 1.0f}};
+        // The pictures are the plot's own complete render preview (types/tile.h): in drawing order, first
+        // one at the bottom, so a drill's icon is its base with the top over it (section 1.39). The layout
+        // has a slot per cell of the page, and the page's first entry is where the page starts: slot 0 is
+        // not entry 0 on the second page (section 1.36).
+        const usize first = sidebar_.page() * BuildSidebar::kPageSize;
+        for (usize slot = 0; slot < layout.entries.size(); ++slot) {
+            const usize index = first + slot;
+            if (index >= sidebar_.entries().size()) break;   // the last page has fewer entries than slots
             const BuildEntry& entry = sidebar_.entries()[index];
-            const auto texture = content_textures_.find(image_key(entry.kind, entry.name));
-            if (texture == content_textures_.end()) continue;   // no picture: the name alone says it
-            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
-            batch_->draw_quad(layout.entries[index], full_uv, 0xFFFFFFFFu);
-            batch_->end();
-            cost.draw_calls += batch_->draw_calls();
-            cost.quads += batch_->quads();
-            cost.dropped += batch_->dropped_quads();
+            for (const types::PreviewImage& image : entry.preview.images) {
+                const auto texture = content_textures_.find(image_key(entry.kind, entry.name, image.part));
+                if (texture == content_textures_.end()) {
+                    // A picture whose texture is not there is drawn as the colour its name derives on the
+                    // map; an icon has no such colour, so it draws nothing. A missing base is not fixed by
+                    // drawing the top alone - the map draws the fallback colour there too.
+                    if (image.part.empty()) break;
+                    continue;
+                }
+                batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+                batch_->draw_quad_rotated(layout.entries[slot], image.mirrored ? mirrored_uv : full_uv,
+                                          image.pivot, image.radians, 0xFFFFFFFFu);
+                batch_->end();
+                cost.draw_calls += batch_->draw_calls();
+                cost.quads += batch_->quads();
+                cost.dropped += batch_->dropped_quads();
+            }
+            // The picked building is boxed **after** its picture: a picture fills its whole cell, so the box
+            // the chrome pass draws for it is covered by the icon - the selection would not read as one
+            // (docs/GAME_DESIGN.md section 1.36). This is the pass that owns the textures, so the box goes
+            // here, once per selected entry.
+            if (sidebar_.selected() == &entry) {
+                batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+                batch_->draw_rect_outline(layout.entries[slot], 3.0f, kPalette.accent);
+                batch_->end();
+                cost.draw_calls += batch_->draw_calls();
+                cost.quads += batch_->quads();
+                cost.dropped += batch_->dropped_quads();
+            }
         }
     }
 
@@ -1608,6 +1798,13 @@ void MineApp::handle_world_input(f32 delta_seconds) {
         reload_content();
         enter_mine_layer(world_.layer_index());
     }
+    // The save is the whole mine (docs/SAVE.md): F7 writes it to the one file this run uses, F8 reads
+    // it back. A load replaces the world, so the frame ends there and the next one starts from the save.
+    if (input.key_pressed(ore::Key::F7)) save_game();
+    if (input.key_pressed(ore::Key::F8)) {
+        load_game_file(save_file_path());
+        return;
+    }
     // B opens and closes the build sidebar (docs/GAME_DESIGN.md section 1.36).
     if (input.key_pressed(ore::Key::B)) sidebar_.toggle();
     if (input.key_pressed(ore::Key::F6)) {
@@ -1703,7 +1900,20 @@ const ContentPipelineReport& MineApp::load_content() {
 }
 
 void MineApp::reload_content() {
+    // A reload registers the whole registry again, so ids may move: the unlocked state travels **by name**.
+    // The table of the load before and a blob written from it are translated by ContentRemap once the new
+    // content is in. Carrying the state by kind+id (BuildingUnlocks::refresh) would hand a building's
+    // state to whichever building happens to have that number now (docs/GAME_DESIGN.md section 1.44).
+    const ContentTable before = ContentTable::from_registry(registry_);
+    const std::vector<u8> unlocked_before = unlocked_.serialize();
     const ContentPipelineReport& loaded = load_content();
+    // A new save first - content that appeared in this load starts at its definition's default - and then
+    // the old state over it, by name: what is gone is skipped and what is new keeps its default. This is
+    // the same path a save file will take when the save system lands; nothing is written to disk yet.
+    unlocked_.reset(registry_, loaded.definitions);
+    if (!unlocked_.apply_saved(unlocked_before, ContentRemap::build(before, registry_))) {
+        T2D_WARN("unlocks: the state written before the reload could not be read back; using defaults");
+    }
     // The list is a view of this load, so it is rebuilt with it: a reload that happened while the list
     // is open must not leave the list describing the load before it.
     refresh_content_list();
@@ -2374,17 +2584,39 @@ void MineApp::draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_project
         const t2d::Aabb2 cell = plot_box_on_screen(*build.plot);
         const f32 done = build.progress();
         // The scan line comes up from the bottom: what is **below** it has been scanned, so that is the part
-        // of the picture that is shown - the plot's own texture, cut where the line is (section 1.37).
+        // of the picture that is shown - the plot's own **complete preview**, cut where the line is, so a
+        // drill's sweep shows its base **and** the top over it rather than the base alone (sections 1.37,
+        // 1.39). The preview is asked for at zero seconds: a machine that is not built yet does not turn
+        // (section 1.40).
         const f32 line = cell.max.y - cell.height() * done;
         const t2d::Aabb2 shown{t2d::Vec2{cell.min.x, line}, cell.max};
-        const t2d::Aabb2 uv{t2d::Vec2{0.0f, 1.0f - done}, t2d::Vec2{1.0f, 1.0f}};
         const ContentEntry* entry = registry_.find(build.plot->kind(), build.plot->id());
         if (entry == nullptr) continue;
-        const auto texture = content_textures_.find(image_key(build.plot->kind(), entry->name));
-        if (texture == content_textures_.end()) continue;   // no picture: the line alone says it is going up
-        batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
-        batch_->draw_quad(shown, uv, 0xFFFFFFFFu);
-        batch_->end();
+        const types::TilePreview preview = build.plot->get_preview(0.0f);
+        bool drew_a_picture = false;
+        for (const types::PreviewImage& image : preview.images) {
+            const auto texture =
+                content_textures_.find(image_key(build.plot->kind(), entry->name, image.part));
+            // No picture: nothing to cut - the sweep line alone says it is going up.
+            if (texture == content_textures_.end()) continue;
+            // The same cut as the single-picture case, and the same mirroring the map draws it with: the uv
+            // rectangle keeps the bottom `done` of the picture and the rectangle is the part of the cell
+            // below the line.
+            const t2d::Aabb2 uv = image.mirrored
+                                      ? t2d::Aabb2{t2d::Vec2{1.0f, 1.0f - done}, t2d::Vec2{0.0f, 1.0f}}
+                                      : t2d::Aabb2{t2d::Vec2{0.0f, 1.0f - done}, t2d::Vec2{1.0f, 1.0f}};
+            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+            batch_->draw_quad_rotated(shown, uv, image.pivot, image.radians, 0xFFFFFFFFu);
+            batch_->end();
+            drew_a_picture = true;
+        }
+        if (!drew_a_picture) {
+            // Content with no picture at all still has something going up: the colour its name derives,
+            // cut the same way (the layer skips the plot while it is being built).
+            batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+            batch_->draw_rect(shown, dim_color(debug_color_for(entry->name), 0.45f));
+            batch_->end();
+        }
     }
 }
 
@@ -2409,17 +2641,32 @@ void MineApp::draw_build_sidebar() {
                     std::string(locale_.text(std::format("build.category.{}", types::building_category_name(category)))),
                     layout.categories[index].width() - 8.0f * unit_);
     }
-    for (usize index = 0; index < layout.entries.size(); ++index) {
+    // The layout has a slot per cell of the page, and the page's first entry is where the page starts: the
+    // second page's slot 0 is not entry 0, or the names would be the first page's (section 1.36).
+    const usize first = sidebar_.page() * BuildSidebar::kPageSize;
+    for (usize slot = 0; slot < layout.entries.size(); ++slot) {
+        const usize index = first + slot;
+        if (index >= sidebar_.entries().size()) break;   // the last page has fewer entries than slots
         const BuildEntry& entry = sidebar_.entries()[index];
         const bool picked = sidebar_.selected() == &entry;
-        batch_->draw_rect(layout.entries[index], kPalette.grid_background);
-        // The picture itself is drawn by the art pass, which owns the textures: the box here is what the
-        // selection looks like, and the name is under it.
-        draw_fitted(layout.entries[index].min.x + 2.0f * unit_, layout.entries[index].max.y - 14.0f * unit_,
+        batch_->draw_rect(layout.entries[slot], kPalette.grid_background);
+        // The picture itself is drawn by the art pass, which owns the textures: the name is under it, and
+        // the box around the picked one is drawn there too - after the picture, so it stays visible
+        // (draw_panel_images).
+        draw_fitted(layout.entries[slot].min.x + 2.0f * unit_, layout.entries[slot].max.y - 14.0f * unit_,
                     static_cast<u16>(body_px_ * 3 / 4), picked ? kPalette.text : kPalette.text_dim, entry.name,
-                    layout.entries[index].width() - 4.0f * unit_);
-        if (picked) batch_->draw_rect_outline(layout.entries[index], 3.0f, kPalette.accent);
+                    layout.entries[slot].width() - 4.0f * unit_);
     }
+    // The page label and the button are the panel's own furniture: they are there whether a building is
+    // picked or not - the button is what closes the sidebar. They are drawn **before** the details below,
+    // because the details branch returns early when nothing is picked; it used to take the button (and the
+    // page label) with it, so the button appeared only while a building was selected.
+    if (sidebar_.page_count() > 1) {
+        draw_fitted(layout.page_label.min.x, layout.page_label.min.y, body_px_, kPalette.text_dim,
+                    std::format("{} / {}", sidebar_.page() + 1, sidebar_.page_count()),
+                    layout.page_label.width());
+    }
+    draw_sidebar_button(layout);
     // What the picked one is called and what it costs, under the grid.
     const BuildEntry* picked = sidebar_.selected();
     if (picked == nullptr) {
@@ -2436,11 +2683,6 @@ void MineApp::draw_build_sidebar() {
         materials += std::format(" x{}", stack.count);
     }
     if (picked->seconds > 0.0f) materials += std::format("   {}s", picked->seconds);
-    if (sidebar_.page_count() > 1) {
-        draw_fitted(layout.page_label.min.x, layout.page_label.min.y, body_px_, kPalette.text_dim,
-                    std::format("{} / {}", sidebar_.page() + 1, sidebar_.page_count()), layout.page_label.width());
-    }
-    draw_sidebar_button(layout);
     draw_fitted(layout.details.min.x, layout.details.min.y + line_for(body_px_), body_px_, kPalette.text_dim,
                 materials, layout.details.width());
 }
@@ -2712,6 +2954,11 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
         };
         layer.for_each_plot_in(visible, [&](const types::SceneTile& plot) {
             if (plot.layer() != tile_layer) return;
+            // A plot that is still going up is **not** drawn here: only the part the sweep has reached
+            // exists yet, and draw_builds draws that part from the plot's complete preview - the rest
+            // shows what is underneath it, which is what an unfinished building looks like
+            // (docs/GAME_DESIGN.md sections 1.37, 1.40).
+            if (plot.under_construction()) return;
             const ContentEntry* entry = registry_.find(plot.kind(), plot.id());
             if (entry == nullptr) return;   // the content is gone: there is nothing to draw it with
             const t2d::Vec2 at = camera.screen_of(
@@ -2737,9 +2984,13 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             if (drill != nullptr && content_textures_.find(image_key(plot.kind(), entry->name, "top")) !=
                                           content_textures_.end()) {
                 const t2d::Aabb2 art = plot.mirrored() ? mirrored_uv : full_uv;
+                // A machine that is still going up does not run, so its top does not turn: it is drawn as
+                // a still frame until the build is done, and turns by the world's clock from then on
+                // (docs/GAME_DESIGN.md section 1.40).
+                const f32 turn = plot.under_construction() ? 0.0f : drill->spin_angle(world_seconds_);
                 add_quad(Quad{key, rect, art, 0.0f});
-                add_quad(Quad{image_key(plot.kind(), entry->name, "top"), rect, art,
-                               drill->spin_angle(world_seconds_), drill->spin_origin()});
+                add_quad(Quad{image_key(plot.kind(), entry->name, "top"), rect, art, turn,
+                               drill->spin_origin()});
                 return;
             }
             add_quad(Quad{key, rect, plot.mirrored() ? mirrored_uv : full_uv});
@@ -2924,6 +3175,13 @@ void MineApp::on_shutdown() {
         } else {
             T2D_WARN("sandbox: could not write '{}'", options_.save_layout_path);
         }
+    }
+    // The window's cross and quit() both end here, and the mine in memory is the player's: it is written
+    // once on the way out, before the GPU resources it was drawn with are released (docs/GAME_DESIGN.md
+    // section 1.47). The start screen has no layer, so a run that never entered a mine has nothing to
+    // keep; a failed save only warns - the player asked to leave, not to be kept on screen.
+    if (world_.has_layer() && save_allowed()) {
+        if (save_game()) T2D_INFO("autosave: the mine was saved on exit");
     }
     batch_.reset();
     text_.reset();

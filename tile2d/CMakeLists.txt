@@ -10,12 +10,13 @@ include(GNUInstallDirs)
 
 # ---------------------------------------------------------------- options -----
 option(T2D_BUILD_MINE "Build the mine game (needs the Ore rendering framework)" ON)
+option(T2D_BUILD_MEFEMMA "Build the mefemma game (needs the Ore rendering framework)" ON)
 option(T2D_BUILD_TESTS "Build the unit and integration tests" ON)
 option(T2D_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(T2D_ENABLE_SANITIZERS "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(T2D_ENABLE_THREAD_SANITIZER "Build with ThreadSanitizer" OFF)
 set(T2D_ORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." CACHE PATH
-    "Ore checkout to build the renderer against (only needed when T2D_BUILD_MINE=ON)")
+    "Ore checkout to build the renderer against (only needed when a game is built)")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
@@ -24,10 +25,16 @@ endif()
 
 find_package(Threads REQUIRED)
 
-# The rendering framework is only needed by the game. The tile map, the text engine, the networking
-# and the graphics-free tests build and run without it - that is the whole point of the split.
+# The rendering framework is only needed by a game. The tile map, the text engine, the networking and the
+# graphics-free tests build and run without it - that is the whole point of the split.
 set(T2D_WITH_RENDERER OFF)
-if(T2D_BUILD_MINE)
+# Either game needs the renderer; a checkout that builds neither (a dedicated server, the no-renderer
+# preset) does not look for it at all.
+set(T2D_WANTS_GAME OFF)
+if(T2D_BUILD_MINE OR T2D_BUILD_MEFEMMA)
+    set(T2D_WANTS_GAME ON)
+endif()
+if(T2D_WANTS_GAME)
     find_package(ore 0.1 QUIET)
     if(NOT ore_FOUND AND EXISTS "${T2D_ORE_DIR}/CMakeLists.txt")
         message(STATUS "Tile2D: Ore package not installed, building it from ${T2D_ORE_DIR}")
@@ -40,8 +47,10 @@ if(T2D_BUILD_MINE)
         set(T2D_WITH_RENDERER ON)
     else()
         message(WARNING "Tile2D: Ore was not found; building without the renderer "
-                        "(set T2D_ORE_DIR or install ore, or configure with -DT2D_BUILD_MINE=OFF)")
+                        "(set T2D_ORE_DIR or install ore, or configure with -DT2D_BUILD_MINE=OFF "
+                        "-DT2D_BUILD_MEFEMMA=OFF)")
         set(T2D_BUILD_MINE OFF)
+        set(T2D_BUILD_MEFEMMA OFF)
     endif()
 endif()
 
@@ -64,6 +73,13 @@ if(T2D_BUILD_MINE AND T2D_WITH_RENDERER)
     add_subdirectory(games/mine)
 endif()
 
+# The second game on the same framework. It ships no gameplay and no content of its own: it is the
+# framework a game needs - a scene stack, a DrawList and a 2D renderer, assets, input and settings - and
+# everything a particular game adds hangs off the extension points in games/mefemma/docs/FRAMEWORK.md.
+if(T2D_BUILD_MEFEMMA AND T2D_WITH_RENDERER)
+    add_subdirectory(games/mefemma)
+endif()
+
 if(T2D_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
@@ -71,6 +87,7 @@ endif()
 message(STATUS "")
 message(STATUS "Tile2D ${PROJECT_VERSION}  (${CMAKE_BUILD_TYPE})")
 message(STATUS "  mine game     : ${T2D_BUILD_MINE} (renderer: ${T2D_WITH_RENDERER})")
+message(STATUS "  mefemma game  : ${T2D_BUILD_MEFEMMA} (renderer: ${T2D_WITH_RENDERER})")
 message(STATUS "  tests         : ${T2D_BUILD_TESTS}")
 message(STATUS "  sanitizers    : asan=${T2D_ENABLE_SANITIZERS} tsan=${T2D_ENABLE_THREAD_SANITIZER}")
 message(STATUS "")

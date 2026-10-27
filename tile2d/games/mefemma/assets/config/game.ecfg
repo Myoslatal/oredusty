@@ -1,0 +1,17 @@
+# Mefemma's settings. The shell reads the six fields below; everything else belongs to the game and is
+# kept in the document for the game to read (Settings::find in mefemma/settings.h).
+#
+# A field the shell reads and cannot use is reported rather than silently replaced: "width:wide" is an
+# error, not a window with the default width.
+
+title:"Mefemma"
+width:1280
+height:720
+vsync:true
+language:"en"
+seed:1
+
+# A game's own fields go here. They are not read by the shell and they are not an error:
+#
+#     difficulty:"normal"
+#     autosave:true

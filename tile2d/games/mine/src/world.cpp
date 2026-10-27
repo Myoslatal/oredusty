@@ -520,6 +520,47 @@ bool MineLayer::interact(types::Entity& a, types::Entity& b) {
     return first || second;
 }
 
+types::Drop& MineLayer::drop(ContentKind kind, ContentId id, t2d::Vec2 position, usize count) {
+    auto made = std::make_unique<types::Drop>(kind, id, position, count);
+    types::Drop* raw = made.get();
+    (void)adopt(std::move(made));
+    // Every drop is a chance to grow a pile: what it lands next to absorbs it and answers for both, which
+    // is why what comes back is not necessarily what went in (docs/GAME_DESIGN.md section 1.43).
+    if (types::Drop* pile = merge_drop(*raw); pile != nullptr) return *pile;
+    return *raw;
+}
+
+types::Drop* MineLayer::merge_drop(types::Drop& piece) {
+    if (!piece.alive() || piece.layer() != this) return nullptr;
+    // The nearest **live** drop of the same item within the radius: what a pile is made of. Nothing else
+    // is a candidate - another item, another kind, a dead drop, or the piece itself (section 1.43).
+    types::Drop* nearest = nullptr;
+    f32 best_distance = 0.0f;
+    constexpr f32 kRadiusSquared = kDropMergeRadius * kDropMergeRadius;
+    for_each_entity_within(piece.position(), kDropMergeRadius, [&](types::Entity& entity) {
+        if (&entity == &piece || !entity.alive()) return;
+        auto* other = dynamic_cast<types::Drop*>(&entity);
+        if (other == nullptr || other->kind() != piece.kind() || other->id() != piece.id()) return;
+        // "Within" the radius, not "closer than": the squared distance answers the same question without a
+        // square root, so the boundary itself is a case the data can be exactly on.
+        const f32 distance = t2d::length_squared(other->position() - piece.position());
+        if (distance > kRadiusSquared) return;
+        // The nearest wins, and a tie goes to the lower serial: two drops placed at the same distance
+        // merge the same way twice, the rule a grab follows (pointer_drag.h).
+        if (nearest != nullptr && (distance > best_distance ||
+                                   (distance == best_distance && other->serial() >= nearest->serial()))) {
+            return;
+        }
+        nearest = other;
+        best_distance = distance;
+    });
+    if (nearest == nullptr) return nullptr;
+    // The pile that stays does not move: what is added to it comes to it.
+    nearest->add(piece.count());
+    (void)destroy(piece);
+    return nearest;
+}
+
 std::vector<types::Entity*> MineLayer::entities_within(t2d::Vec2 center, f32 radius) const {
     std::vector<types::Entity*> found;
     for_each_entity_within(center, radius, [&](types::Entity& entity) { found.push_back(&entity); });
@@ -582,6 +623,13 @@ bool MineLayer::blocks(i32 layer_mask, GridPos cell) const {
     return false;
 }
 
+void MineLayer::recount_mirrored() {
+    mirrored_ = 0;
+    for (const std::unique_ptr<types::SceneTile>& plot : plots_) {
+        if (plot->mirrored()) ++mirrored_;
+    }
+}
+
 std::string MineLayer::dump_text(const ContentRegistry& registry) const {
     std::string text = std::format("layer {}: {}x{}, {} tile layer(s), seed {:016x}\n", index_, width(), height(),
                                    layer_count(), seed_);
@@ -591,9 +639,14 @@ std::string MineLayer::dump_text(const ContentRegistry& registry) const {
     text += std::format("  {} entity(ies), {} of them updating themselves\n", entities_.size(),
                         auto_updating_count());
     for (const std::unique_ptr<types::Entity>& entity : entities_) {
-        text += std::format("  [e{}] {} #{} '{}' at {:.2f},{:.2f}{}\n", entity->serial(),
+        // A pile says how many it carries, right after where it lies: the one thing about a drop that the
+        // rest of the line does not say (types/drop.h, docs/GAME_DESIGN.md section 1.43).
+        const auto* drop = dynamic_cast<const types::Drop*>(entity.get());
+        const std::string pile =
+            drop != nullptr && drop->count() > 1 ? std::format(" x{}", drop->count()) : std::string{};
+        text += std::format("  [e{}] {} #{} '{}' at {:.2f},{:.2f}{}{}\n", entity->serial(),
                             content_kind_name(entity->kind()), entity->id(), entity->name(registry),
-                            entity->position().x, entity->position().y,
+                            entity->position().x, entity->position().y, pile,
                             entity->auto_update()
                                 ? (entity->period_seconds() > 0.0f
                                        ? std::format(" every {:.3f}s", entity->period_seconds())
@@ -649,6 +702,13 @@ const MineLayer& MineWorld::enter(i32 index, const ContentRegistry& registry,
     for (const std::string& problem : spec.problems) build_report_.refuse(problem);
     layer_->build(spec, registry, definitions, &build_report_);
     return *layer_;
+}
+
+void MineWorld::install_layer(std::unique_ptr<MineLayer> layer, LayerBuildReport report) {
+    // No generator, no build: the layer a save brings is the layer, and the report says what building it
+    // cost when it was first built (mine/game_save.h).
+    layer_ = std::move(layer);
+    build_report_ = std::move(report);
 }
 
 usize MineWorld::refresh() { return layer_ != nullptr ? layer_->refresh() : 0; }

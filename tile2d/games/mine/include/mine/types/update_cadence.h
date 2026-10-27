@@ -31,6 +31,9 @@ public:
 
     /// The time that has piled up since the last run.
     [[nodiscard]] f32 since_last_update() const { return elapsed_; }
+    /// Puts the remainder back, which is how a save restores "it had half a period to go". A negative
+    /// one is read as nothing piled up, because time does not run that way.
+    void set_since_last_update(f32 seconds) { elapsed_ = seconds > 0.0f ? seconds : 0.0f; }
 
     /// Hands it the frame's time and returns the span this run accounts for, or nothing when its turn
     /// has not come. The remainder stays in the accumulator, so a period of one second does not drift

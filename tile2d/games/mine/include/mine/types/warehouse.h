@@ -49,8 +49,13 @@ public:
     [[nodiscard]] usize capacity() const;
     /// A click arrived at \p cell: the warehouse takes it when the cell is one of its own, which is what
     /// opens (or closes) its panel. Every warehouse is told about every click, so the ones the click did
-    /// not land on close theirs (types/click.h).
-    bool on_click(GridPos cell) { return click_.receive(covers(cell)); }
+    /// not land on close theirs (types/click.h). A warehouse that is **still going up** takes no click at
+    /// all: it answers as if the click had landed elsewhere, which also closes a panel it had open before
+    /// its build started (types/scene_tile.h, docs/GAME_DESIGN.md section 1.37).
+    bool on_click(GridPos cell) {
+        if (under_construction()) return click_.receive(false);
+        return click_.receive(covers(cell));
+    }
     /// Whether \p cell is one of its cells: what a drag and a click are measured against.
     [[nodiscard]] bool holds(GridPos cell) const { return covers(cell); }
 

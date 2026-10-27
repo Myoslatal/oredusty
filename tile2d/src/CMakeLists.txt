@@ -60,6 +60,17 @@ add_library(t2d::net ALIAS t2d_net)
 t2d_apply_settings(t2d_net)
 target_link_libraries(t2d_net PUBLIC t2d::core)
 
+# ------------------------------------------------------------------ t2d_save --
+# The save archive (.t2dsave): header only, so a game compiles it into its own program or code table
+# instead of the engine publishing it - a save format only games use should not grow engine.api. It
+# depends on nothing but t2d::core's vocabulary types (docs/SAVE.md).
+add_library(t2d_save INTERFACE)
+add_library(t2d::save ALIAS t2d_save)
+target_include_directories(t2d_save INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+    "${PROJECT_BINARY_DIR}/generated")
+target_link_libraries(t2d_save INTERFACE t2d::core)
+
 # --------------------------------------------------------------- test_support --
 add_library(t2d_test_support STATIC ../tests/support/test_support.cpp)
 add_library(t2d::test_support ALIAS t2d_test_support)

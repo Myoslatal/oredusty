@@ -227,6 +227,18 @@ T2D_TEST(a_warehouse_is_scenery_with_a_capacity_and_three_halves) {
     T2D_CHECK(shed->click().open());
     T2D_CHECK_FALSE(shed->on_click(GridPos{8, 8}));
     T2D_CHECK_FALSE(shed->click().open());
+
+    // A warehouse that is **still going up** takes no click at all: it answers as if the click had landed
+    // elsewhere, which is also what closes a panel it had open before its build started
+    // (docs/GAME_DESIGN.md section 1.37).
+    T2D_CHECK(shed->on_click(GridPos{6, 5}));
+    T2D_CHECK(shed->click().open());
+    shed->set_under_construction(true);
+    T2D_CHECK_FALSE(shed->on_click(GridPos{6, 5}));   // on one of its own cells, and still not taken
+    T2D_CHECK_FALSE(shed->click().open());
+    shed->set_under_construction(false);
+    T2D_CHECK(shed->on_click(GridPos{6, 5}));         // done: it takes clicks again
+    T2D_CHECK(shed->click().open());
 }
 
 T2D_TEST(a_drop_dragged_onto_a_warehouse_goes_in) {
@@ -276,6 +288,29 @@ T2D_TEST(a_drop_dragged_onto_a_warehouse_goes_in) {
     T2D_CHECK(second->alive());
     T2D_CHECK_NEAR(second->position().x, 2.5f, 1e-5f);
     T2D_CHECK_EQ(shed->container()->total(), 1u);
+
+    // A warehouse that is still going up takes no dragged drop: the pointer looks further down the tile
+    // layers, finds nothing, and the drop stays where it was let go - not Stored and not Refused, because
+    // nothing was asked to take it (docs/GAME_DESIGN.md section 1.37).
+    auto* third = &layer.adopt(std::make_unique<Drop>(ContentKind::Drop, chunk, t2d::Vec2{9.5f, 4.5f}));
+    shed->set_under_construction(true);
+    T2D_CHECK(drag.begin(layer, t2d::Vec2{9.5f, 4.5f}));
+    T2D_CHECK(drag.held() == third);
+    T2D_CHECK(drag.move_to(t2d::Vec2{6.5f, 5.5f}));
+    T2D_CHECK(drag.end() == ReleaseResult::Left);
+    T2D_CHECK(third->alive());
+    T2D_CHECK_NEAR(third->position().x, 6.5f, 1e-5f);
+    T2D_CHECK_EQ(shed->container()->total(), 1u);   // nothing went in
+
+    // Done, and with room again (the first drop is taken back out for this): the same drop, let go on the
+    // same cell, goes in.
+    T2D_CHECK_EQ(shed->container()->take(ContentKind::Drop, chunk), 1u);
+    shed->set_under_construction(false);
+    T2D_CHECK(drag.begin(layer, t2d::Vec2{6.5f, 5.5f}));
+    T2D_CHECK(drag.end() == ReleaseResult::Stored);
+    T2D_CHECK_FALSE(third->alive());
+    T2D_CHECK_EQ(shed->container()->total(), 1u);
+    T2D_CHECK_EQ(shed->container()->count_of(ContentKind::Drop, chunk), 1u);
 
     // Nothing held, nothing happens.
     PointerDrag empty;
@@ -368,6 +403,54 @@ T2D_TEST(scenery_that_holds_nothing_has_no_container) {
     // whichever path it is asked through.
     T2D_REQUIRE(layer.top_plot_at(GridPos{1, 1}) == floor);
     T2D_CHECK(layer.top_plot_at(GridPos{1, 1})->container() == nullptr);
+}
+
+T2D_TEST(a_pile_feeds_a_warehouse_one_item_at_a_time) {
+    Fixture fixture;
+    fixture.add_floor("dirt");
+    fixture.add_warehouse("shed", 8);
+    const ContentId chunk = fixture.add_drop("chunk");
+    MineLayer layer(0, LayerShape{16, 12, 3}, 1);
+    LayerBuildReport report;
+    (void)layer.place(fixture.registry, fixture.definitions, at(ContentKind::Floor, "dirt", 0, 5, 5),
+                      &report);
+    const PlacedContent shed_at = at(ContentKind::Warehouse, "shed", 1, 8, 5);
+    auto* shed =
+        dynamic_cast<Warehouse*>(layer.place(fixture.registry, fixture.definitions, shed_at, &report));
+    T2D_REQUIRE(shed != nullptr);
+
+    // Three of one item lying close together: one **pile** with a count (docs/GAME_DESIGN.md section 1.43).
+    auto& pile = static_cast<Drop&>(
+        layer.adopt(std::make_unique<Drop>(ContentKind::Drop, chunk, t2d::Vec2{5.5f, 5.5f}, 3)));
+
+    // Dragging it onto the warehouse takes **one item** in: the box is one fuller, the pile is one smaller,
+    // and what the pointer carried went its own way when it was let go.
+    PointerDrag drag;
+    T2D_CHECK(drag.begin(layer, t2d::Vec2{5.5f, 5.5f}));
+    T2D_CHECK(drag.held() != &pile);
+    T2D_CHECK_EQ(pile.count(), 2u);
+    T2D_CHECK(drag.move_to(t2d::Vec2{8.5f, 5.5f}));
+    T2D_CHECK(drag.end() == ReleaseResult::Stored);
+    T2D_CHECK_EQ(shed->container()->total(), 1u);
+    T2D_CHECK_EQ(pile.count(), 2u);
+
+    T2D_CHECK(drag.begin(layer, t2d::Vec2{5.5f, 5.5f}));
+    T2D_CHECK_EQ(pile.count(), 1u);
+    T2D_CHECK(drag.move_to(t2d::Vec2{8.5f, 5.5f}));
+    T2D_CHECK(drag.end() == ReleaseResult::Stored);
+    T2D_CHECK_EQ(shed->container()->total(), 2u);
+
+    // One item left: what is dragged now is the drop itself, and the box takes it the same way.
+    T2D_CHECK(drag.begin(layer, t2d::Vec2{5.5f, 5.5f}));
+    T2D_CHECK(drag.held() == &pile);
+    T2D_CHECK(drag.move_to(t2d::Vec2{8.5f, 5.5f}));
+    T2D_CHECK(drag.end() == ReleaseResult::Stored);
+    T2D_CHECK_EQ(shed->container()->total(), 3u);
+    T2D_CHECK_FALSE(pile.alive());
+
+    // Three items went in and nothing is left on the ground: one at a time is not losing any.
+    (void)layer.tick(0.0f);
+    T2D_CHECK_EQ(layer.entity_count(), 0u);
 }
 
 T2D_TEST_MAIN

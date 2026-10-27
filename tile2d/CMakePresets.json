@@ -1,30 +1,44 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
   "configurePresets": [
     {
-      "name": "base",
+      "name": "mine-common",
       "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/${presetName}",
-      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "T2D_BUILD_MINE": "ON",
+        "T2D_BUILD_MEFEMMA": "OFF"
+      }
     },
     {
-      "name": "debug",
-      "inherits": "base",
-      "displayName": "Debug",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "name": "mine-debug",
+      "inherits": "mine-common",
+      "displayName": "Mine - Debug",
+      "binaryDir": "${sourceDir}/build/mine/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     },
     {
-      "name": "release",
-      "inherits": "base",
-      "displayName": "Release",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "name": "mine-release",
+      "inherits": "mine-common",
+      "displayName": "Mine - Release",
+      "binaryDir": "${sourceDir}/build/mine/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
     {
-      "name": "asan",
-      "inherits": "base",
-      "displayName": "Debug + Address/UB sanitizers",
+      "name": "mine-asan",
+      "inherits": "mine-common",
+      "displayName": "Mine - Debug + Address/UB sanitizers",
+      "binaryDir": "${sourceDir}/build/mine/asan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "T2D_ENABLE_SANITIZERS": "ON",
@@ -32,9 +46,60 @@
       }
     },
     {
-      "name": "tsan",
-      "inherits": "base",
-      "displayName": "Debug + ThreadSanitizer (shared memory link / server threads)",
+      "name": "mine-tsan",
+      "inherits": "mine-common",
+      "displayName": "Mine - Debug + ThreadSanitizer",
+      "binaryDir": "${sourceDir}/build/mine/tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "T2D_ENABLE_THREAD_SANITIZER": "ON",
+        "T2D_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "mefemma-common",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "T2D_BUILD_MINE": "OFF",
+        "T2D_BUILD_MEFEMMA": "ON"
+      }
+    },
+    {
+      "name": "mefemma-debug",
+      "inherits": "mefemma-common",
+      "displayName": "Mefemma - Debug",
+      "binaryDir": "${sourceDir}/build/mefemma/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "mefemma-release",
+      "inherits": "mefemma-common",
+      "displayName": "Mefemma - Release",
+      "binaryDir": "${sourceDir}/build/mefemma/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "mefemma-asan",
+      "inherits": "mefemma-common",
+      "displayName": "Mefemma - Debug + Address/UB sanitizers",
+      "binaryDir": "${sourceDir}/build/mefemma/asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "T2D_ENABLE_SANITIZERS": "ON",
+        "T2D_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "mefemma-tsan",
+      "inherits": "mefemma-common",
+      "displayName": "Mefemma - Debug + ThreadSanitizer",
+      "binaryDir": "${sourceDir}/build/mefemma/tsan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "T2D_ENABLE_THREAD_SANITIZER": "ON",
@@ -43,33 +108,110 @@
     },
     {
       "name": "no-renderer",
-      "inherits": "base",
-      "displayName": "Tile map, text, networking and tests without any graphics dependency",
+      "displayName": "Framework - no renderer or game",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/no-renderer",
       "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_BUILD_TYPE": "Release",
         "T2D_BUILD_MINE": "OFF",
+        "T2D_BUILD_MEFEMMA": "OFF",
         "T2D_BUILD_TESTS": "ON"
       }
     }
   ],
   "buildPresets": [
-    { "name": "debug", "configurePreset": "debug" },
-    { "name": "release", "configurePreset": "release" },
-    { "name": "asan", "configurePreset": "asan" },
-    { "name": "tsan", "configurePreset": "tsan" },
-    { "name": "no-renderer", "configurePreset": "no-renderer" }
+    {
+      "name": "mine-debug",
+      "configurePreset": "mine-debug"
+    },
+    {
+      "name": "mine-release",
+      "configurePreset": "mine-release"
+    },
+    {
+      "name": "mine-asan",
+      "configurePreset": "mine-asan"
+    },
+    {
+      "name": "mine-tsan",
+      "configurePreset": "mine-tsan"
+    },
+    {
+      "name": "mefemma-debug",
+      "configurePreset": "mefemma-debug"
+    },
+    {
+      "name": "mefemma-release",
+      "configurePreset": "mefemma-release"
+    },
+    {
+      "name": "mefemma-asan",
+      "configurePreset": "mefemma-asan"
+    },
+    {
+      "name": "mefemma-tsan",
+      "configurePreset": "mefemma-tsan"
+    },
+    {
+      "name": "no-renderer",
+      "configurePreset": "no-renderer"
+    }
   ],
   "testPresets": [
     {
-      "name": "debug",
-      "configurePreset": "debug",
-      "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "name": "mine-debug",
+      "configurePreset": "mine-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
     },
     {
-      "name": "tsan",
-      "configurePreset": "tsan",
-      "output": { "outputOnFailure": true }
+      "name": "mine-release",
+      "configurePreset": "mine-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "mine-tsan",
+      "configurePreset": "mine-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "mefemma-debug",
+      "configurePreset": "mefemma-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "mefemma-release",
+      "configurePreset": "mefemma-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "mefemma-tsan",
+      "configurePreset": "mefemma-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

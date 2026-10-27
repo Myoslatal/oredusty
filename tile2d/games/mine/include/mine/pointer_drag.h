@@ -44,6 +44,10 @@ public:
     /// remembers the offset between the point and the entity, so what is picked up does not jump under
     /// the pointer. Returns whether something was picked up: a point with nothing draggable near it
     /// leaves the drag empty, which is what "the pointer is over the map" means most of the time.
+    ///
+    /// A **pile** (a drop carrying more than one item, types/drop.h) is picked up **one item at a time**:
+    /// the pile stays where it is with one fewer, and what follows the pointer is a single drop made at
+    /// the pile's own position (docs/GAME_DESIGN.md section 1.43).
     bool begin(MineLayer& layer, t2d::Vec2 point, f32 radius = kGrabRadius);
 
     /// Moves what is held so it follows the pointer, keeping the grab offset, **clamped to the layer's
@@ -53,7 +57,9 @@ public:
 
     /// Lets go. What was held stays where it was put - unless it was let go **on something that takes
     /// dragged drops**, and then it goes in and is gone from the layer (a warehouse, types/warehouse.h).
-    /// Returns what happened, so the screen can say it: a box with no room has to say so.
+    /// What is left on the ground joins a **pile** of its item nearby, if there is one: letting one item
+    /// go next to a pile is how a pile grows (docs/GAME_DESIGN.md section 1.43). Returns what happened,
+    /// so the screen can say it: a box with no room has to say so.
     ReleaseResult end();
     /// What the last end() did, and what it was about.
     [[nodiscard]] const DragRelease& last_release() const { return last_release_; }

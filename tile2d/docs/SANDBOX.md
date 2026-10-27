@@ -34,19 +34,19 @@
 ```sh
 # 什么都不给：本体内容（games/mine/content/）照样加载，面板里是游戏自己带的内容（现在是泥地与石头）；
 # 网格仍然是空的——不按填充、不画格子，就什么都不画
-./build/debug/games/mine/mine_game --world sandbox --start 1
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1
 
 # 再加一个内容包目录：面板列出它注册出的全部内容（本体内容在前，这里是在其后追加）
-./build/debug/games/mine/mine_game --world sandbox --start 1 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
     --content <你的内容包目录>
 
 # 直接看“这一层可能长什么样”，并导出/读回布局
-./build/debug/games/mine/mine_game --world sandbox --start 1 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
     --content <你的内容包目录> --fill scatter --seed 7 \
     --layout /tmp/layer.bin
 
 # 几百格见方、多层：512x512、四层各铺一份，并直接停在 (200,150) 放大 20 像素/格看
-./build/debug/games/mine/mine_game --world sandbox --start 1 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
     --content <你的内容包目录> --grid 512x512 --tile-layers 4 --fill-layer all \
     --fill scatter --view 200,150,20
 ```
@@ -135,12 +135,12 @@
 cd tile2d
 D=games/mine/tests/data
 # A：铺一层散点并存盘
-./build/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
     --content $D/placeholder_content --fill scatter --seed 1 --save-layout /tmp/a.bin
 # B：换成 v2（id 整体位移）读入 A 的布局；C：换成 v3（少一条内容）读同一个布局
-./build/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
     --content $D/placeholder_content_v2 --layout /tmp/a.bin --dump-layer 1
-./build/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 --headless --frames 3 \
     --content $D/placeholder_content_v3 --layout /tmp/a.bin --dump-layer 1
 ```
 
@@ -286,7 +286,7 @@ C 里 34 个格子全部保留名字、id 为 0（例如 `(0,5) placeholder_ore`
 
 ```sh
 # 进去按 P，或在命令行直接进试玩；--pointer 让脚本化运行也有指针
-./build/debug/games/mine/mine_game --world sandbox --start 1 \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 \
     --content <你的内容包目录> --playtest 1 --pointer 12,7
 
 # 试玩期间 F5 照样重载内容：改一行数据文件、按 F5，看到的就是改完之后玩起来的样子
@@ -343,7 +343,7 @@ C 里 34 个格子全部保留名字、id 为 0（例如 `(0,5) placeholder_ore`
 
 ```sh
 # 无头跑一遍：开列表 → 展开第一行 → 截两帧 → 退出
-./build/debug/games/mine/mine_game --world sandbox --start 1 --content <你的内容包目录> \
+./build/mine/debug/games/mine/mine_game --world sandbox --start 1 --content <你的内容包目录> \
     --input-server 7777 --headless --frames 100000 &
 printf 'key press F6\nshot /tmp/a.png\nkey press RETURN\nshot /tmp/b.png\nquit\n' | nc 127.0.0.1 7777
 ```

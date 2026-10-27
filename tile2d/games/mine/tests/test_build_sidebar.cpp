@@ -16,16 +16,43 @@ struct Fixture {
     ContentRegistry registry;
     ContentDefinitions definitions;
 
-    void add(std::string_view name, BuildingCategory category, usize materials = 1) {
+    void add(std::string_view name, BuildingCategory category, usize materials = 1,
+             std::string_view image = {}, bool default_unlock = true) {
         registry.register_content(ContentKind::Structure, name);
         TileDefinition definition;
         definition.kind = ContentKind::Structure;
         definition.name = std::string(name);
+        definition.image = std::string(image);
         definition.building.category = category;
         definition.building.seconds = 5.0f;
+        definition.building.default_unlock = default_unlock;
         for (usize index = 0; index < materials; ++index) {
             definition.building.materials.push_back(ContentStack{std::format("item{}", index), 10});
         }
+        definitions.add(std::move(definition));
+    }
+
+    /// The unlock state a new save over this fixture's content starts with: every building at the default
+    /// its definition gives it (docs/GAME_DESIGN.md section 1.44).
+    [[nodiscard]] BuildingUnlocks unlocks_from_defaults() const {
+        BuildingUnlocks unlocks;
+        unlocks.reset(registry, definitions);
+        return unlocks;
+    }
+
+    /// A building whose content is a drill: two pictures, the second of which turns on the first
+    /// (docs/GAME_DESIGN.md section 1.38).
+    void add_drill(std::string_view name, BuildingCategory category, std::string_view image,
+                   std::string_view top_image) {
+        registry.register_content(ContentKind::Drill, name);
+        TileDefinition definition;
+        definition.kind = ContentKind::Drill;
+        definition.name = std::string(name);
+        definition.image = std::string(image);
+        definition.top_image = std::string(top_image);
+        definition.spin = 4.0f;
+        definition.building.category = category;
+        definition.building.seconds = 5.0f;
         definitions.add(std::move(definition));
     }
 };
@@ -53,7 +80,7 @@ T2D_TEST(the_build_sidebar_lists_buildings_by_category_picks_one_and_pages_the_r
     content.definitions.add(std::move(floor));
 
     BuildSidebar sidebar;
-    sidebar.rebuild(content.registry, content.definitions);
+    sidebar.rebuild(content.registry, content.definitions, content.unlocks_from_defaults());
 
     // --- what it offers ----------------------------------------------------------------------------
     T2D_REQUIRE(sidebar.categories().size() == 3u);
@@ -119,7 +146,7 @@ T2D_TEST(a_category_with_more_buildings_than_fit_is_paged) {
     }
 
     BuildSidebar sidebar;
-    sidebar.rebuild(content.registry, content.definitions);
+    sidebar.rebuild(content.registry, content.definitions, content.unlocks_from_defaults());
     sidebar.set_open(true);
     T2D_REQUIRE(sidebar.entries().size() == BuildSidebar::kPageSize + 3);
     T2D_CHECK_EQ(sidebar.page_count(), 2u);
@@ -152,6 +179,85 @@ T2D_TEST(a_category_with_more_buildings_than_fit_is_paged) {
     T2D_CHECK_EQ(sidebar.page_count(), 1u);
     sidebar.turn_page(1);
     T2D_CHECK_EQ(sidebar.page(), 0u);
+}
+
+T2D_TEST(a_buildings_icon_is_the_complete_preview_the_plot_answers_with) {
+    Fixture content;
+    content.add("bin", BuildingCategory::Storage, 1, "art/bin.png");
+    content.add("shed", BuildingCategory::Storage, 1);   // no picture at all
+    content.add_drill("rig", BuildingCategory::Extraction, "art/rig_base.png", "art/rig_top.png");
+
+    BuildSidebar sidebar;
+    sidebar.rebuild(content.registry, content.definitions, content.unlocks_from_defaults());
+
+    // The picture is the plot's own answer (types/tile.h): rebuild builds the plot it would place and asks
+    // it, instead of reading the definition's picture fields a second time (section 1.39).
+    T2D_REQUIRE(sidebar.entries().size() == 2u);
+    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("bin"));
+    T2D_REQUIRE(sidebar.entries()[0].preview.images.size() == 1u);
+    T2D_CHECK(sidebar.entries()[0].preview.images[0].part.empty());
+    T2D_CHECK_FALSE(sidebar.entries()[0].preview.images[0].mirrored);
+    // A building whose entry names no picture previews as nothing: the name alone says it.
+    T2D_CHECK(sidebar.entries()[1].preview.empty());
+
+    // A drill's icon is both of its pictures, in drawing order: the base, then the top that turns on it -
+    // which is the first time the sidebar can show a drill whole (section 1.38).
+    sidebar.select_category(BuildingCategory::Extraction);
+    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    const BuildEntry& rig = sidebar.entries()[0];
+    T2D_REQUIRE(rig.preview.images.size() == 2u);
+    T2D_CHECK(rig.preview.images[0].part.empty());
+    T2D_CHECK_EQ(rig.preview.images[1].part, std::string("top"));
+    // A still frame at zero seconds: the icon does not start at whatever moment the frame happens to be,
+    // and the pivot is the middle when the entry names no spin_origin.
+    T2D_CHECK_EQ(rig.preview.images[1].radians, 0.0f);
+    T2D_CHECK_EQ(rig.preview.images[0].radians, 0.0f);
+    const t2d::Vec2 middle{0.5f, 0.5f};
+    T2D_CHECK_EQ(rig.preview.images[1].pivot, middle);
+}
+
+T2D_TEST(only_unlocked_buildings_are_offered) {
+    Fixture content;
+    content.add("bin", BuildingCategory::Storage, 1);                     // unlocked
+    content.add("shed", BuildingCategory::Storage, 1, {}, false);         // locked by the data
+    content.add("rig", BuildingCategory::Extraction, 1);                  // unlocked
+    content.add("crusher", BuildingCategory::Processing, 1, {}, false);   // the only one of its category
+
+    BuildingUnlocks unlocks;
+    unlocks.reset(content.registry, content.definitions);
+    BuildSidebar sidebar;
+    sidebar.rebuild(content.registry, content.definitions, unlocks);
+
+    // Locked buildings are not on offer, and a category with nothing unlocked in it does not appear at all
+    // (docs/GAME_DESIGN.md section 1.44).
+    T2D_REQUIRE(sidebar.categories().size() == 2u);
+    T2D_CHECK(sidebar.categories()[0] == BuildingCategory::Storage);
+    T2D_CHECK(sidebar.categories()[1] == BuildingCategory::Extraction);
+    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("bin"));
+
+    // Unlocking is a state of the save, not a change of the content: the next rebuild offers it, in
+    // registration order, and picking works exactly as before (section 1.36).
+    const ContentId shed = content.registry.find(ContentKind::Structure, "shed");
+    const ContentId crusher = content.registry.find(ContentKind::Structure, "crusher");
+    T2D_CHECK(unlocks.set_unlocked(ContentKind::Structure, shed, true));
+    T2D_CHECK(unlocks.set_unlocked(ContentKind::Structure, crusher, true));
+    sidebar.rebuild(content.registry, content.definitions, unlocks);
+    T2D_REQUIRE(sidebar.categories().size() == 3u);
+    T2D_REQUIRE(sidebar.entries().size() == 2u);   // Storage: bin, then shed
+    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("bin"));
+    T2D_CHECK_EQ(sidebar.entries()[1].name, std::string("shed"));
+    T2D_CHECK_EQ(sidebar.page(), 0u);
+    sidebar.select(1);
+    T2D_REQUIRE(sidebar.selected() != nullptr);
+    T2D_CHECK_EQ(sidebar.selected()->name, std::string("shed"));
+
+    // Locking one back takes it out again, and the rest of the sidebar is what it was.
+    const ContentId bin = content.registry.find(ContentKind::Structure, "bin");
+    T2D_CHECK(unlocks.set_unlocked(ContentKind::Structure, bin, false));
+    sidebar.rebuild(content.registry, content.definitions, unlocks);
+    T2D_REQUIRE(sidebar.entries().size() == 1u);
+    T2D_CHECK_EQ(sidebar.entries()[0].name, std::string("shed"));
 }
 
 T2D_TEST_MAIN

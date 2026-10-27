@@ -4,10 +4,7 @@
 
 #include <cmath>
 
-#include <mine/types/drop.h>
 #include <mine/world.h>
-
-#include <memory>
 
 namespace mine::types {
 
@@ -29,6 +26,22 @@ f32 Drill::spin_angle(f32 seconds) const {
     return (turns - std::floor(turns)) * kTau;
 }
 
+
+TilePreview Drill::get_preview(t2d::f32 seconds) const {
+    // The base first, answered the way any scene plot answers it (types/scene_tile.cpp): the entry's own
+    // "image", if it names one.
+    TilePreview preview = SceneTile::get_preview(seconds);
+    // The top comes over it only when there is a base for it to turn on. A drill whose entry names no
+    // "image" is drawn as the fallback colour (app.cpp), so its top is not a part of any picture.
+    if (preview.empty() || definition_ == nullptr || definition_->top_image.empty()) return preview;
+    PreviewImage top;
+    top.part = "top";
+    top.mirrored = mirrored();
+    top.radians = spin_angle(seconds);
+    top.pivot = spin_origin();
+    preview.images.push_back(top);
+    return preview;
+}
 
 namespace {
 
@@ -87,8 +100,10 @@ void Drill::throw_one() {
     };
     // The thing on the ground **is** the item its ore drops: same name, same picture, same id - made out
     // of the item rather than declared beside it (docs/GAME_DESIGN.md sections 1.23, 1.25). That is also
-    // why carrying one into a warehouse stores the item, and why a price can be paid with it.
-    layer->adopt(std::make_unique<Drop>(ContentKind::Item, job_.drop_id, where));
+    // why carrying one into a warehouse stores the item, and why a price can be paid with it. It goes in
+    // through the layer's drop(), so what lands next to a pile of the same item becomes part of it
+    // (section 1.43).
+    (void)layer->drop(ContentKind::Item, job_.drop_id, where);
     ++thrown_;
 }
 
