@@ -1,5 +1,6 @@
 // The start screen, as a state machine: selection, mode/seed editing and what each row starts.
 #include <mine/menu.h>
+#include <mine/save_list.h>
 
 #include <support/test_support.h>
 
@@ -33,10 +34,14 @@ T2D_TEST(the_story_screen_offers_the_actions_and_no_seed_row) {
     T2D_CHECK_EQ(id_of(menu, 0), std::string("row.world"));
     T2D_CHECK_EQ(menu.selected(), 0u);
 
-    T2D_CHECK(action_row(menu, MenuAction::StartSession, Role::Single) < menu.row_count());
+    // Starting a game is a submenu now; hosting and joining are still one row each.
+    T2D_CHECK(action_row(menu, MenuAction::OpenStartMenu, Role::Single) < menu.row_count());
+    T2D_CHECK(action_row(menu, MenuAction::StartSession, Role::Single) == menu.row_count());
     T2D_CHECK(action_row(menu, MenuAction::StartSession, Role::Host) < menu.row_count());
     T2D_CHECK(action_row(menu, MenuAction::StartSession, Role::Join) < menu.row_count());
     T2D_CHECK(action_row(menu, MenuAction::Quit, Role::Single) < menu.row_count());
+    T2D_CHECK_EQ(id_of(menu, 3), std::string("row.start_game"));
+    T2D_CHECK_EQ(menu.page(), MenuPage::Main);
 }
 
 T2D_TEST(selecting_endless_adds_the_seed_row_and_leaving_it_removes_it) {
@@ -83,17 +88,22 @@ T2D_TEST(navigation_wraps_in_both_directions) {
 T2D_TEST(confirm_starts_the_focused_row_and_back_quits) {
     MenuModel menu;
     menu.set_mode(Mode::Endless);
-    const usize single = action_row(menu, MenuAction::StartSession, Role::Single);
+    const usize start_game = action_row(menu, MenuAction::OpenStartMenu, Role::Single);
     const usize host = action_row(menu, MenuAction::StartSession, Role::Host);
     const usize join = action_row(menu, MenuAction::StartSession, Role::Join);
     const usize quit_row = action_row(menu, MenuAction::Quit, Role::Single);
-    T2D_REQUIRE(single < menu.row_count());
+    T2D_REQUIRE(start_game < menu.row_count());
     T2D_REQUIRE(host < menu.row_count());
     T2D_REQUIRE(join < menu.row_count());
     T2D_REQUIRE(quit_row < menu.row_count());
 
-    menu.select(single);
-    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::StartSession);
+    // Enter on Start Game walks into the submenu; Esc walks back out before it leaves the game.
+    menu.select(start_game);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::OpenStartMenu);
+    T2D_CHECK_EQ(menu.page(), MenuPage::StartMenu);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Back), MenuAction::None);
+    T2D_CHECK_EQ(menu.page(), MenuPage::Main);
+
     menu.select(host);
     T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::StartSession);
     menu.select(join);
@@ -109,16 +119,63 @@ T2D_TEST(confirm_starts_the_focused_row_and_back_quits) {
     T2D_CHECK_EQ(menu.selected(), 1u);
 }
 
+T2D_TEST(the_start_submenu_offers_the_save_rows_and_walks_back) {
+    MenuModel menu;
+    const usize start_game = action_row(menu, MenuAction::OpenStartMenu, Role::Single);
+    T2D_REQUIRE(start_game < menu.row_count());
+    menu.select(start_game);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::OpenStartMenu);
+    T2D_CHECK_EQ(menu.page(), MenuPage::StartMenu);
+    T2D_CHECK_EQ(menu.row_count(), 4u);
+    T2D_CHECK_EQ(std::string(menu.row(0).id), std::string("row.new_game"));
+    T2D_CHECK_EQ(menu.row(0).action, MenuAction::NewGame);
+    T2D_CHECK_EQ(std::string(menu.row(1).id), std::string("row.load_autosave"));
+    T2D_CHECK_EQ(menu.row(1).action, MenuAction::LoadAutosave);
+    T2D_CHECK_EQ(std::string(menu.row(2).id), std::string("row.save_list"));
+    T2D_CHECK_EQ(menu.row(2).action, MenuAction::OpenSaveList);
+    T2D_CHECK_EQ(std::string(menu.row(3).id), std::string("row.back"));
+    T2D_CHECK_EQ(menu.row(3).kind, RowKind::Back);
+
+    // Each action row comes back out of the submenu to the caller.
+    menu.select(0);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::NewGame);
+    menu.select(1);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::LoadAutosave);
+    menu.select(2);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::OpenSaveList);
+
+    // Enter on Back, and Esc anywhere on the page, both go back to the main menu; the focus lands on
+    // the row that opened the submenu.
+    menu.select(3);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Confirm), MenuAction::None);
+    T2D_CHECK_EQ(menu.page(), MenuPage::Main);
+    T2D_CHECK_EQ(menu.selected(), action_row(menu, MenuAction::OpenStartMenu, Role::Single));
+    menu.select(start_game);
+    (void)menu.handle(MenuKey::Confirm);
+    T2D_CHECK_EQ(menu.handle(MenuKey::Back), MenuAction::None);
+    T2D_CHECK_EQ(menu.page(), MenuPage::Main);
+
+    // Navigation wraps inside the page, and left/right change nothing on the submenu.
+    menu.set_page(MenuPage::StartMenu);
+    T2D_CHECK_EQ(menu.row_count(), 4u);
+    menu.select(0);
+    (void)menu.handle(MenuKey::Up);
+    T2D_CHECK_EQ(menu.selected(), 3u);
+    (void)menu.handle(MenuKey::Right);
+    T2D_CHECK_EQ(menu.selected(), 3u);
+    T2D_CHECK_EQ(menu.page(), MenuPage::StartMenu);
+}
+
 T2D_TEST(the_focused_row_decides_the_session) {
     MenuModel menu;
     menu.set_seed(4242);
     menu.set_mode(Mode::Endless);
 
-    const usize single = action_row(menu, MenuAction::StartSession, Role::Single);
+    const usize start_game = action_row(menu, MenuAction::OpenStartMenu, Role::Single);
     const usize host = action_row(menu, MenuAction::StartSession, Role::Host);
     const usize join = action_row(menu, MenuAction::StartSession, Role::Join);
 
-    menu.select(single);
+    menu.select(start_game);
     SessionConfig config = menu.session_config();
     T2D_CHECK_EQ(config.mode, Mode::Endless);
     T2D_CHECK_EQ(config.role, Role::Single);
@@ -232,6 +289,11 @@ T2D_TEST(the_sandbox_offers_one_local_row_and_no_hosting) {
     menu.set_mode(Mode::Sandbox);
     T2D_CHECK_EQ(menu.row(menu.selected()).kind, RowKind::Action);
 
+    // The sandbox has no save submenu: asking for that page keeps the main menu.
+    menu.set_page(MenuPage::StartMenu);
+    T2D_CHECK_EQ(menu.page(), MenuPage::Main);
+    T2D_CHECK_EQ(menu.row_count(), 5u);
+
     // And leaving the sandbox puts the hosting rows back.
     menu.select(menu.row_count() - 1);
     menu.set_mode(Mode::Story);
@@ -281,8 +343,20 @@ T2D_TEST(every_label_the_menu_can_show_exists_in_the_shipped_string_table) {
         menu.set_mode(mode);
         ids.emplace_back(mode_value_id(mode));
         for (usize index = 0; index < menu.row_count(); ++index) ids.emplace_back(menu.row(index).id);
+        if (mode == Mode::Sandbox) continue; // the sandbox has no submenu
+        menu.set_page(MenuPage::StartMenu);
+        for (usize index = 0; index < menu.row_count(); ++index) ids.emplace_back(menu.row(index).id);
+        menu.set_page(MenuPage::Main);
     }
-    T2D_CHECK_GE(ids.size(), 20u); // three worlds, five to eight rows each
+    // The save screens name their own ids: the submenu title and hint, the name field, and everything
+    // the library and the list can report.
+    for (const char* id : {"menu.start.title", "menu.start.hint", "newgame.title", "newgame.placeholder",
+                           "newgame.create", "newgame.hint", "save.load_autosave.none"}) {
+        ids.emplace_back(id);
+    }
+    for (const std::string_view id : kSaveListIds) ids.emplace_back(id);
+    for (const std::string_view id : kSaveNameErrorIds) ids.emplace_back(id);
+    T2D_CHECK_GE(ids.size(), 40u); // three worlds, their rows, the submenu and the save screens
 
     // Looked up in the parsed file rather than through Locale, so this stays a t2d::core only test.
     for (const char* language : {"en", "zh-Hans", "zh-Hant"}) {

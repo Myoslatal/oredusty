@@ -7,6 +7,8 @@ pieces a game needs and nothing that a game's designer has not asked for.
 What ships today is the **framework**:
 
 * a window and a frame loop (Ore's application), with a clock and a headless path;
+* a **start screen** built from the designer's sign picture: the game's name, New Game, Save List,
+  Settings, Mods and Quit, driven by the keyboard or the mouse;
 * **scenes** - the places a game is in - and a stack that pauses, resumes, overlays and replaces them
   without a scene ever seeing the window;
 * a **DrawList**: a scene asks for rectangles, pictures and text, and never touches the GPU;
@@ -18,32 +20,39 @@ What ships today is the **framework**:
 * a **settings** file and a command line, plus the code-table launcher the repository's games ship behind.
 
 It ships **no gameplay and no game content** on purpose: what a game is, what its screens are and what
-art it has are the designer's to decide. The two scenes here are examples of the shape, not a design.
+art it has are the designer's to decide. The start screen is the screen the designer drew; **New Game, Save
+List, Settings and Mods only say that they are not implemented yet**, and Quit is real. The playground is
+one example of a scene, not a design.
 
-![The title scene](docs/images/title.png)
+![The start screen, drawn on the designer's sign](docs/images/start_zh_hans.png)
+
+![The same screen in English](docs/images/start_en.png)
+
+![A row that is not implemented yet](docs/images/start_new_game_zh_hans.png)
 
 ![The playground: a camera, a grid, a pointer and the shell's own chrome](docs/images/playground.png)
-
-![The same title in Simplified Chinese](docs/images/title_zh_hans.png)
 
 ## Build and run
 
     cd tile2d
-    cmake --preset debug
-    cmake --build build/debug -j
-    ./build/debug/games/mefemma/mefemma_game
+    cmake --preset mefemma-debug          # also: mefemma-release, mefemma-asan, mefemma-tsan
+    cmake --build build/mefemma/debug -j
+    ./build/mefemma/debug/games/mefemma/mefemma_game                     # start screen (zh-Hans by default)
+    ./build/mefemma/debug/games/mefemma/mefemma_game --lang en            # the English table
+    ./build/mefemma/debug/games/mefemma/mefemma_game --scene playground   # the camera example
 
-The other presets build it too (`release`, `asan`, `tsan`); `no-renderer` builds Tile2D without any game,
-because there is no window and no GPU in that configuration.
+The game has its own presets, separate from the mine game's (`mine-*`): building this one never builds the
+first. `no-renderer` builds Tile2D without any game, because there is no window and no GPU in that
+configuration.
 
-    ctest --test-dir build/debug -R 'test_draw_list|test_scene_stack|test_settings|test_input|test_data_paths|test_scenes'
+    ctest --test-dir build/mefemma/debug -R 'test_draw_list|test_scene_stack|test_settings|test_input|test_data_paths|test_scenes'
 
 A scripted run needs no keyboard, a window or a display:
 
-    ./build/debug/games/mefemma/mefemma_game --headless --frames 4 --size 1280x720 \
+    ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 4 --size 1280x720 \
         --scene playground --pointer 900,420 --screenshot out.png
 
-`--scene playground` skips the title; `--pointer x,y` puts the pointer somewhere, because a headless run
+`--scene playground` skips the start screen; `--pointer x,y` puts the pointer somewhere, because a headless run
 has no mouse (a real pointer takes over as soon as it moves).
 
 ## The pieces
@@ -52,7 +61,7 @@ has no mouse (a real pointer takes over as soon as it moves).
 |---|---|---|
 | `mefemma_core` | settings, input, the draw list, the scene stack, where the files are | `test_settings`, `test_input`, `test_draw_list`, `test_scene_stack`, `test_data_paths` |
 | `mefemma_app` | assets, the 2D renderer, the application shell | `test_scenes` for the scenes; the rest is compiled and run through the launcher and needs a GPU |
-| `src/scenes` | `TitleScene` and `PlaygroundScene`: two worked examples of a scene | `test_scenes`, and the headless screenshots above |
+| `src/scenes` | `TitleScene`: the start screen on `assets/textures/start_screen.png`; `PlaygroundScene`: a camera example | `test_scenes`, and the headless screenshots above |
 
 `mefemma_core` has no graphics dependency at all: it links `t2d::core` and `t2d::text` and nothing else, so
 a test drives a scene with a fake `GameServices` and no window.
@@ -84,9 +93,10 @@ one would attach, with the extension points and the reasons.
 ## Where a game starts
 
 1. Read [docs/FRAMEWORK.md](docs/FRAMEWORK.md) - the frame, the scenes, the draw list, the services.
-2. Replace `src/scenes/title_scene.cpp` and `src/scenes/playground_scene.cpp` with your screens.
-3. Put your own modules next to them, add them to `CMakeLists.txt` (`mefemma_core` if they need no GPU,
-   `mefemma_app` if they do) and write a test in `tests/`.
+2. `TitleScene::activate()` is where New Game, Save List, Settings and Mods go. Today each opens a note
+   that says it is not implemented; replace that with the scene the row deserves.
+3. Put your own modules next to the scenes, add them to `CMakeLists.txt` (`mefemma_core` if they need no
+   GPU, `mefemma_app` if they do) and write a test in `tests/`.
 4. Put the game's own fields in `assets/config/game.ecfg` and read them with `Settings::find`; put its
    strings in `assets/text/ui.ecfg` and its pictures in `assets/textures/`.
 
@@ -97,8 +107,11 @@ were rendered through SwiftShader's Vulkan ICD because the session has no displa
 
 | Check | Result |
 |---|---|
-| `cmake --build build/debug` | 6/6 mefemma suites green (41/41 with the mine suites beside them) |
+| `mefemma-debug` preset | 20/20 tests green (the 6 mefemma suites among them) |
+| `mefemma-release` / `mefemma-asan` / `mefemma-tsan` | 20/20 tests green in each |
 | `codetab api --surface engine.api mefemma.codetab` | `accept (0 symbol(s) outside the surface)` |
-| headless title, playground and `zh-Hans` runs | screenshots written, no error |
+| headless start screen, English and playground runs | screenshots written, no error |
 | `mefemma.codetab` loaded by the launcher | `1 module(s), 0 error(s)` |
-| title → playground → title over `--input-server` | Enter pushed the playground (2 scenes), Escape popped back to the title (1 scene) |
+| start screen over `--input-server` | Enter opened the not-implemented note, Escape closed it; a mouse click opened Settings; a mouse click on Quit ended the run |
+| `build/mefemma/release/mefemma-0.1.0-Release.zip` | runs from an empty directory, finds its assets, 1 module, 0 errors |
+| playground over `--scene playground` | the camera example draws and answers the keyboard |

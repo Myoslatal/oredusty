@@ -36,6 +36,13 @@ inline constexpr u32 kWhite = 0xFFFFFFFFu;
 /// The uv rectangle of a whole picture: one content entry, one texture, no atlas.
 [[nodiscard]] constexpr Aabb2 full_uv() { return Aabb2{Vec2{0.0f, 0.0f}, Vec2{1.0f, 1.0f}}; }
 
+/// How a picture is filtered when it is drawn at a size other than its own.
+///
+/// Nearest is the default because a tile or a pixel-art sprite is meant to keep its hard edges. Linear is
+/// for art that is drawn to be looked at - a painted background, a sign, a photograph - where the
+/// alternative is a shimmering edge every time the window changes size.
+enum class TextureFilter : u8 { Nearest, Linear };
+
 /// One command. It is a value, deliberately plain: a test can compare it, a log can print it, and the
 /// renderer has no state a command depends on beyond the texture name.
 struct DrawCommand {
@@ -56,6 +63,8 @@ struct DrawCommand {
     t2d::f32 max_width = 0.0f;
     /// Sprite: the picture's name, resolved by the renderer through the asset paths (textures/<name>.png).
     std::string texture;
+    /// Sprite: how the picture is filtered when it is scaled.
+    TextureFilter filter = TextureFilter::Nearest;
     /// Text: the UTF-8 string.
     std::string text;
 };
@@ -70,7 +79,8 @@ public:
     /// outline around a 1 px box is a filled box, not a negative one.
     void rect_outline(const Aabb2& rect, t2d::f32 thickness, u32 color);
     /// A picture from the asset paths. \p uv selects a part of it; full_uv() is all of it.
-    void sprite(std::string texture, const Aabb2& rect, const Aabb2& uv = full_uv(), u32 tint = kWhite);
+    void sprite(std::string texture, const Aabb2& rect, const Aabb2& uv = full_uv(), u32 tint = kWhite,
+                TextureFilter filter = TextureFilter::Nearest);
     /// One line of text, with the pen at the top left corner of its line box.
     void text(std::string text, Vec2 pen, u16 size_px, u32 color, t2d::f32 max_width = 0.0f);
 

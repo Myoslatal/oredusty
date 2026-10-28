@@ -76,7 +76,7 @@ private:
     enum class Batch : t2d::u8 { None, Glyph, Picture };
     void begin_glyph_batch(ore::RenderFrame& frame, const ore::Mat4& view_projection);
     void begin_picture_batch(ore::RenderFrame& frame, const ore::Mat4& view_projection, ore::rhi::Texture& texture,
-                             const std::string& name);
+                             const std::string& name, TextureFilter filter);
     void flush();
     void note_batch_cost();
 
@@ -84,10 +84,13 @@ private:
     Scope<t2d::TextRenderer> text_;
     Scope<ore::rhi::Sampler> text_sampler_;
     Scope<ore::rhi::Sampler> picture_sampler_;
+    /// The same pictures, filtered smoothly, for art that is scaled rather than tiled (a painted start screen).
+    Scope<ore::rhi::Sampler> smooth_sampler_;
     t2d::FontSet fonts_{};
 
     Batch batch_kind_ = Batch::None;
     std::string batch_picture_;
+    TextureFilter batch_filter_ = TextureFilter::Nearest;
     Stats stats_{};
     /// The batch's over-budget counter when it was last reported: a frame that begins more batches than the
     /// sprite batch has descriptor sets wraps round and its earliest draws sample the wrong texture. It is

@@ -26,7 +26,9 @@
 #include <mine/pointer_drag.h>
 #include <mine/registry.h>
 #include <mine/sandbox.h>
+#include <mine/save_list.h>
 #include <mine/session.h>
+#include <mine/text_input.h>
 #include <mine/view_limits.h>
 #include <mine/world.h>
 
@@ -143,10 +145,30 @@ protected:
     [[nodiscard]] ore::ConstSpan<ore::CliOption> cli_options() const override;
 
 private:
-    enum class Screen : u8 { Start, Session, Sandbox, Content, World };
+    enum class Screen : u8 { Start, Session, Sandbox, Content, World, SaveName, SaveList };
+
+    /// Where Tab/Shift+Tab walk on the new game screen: the name field, Create, Back.
+    enum class SaveNameFocus : u8 { Input, Create, Back };
 
     void handle_start_input();
     void handle_session_input();
+    /// The new game screen: a save name is typed, edited and created (mine/text_input.h, save_library.h).
+    void handle_save_name_input();
+    void draw_save_name_screen();
+    void open_save_name();
+    /// Makes a slot from the typed name and opens it: the mine is built and written once, so the game
+    /// the player is about to play has a save of its own (docs/GAME_DESIGN.md section 1.48).
+    void create_game_from_name();
+    /// The save list screen: the slots, their recent automatic saves and the selection (mine/save_list.h).
+    void handle_save_list_input();
+    void draw_save_list_screen();
+    void open_save_list();
+    /// Reads the newest automatic save in the library, if there is one.
+    void open_latest_autosave();
+    /// Reads the automatic save of the selected sub row. A slot's header has no file to read.
+    void load_selected_save();
+    /// The library under saves/ in the working directory: one directory per slot, one auto.t2dsave each.
+    [[nodiscard]] SaveLibrary save_library() const;
     /// The content list: move, open a source, reload. Escape goes back to the screen it was opened
     /// from, because the list is a view of the game, not a place in it.
     void handle_content_input();
@@ -266,6 +288,9 @@ private:
     [[nodiscard]] ImagePassCost draw_world_layer(ore::RenderFrame& frame, const ore::Mat4& view_projection,
                                                  const MineLayer& layer, const t2d::Camera2D& camera);
     void draw_start_screen();
+    /// The status line both the start screen and its save screens share: a refused --load or a save
+    /// that could not be made has to be readable where there is no world view yet.
+    void draw_status_line();
     void draw_session_screen();
     void draw_sandbox_screen();
     /// Every source the registry was filled from, one line each, with the selected source's detail and
@@ -384,6 +409,21 @@ private:
     Screen screen_ = Screen::Start;
     MenuModel menu_{};
     SessionConfig session_{};
+    /// The new game screen's field and focus, and the locale id of its last refusal ("" when none).
+    TextInput save_name_{};
+    SaveNameFocus save_name_focus_ = SaveNameFocus::Input;
+    const char* save_name_error_ = "";
+    /// The name field's rectangle, in framebuffer pixels, from the last draw: where the IME's
+    /// candidate window is anchored.
+    t2d::Aabb2 save_name_field_{};
+    /// What the window's platform text input (fcitx5 on Wayland) was last asked to be, so it is
+    /// enabled and disabled on changes rather than every frame (docs/GAME_DESIGN.md section 1.49).
+    bool text_input_enabled_ = false;
+    /// What the save list screen shows: the slots, what is open under them, and the selected row.
+    SaveListModel save_list_{};
+    /// The slot this game belongs to: where F7/F8 and the automatic save write. Empty until a game is
+    /// started from the start menu; --save and --load still outrank it (see save_file_path()).
+    std::string active_save_path_;
     /// Filled from the designer's content data; a save stores the ids this hands out plus the table
     /// that maps them back to names (see registry.h).
     ContentRegistry registry_{};

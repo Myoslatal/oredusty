@@ -1,12 +1,13 @@
-// The two scenes that ship as examples: the commands they draw, and the one thing each of them does with
-// the input. They are scenes, so a fake GameServices drives them without a window or a GPU - which is the
-// property the framework is built for.
+// The two scenes that ship as examples: the start screen and the playground. A fake GameServices drives them
+// without a window or a GPU, which is the property the framework is built for.
+//
+// The start screen is the one with behaviour a player can see: five rows, keyboard and mouse selection, a
+// note for the rows that are not implemented yet, and quit. The playground is the camera example.
 #include <mefemma/scenes/playground_scene.h>
 #include <mefemma/scenes/title_scene.h>
 
 #include <support/test_support.h>
 
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -73,6 +74,30 @@ private:
     return false;
 }
 
+[[nodiscard]] const DrawCommand* find_picture(const DrawList& list, std::string_view texture) {
+    for (const DrawCommand& command : list.commands()) {
+        if (command.kind == DrawCommand::Kind::Sprite && command.texture == texture) return &command;
+    }
+    return nullptr;
+}
+
+/// One key press, held for exactly one frame: what a tap looks like to the scene.
+void press_key(TitleScene& scene, FakeServices& services, Key key) {
+    services.input_mutable().begin_frame();
+    services.input_mutable().set_key(key, true);
+    scene.update(services, 1.0f / 60.0f);
+    services.input_mutable().set_key(key, false);
+}
+
+void click_at(TitleScene& scene, FakeServices& services, t2d::Vec2 position) {
+    services.input_mutable().begin_frame();
+    services.input_mutable().set_cursor_inside(true);
+    services.input_mutable().set_mouse_position(position.x, position.y);
+    services.input_mutable().set_mouse_button(MouseButton::Left, true);
+    scene.update(services, 1.0f / 60.0f);
+    services.input_mutable().set_mouse_button(MouseButton::Left, false);
+}
+
 /// The x of the first full-height one-pixel line: a vertical grid line, which is what a horizontal pan
 /// moves. The orbit squares and the background are deliberately not matched.
 [[nodiscard]] std::optional<t2d::f32> first_vertical_line_x(const DrawList& list, t2d::f32 view_height) {
@@ -87,37 +112,134 @@ private:
 
 } // namespace
 
-T2D_TEST(the_title_pushes_the_playground_and_the_escape_quits) {
-    TitleScene title;
+T2D_TEST(the_start_screen_has_five_rows_and_selection_wraps) {
+    TitleScene start;
+    FakeServices services;
+    T2D_CHECK_EQ(TitleScene::item_count(), 5u);
+    T2D_CHECK_EQ(start.selected(), 0u);
+    T2D_CHECK(start.selected_action() == StartAction::NewGame);
+
+    press_key(start, services, Key::Down);
+    T2D_CHECK_EQ(start.selected(), 1u);
+    T2D_CHECK(start.selected_action() == StartAction::LoadGame);
+
+    press_key(start, services, Key::Up);
+    T2D_CHECK_EQ(start.selected(), 0u);
+
+    // Up from the first row wraps to the last, down from the last wraps to the first.
+    press_key(start, services, Key::Up);
+    T2D_CHECK_EQ(start.selected(), 4u);
+    T2D_CHECK(start.selected_action() == StartAction::Quit);
+    press_key(start, services, Key::Down);
+    T2D_CHECK_EQ(start.selected(), 0u);
+}
+
+T2D_TEST(enter_opens_the_placeholder_note_and_escape_closes_it) {
+    TitleScene start;
+    FakeServices services;
+    press_key(start, services, Key::Enter);
+    T2D_CHECK(start.modal_open());
+    T2D_CHECK(start.modal_action() == StartAction::NewGame);
+    T2D_CHECK_FALSE(services.quit_called);
+    T2D_CHECK(services.pushed.empty());
+
+    // Escape closes the note. It does not leave the game from a note: the player asked to go back.
+    press_key(start, services, Key::Escape);
+    T2D_CHECK_FALSE(start.modal_open());
+    T2D_CHECK_FALSE(services.quit_called);
+}
+
+T2D_TEST(escape_on_the_menu_quits_and_the_quit_row_quits) {
     {
+        TitleScene start;
         FakeServices services;
-        services.input_mutable().set_key(Key::Enter, true);
-        title.update(services, 1.0f / 60.0f);
-        T2D_REQUIRE(services.pushed.size() == 1u);
-        T2D_CHECK_EQ(services.pushed[0], std::string("playground"));
-        T2D_CHECK_EQ(services.replaced, std::string());
-        T2D_CHECK_FALSE(services.quit_called);
+        press_key(start, services, Key::Escape);
+        T2D_CHECK(services.quit_called);
     }
     {
+        TitleScene start;
         FakeServices services;
-        services.input_mutable().set_key(Key::Escape, true);
-        title.update(services, 1.0f / 60.0f);
+        for (int index = 0; index < 4; ++index) press_key(start, services, Key::Down);
+        T2D_CHECK_EQ(start.selected(), 4u);
+        press_key(start, services, Key::Enter);
         T2D_CHECK(services.quit_called);
-        T2D_CHECK(services.pushed.empty());
+        T2D_CHECK_FALSE(start.modal_open());
     }
 }
 
-T2D_TEST(the_title_draws_its_picture_its_name_and_its_keys) {
-    TitleScene title;
+T2D_TEST(the_pointer_selects_a_row_and_a_click_opens_it) {
+    TitleScene start;
+    FakeServices services;
+    const t2d::Aabb2 row = TitleScene::item_rect(services.viewport(), 2);
+    const t2d::Vec2 centre = row.center();
+
+    services.input_mutable().begin_frame();
+    services.input_mutable().set_cursor_inside(true);
+    services.input_mutable().set_mouse_position(centre.x, centre.y);
+    start.update(services, 1.0f / 60.0f);
+    T2D_CHECK_EQ(start.selected(), 2u);
+    T2D_CHECK(start.selected_action() == StartAction::Settings);
+
+    click_at(start, services, centre);
+    T2D_CHECK(start.modal_open());
+    T2D_CHECK(start.modal_action() == StartAction::Settings);
+}
+
+T2D_TEST(keyboard_navigation_is_not_undone_by_a_resting_pointer) {
+    TitleScene start;
+    FakeServices services;
+    const t2d::Vec2 centre = TitleScene::item_rect(services.viewport(), 2).center();
+
+    // The pointer comes into the window over row 2 and selects it.
+    services.input_mutable().begin_frame();
+    services.input_mutable().set_cursor_inside(true);
+    services.input_mutable().set_mouse_position(centre.x, centre.y);
+    start.update(services, 1.0f / 60.0f);
+    T2D_CHECK_EQ(start.selected(), 2u);
+
+    // The pointer does not move; the keyboard does. The selection follows the keyboard.
+    press_key(start, services, Key::Down);
+    T2D_CHECK_EQ(start.selected(), 3u);
+    press_key(start, services, Key::Down);
+    T2D_CHECK_EQ(start.selected(), 4u);
+}
+
+T2D_TEST(the_start_screen_draws_the_sign_the_name_and_the_five_rows) {
+    TitleScene start;
     FakeServices services;
     DrawList list;
-    title.draw(services, list);
-    T2D_CHECK_GT(list.size(), 10u);
-    T2D_CHECK(has_picture(list, "placeholder"));
-    T2D_CHECK(has_text(list, "title.name"));
-    T2D_CHECK(has_text(list, "title.tagline"));
-    T2D_CHECK(has_text(list, "title.start"));
-    T2D_CHECK(has_text(list, "title.quit"));
+    start.draw(services, list);
+
+    T2D_CHECK(has_picture(list, "start_screen"));
+    const DrawCommand* sign = find_picture(list, "start_screen");
+    T2D_REQUIRE(sign != nullptr);
+    // A painted sign is filtered smoothly; a tile would keep the default nearest.
+    T2D_CHECK(sign->filter == TextureFilter::Linear);
+    T2D_CHECK(has_text(list, "start.title"));
+    for (const char* id : {"start.new_game", "start.load_game", "start.settings", "start.mods", "start.quit"}) {
+        T2D_CHECK_MSG(has_text(list, id), "missing '{}'", id);
+    }
+    T2D_CHECK(has_text(list, "start.hint"));
+    T2D_CHECK_GE(list.text_count(), 7u);
+    T2D_CHECK_GE(list.rect_count(), 10u);
+
+    const t2d::Vec2 viewport = services.viewport();
+    for (usize index = 0; index < TitleScene::item_count(); ++index) {
+        const t2d::Aabb2 row = TitleScene::item_rect(viewport, index);
+        T2D_CHECK(row.min.x >= 0.0f && row.max.x <= viewport.x);
+        T2D_CHECK(row.min.y >= 0.0f && row.max.y <= viewport.y);
+    }
+}
+
+T2D_TEST(the_placeholder_says_it_is_not_implemented) {
+    TitleScene start;
+    FakeServices services;
+    press_key(start, services, Key::Enter);
+    DrawList list;
+    start.draw(services, list);
+    T2D_CHECK(has_text(list, "start.new_game"));
+    T2D_CHECK(has_text(list, "start.not_implemented"));
+    T2D_CHECK(has_text(list, "start.back"));
 }
 
 T2D_TEST(the_playground_escape_pops_back) {

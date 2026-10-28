@@ -24,6 +24,10 @@ out/
 /examples/shaders/
 /examples/embedded/
 
+# The mine's save library lives under the working directory: one directory per slot, one auto.t2dsave
+# inside each. Saved games are the player's, not the repository's.
+saves/
+
 # Compiled shaders are build outputs (the sources are .vert/.frag/.comp)
 *.spv
 *.d

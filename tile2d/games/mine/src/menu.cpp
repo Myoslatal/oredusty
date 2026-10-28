@@ -9,11 +9,15 @@ constexpr const char* kWorldLabel = "row.world";
 constexpr const char* kLanguageLabel = "row.language";
 constexpr const char* kContentLabel = "row.content";
 constexpr const char* kSeedLabel = "row.seed";
-constexpr const char* kStartLabel = "row.start";
+constexpr const char* kStartGameLabel = "row.start_game";
 constexpr const char* kHostLabel = "row.host";
 constexpr const char* kJoinLabel = "row.join";
 constexpr const char* kQuitLabel = "row.quit";
 constexpr const char* kSandboxLabel = "row.sandbox";
+constexpr const char* kNewGameLabel = "row.new_game";
+constexpr const char* kLoadAutosaveLabel = "row.load_autosave";
+constexpr const char* kSaveListLabel = "row.save_list";
+constexpr const char* kBackLabel = "row.back";
 
 /// Keeps a seed inside the readable range: values that already fit are untouched, anything else is
 /// folded back in (so a seed typed on the command line can be any u32).
@@ -51,6 +55,17 @@ void MenuModel::select(usize index) {
 
 void MenuModel::rebuild_rows() {
     usize count = 0;
+    if (page_ == MenuPage::StartMenu) {
+        // The submenu is about saves only; the world, language and content rows belong to starting a
+        // new mine, and the sandbox never reaches this page at all.
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::NewGame, Role::Single, kNewGameLabel};
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::LoadAutosave, Role::Single, kLoadAutosaveLabel};
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::OpenSaveList, Role::Single, kSaveListLabel};
+        rows_[count++] = MenuRow{RowKind::Back, MenuAction::None, Role::Single, kBackLabel};
+        row_count_ = count;
+        if (selected_ >= row_count_) selected_ = row_count_ - 1;
+        return;
+    }
     rows_[count++] = MenuRow{RowKind::World, MenuAction::None, Role::Single, kWorldLabel};
     rows_[count++] = MenuRow{RowKind::Language, MenuAction::None, Role::Single, kLanguageLabel};
     // The loaded content is a property of every mode, not of one session: the row sits with the other
@@ -62,13 +77,35 @@ void MenuModel::rebuild_rows() {
         // offered: a row that cannot work is worse than a missing row.
         rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Single, kSandboxLabel};
     } else {
-        rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Single, kStartLabel};
+        // Starting a session is a submenu now: a new game asks for a save name, and the saves the game
+        // has already written are opened from the same place. Hosting and joining are still one row.
+        rows_[count++] = MenuRow{RowKind::Action, MenuAction::OpenStartMenu, Role::Single, kStartGameLabel};
         rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Host, kHostLabel};
         rows_[count++] = MenuRow{RowKind::Action, MenuAction::StartSession, Role::Join, kJoinLabel};
     }
     rows_[count++] = MenuRow{RowKind::Action, MenuAction::Quit, Role::Single, kQuitLabel};
     row_count_ = count;
     if (selected_ >= row_count_) selected_ = row_count_ - 1;
+}
+
+void MenuModel::set_page(MenuPage page) {
+    if (page == MenuPage::StartMenu && mode_ == Mode::Sandbox) return; // the sandbox has no submenu
+    if (page_ == page) return;
+    page_ = page;
+    selected_ = 0;
+    rebuild_rows();
+}
+
+void MenuModel::back_to_main() {
+    page_ = MenuPage::Main;
+    rebuild_rows();
+    for (usize index = 0; index < row_count_; ++index) {
+        if (rows_[index].action == MenuAction::OpenStartMenu) {
+            selected_ = index;
+            return;
+        }
+    }
+    selected_ = 0;
 }
 
 void MenuModel::select_first_action() {
@@ -91,6 +128,8 @@ void MenuModel::set_mode(Mode mode) {
     if (mode_ == mode) return;
     const bool was_seed_row = row_count_ > 0 && rows_[selected_].kind == RowKind::Seed;
     mode_ = mode;
+    // The sandbox has no submenu: a game that leaves it for the sandbox never sees a save page.
+    if (mode_ == Mode::Sandbox) page_ = MenuPage::Main;
     rebuild_rows();
     // Leaving endless mode removes the seed row; land on the first action instead of on whatever
     // slid into its place.
@@ -126,6 +165,7 @@ MenuAction MenuModel::handle(MenuKey key) {
         case MenuKey::Right: {
             const bool forward = key == MenuKey::Right;
             const MenuRow& current = rows_[selected_];
+            if (page_ == MenuPage::StartMenu) return MenuAction::None;   // nothing to change on it
             if (current.kind == RowKind::World) {
                 set_mode(next_mode(forward ? 1 : -1));
             } else if (current.kind == RowKind::Language) {
@@ -138,17 +178,32 @@ MenuAction MenuModel::handle(MenuKey key) {
             return MenuAction::None;
         }
         case MenuKey::Randomise:
-            if (seed_visible()) randomise_seed();
+            if (page_ == MenuPage::Main && seed_visible()) randomise_seed();
             return MenuAction::None;
         case MenuKey::Confirm: {
             const MenuRow& current = rows_[selected_];
-            // Rows that do something when confirmed: the ones that start a session, and the one that
-            // opens the content list. The value rows have no action to run.
+            if (current.kind == RowKind::Back) {
+                back_to_main();
+                return MenuAction::None;
+            }
+            // Start Game opens the submenu: the model walks into it itself, so the press does one thing
+            // and the action only reports that a page changed.
+            if (current.action == MenuAction::OpenStartMenu && page_ == MenuPage::Main) {
+                set_page(MenuPage::StartMenu);
+                return MenuAction::OpenStartMenu;
+            }
+            // Rows that do something when confirmed: the actions, and the row that opens the content
+            // list. The value rows have no action to run.
             if (current.kind == RowKind::Action || current.kind == RowKind::Content) return current.action;
             select(selected_ + 1); // step into the list instead of doing nothing
             return MenuAction::None;
         }
         case MenuKey::Back:
+            // Esc leaves the submenu before it leaves the game.
+            if (page_ == MenuPage::StartMenu) {
+                back_to_main();
+                return MenuAction::None;
+            }
             return MenuAction::Quit;
     }
     return MenuAction::None;

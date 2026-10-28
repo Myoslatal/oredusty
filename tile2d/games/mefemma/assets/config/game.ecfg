@@ -8,7 +8,7 @@ title:"Mefemma"
 width:1280
 height:720
 vsync:true
-language:"en"
+language:"zh-Hans"
 seed:1
 
 # A game's own fields go here. They are not read by the shell and they are not an error:

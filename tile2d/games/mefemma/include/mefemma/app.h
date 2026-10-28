@@ -107,7 +107,9 @@ private:
     f32 elapsed_seconds_ = 0.0f;
     f32 smoothed_seconds_ = 1.0f / 60.0f;
     t2d::u64 frame_ = 0;
-    bool debug_visible_ = true;
+    /// The frame's numbers are a developer's overlay, not part of a game's screen: off until F1 asks for
+    /// them, so a start screen is the screen the designer drew.
+    bool debug_visible_ = false;
     /// True once a real pointer has been seen. Until then a scripted --pointer is the pointer.
     bool mouse_seen_ = false;
     t2d::Language language_ = t2d::Language::English;

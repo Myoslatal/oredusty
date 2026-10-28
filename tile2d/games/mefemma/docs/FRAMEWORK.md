@@ -24,6 +24,10 @@ Only the **top** scene updates; **every** scene draws. That is what makes a paus
 top, and a HUD a scene that draws without updating. An opaque scene that wants to hide what is below draws a
 full-screen rectangle first; the stack does not guess.
 
+The shell's own frame counter (FPS, milliseconds, draw calls, scene count) is **off** until `F1` asks for it,
+so a start screen is the screen the designer drew rather than a developer overlay. `F2` cycles the
+interface language.
+
 Stack changes are **requests**. A scene calls `services.push_scene(...)`, `pop_scene()` or
 `replace_scene(...)` and keeps running to the end of its turn; the stack applies the request at the start of
 the next frame, calling `on_exit`, `on_pause`, `on_enter` and `on_resume` in the order the change implies.
@@ -54,9 +58,15 @@ Add it to the first frame in `MefemmaApp::start_first_scene()` and to `CMakeList
 (`mefemma_app` if it draws, `mefemma_core` if it is pure logic). A test can drive it with a fake
 `GameServices`: `tests/test_scene_stack.cpp` is the smallest one.
 
-The two scenes in `src/scenes` are worked examples. `TitleScene` shows the keyboard and how to push the
-next scene; `PlaygroundScene` shows a camera, the pointer, a world-space grid and a HUD, and its Escape pops
-back to the title that was left paused underneath. Neither is a design: a game replaces both.
+The start screen is `TitleScene` (`src/scenes/title_scene.cpp`): it draws the designer's sign
+(`assets/textures/start_screen.png`), the game's name and five rows - New Game, Save List, Settings, Mods and
+Quit - and answers the keyboard (Up/Down, Enter, Escape) and the mouse (hover selects, click activates). New
+Game, Save List, Settings and Mods open a note that says they are not implemented yet; `TitleScene::activate()`
+is the one function a game replaces to make them real. Quit leaves the game.
+
+`PlaygroundScene` is the other worked example: a camera, the pointer, a world-space grid and a HUD. It is not
+reachable from the menu while New Game is a placeholder; `--scene playground` starts the process in it. Neither
+scene is a design: a game keeps the start screen's shape and replaces the rest.
 
 ### The services a scene is handed
 
@@ -85,10 +95,15 @@ scenes see the richer interface because they are the game's own scenes.
     out.rect_outline(box, 2.0f, colour);         // four rectangles, clamped to the box
     out.sprite("hero", box);                     // assets/textures/hero.png, whole texture
     out.sprite("atlas", box, uv, tint);          // a part of a picture, tinted
+    out.sprite("start_screen", box, full_uv(), kWhite, TextureFilter::Linear); // smooth scaling
     out.text("hello", pen, 20, colour, wrap_px); // UTF-8, pen at the top left of the line box
 
 Colours are `0xAABBGGRR`; `rgba(r, g, b, a)` builds one, and `kWhite` means "no tint". The order of the
 commands is the drawing order: the renderer flushes a batch when the texture changes and never reorders.
+
+Pictures are **nearest** by default, because a tile or a pixel sprite should keep its hard edges. A painted
+picture - the start screen's sign - asks for `TextureFilter::Linear` as the last argument, and the renderer
+binds a linear sampler for it; the two filters are different batches.
 
 Text is measured with `services.measure_text()`, which asks the same text engine the renderer will use, so a
 centred line and its box cannot disagree. A line box is never shorter than the font's own metrics, and the
@@ -188,6 +203,10 @@ a nested table), and give it a default in code for a game that ships no file.
 
 **A picture** - drop a PNG in `assets/textures/`, draw it with `out.sprite("<name>", box)`.
 
+**A start-screen action** - `TitleScene::activate()` is where the five rows go. Today the four game rows set
+`modal_open_` and draw a note; replace that branch with `services.replace_scene(make_new_game_scene())` (or the
+screen the row deserves) and the start screen starts the game.
+
 **A string or a language** - add an id to each table in `assets/text/ui.ecfg`. A new language is a new
 top-level table named after its code; the engine already draws it and the shell's font loader already picks
 the CJK face for it.
@@ -217,7 +236,7 @@ the game's static libraries.
 | save/load | its own format; a scene asks for it, the settings file is not a save |
 | audio | a new module and a device of its own; the frame loop has the place for it |
 | networking | Tile2D's `t2d::net` is a channel; a game's protocol rides it |
-| a fixed UI toolkit | `DrawList` plus the scene's own layout; the two example scenes show one way |
+| a fixed UI toolkit | `DrawList` plus the scene's own layout; the start screen and the playground show one way |
 
 The point of a second game project is that it can make different decisions from the first one. Mefemma
 does not inherit the mine game's screens, its content model or its layer rules, and it should not grow them
@@ -226,12 +245,13 @@ back by accident.
 ## 11. Testing and scripted runs
 
 Everything in `mefemma_core` is testable without a window: settings, input, the draw list, the stack and
-the paths. `test_scenes` goes one step further and drives **both example scenes** with a fake
-`GameServices`: the title's Enter pushing the playground, the playground's Escape popping it, the grid
-moving when the keyboard pans the camera, and the pointer cell appearing when the pointer is inside. The
-shell's own half is exercised by running it:
+the paths. `test_scenes` goes one step further and drives **the start screen and the playground** with a fake
+`GameServices`: the five rows and their wrap-around, Enter opening the not-implemented note, Escape closing
+it, Escape on the menu (and the Quit row) leaving the game, the pointer selecting a row and a click opening
+it, the start screen drawing the sign with a linear filter, and the playground's grid moving when the
+keyboard pans the camera. The shell's own half is exercised by running it:
 
-    ./build/debug/games/mefemma/mefemma_game --headless --frames 4 --scene playground \
+    ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 4 --scene playground \
         --pointer 900,420 --screenshot out.png
 
 The screenshots in `README.md` were produced exactly this way. On a machine with no Vulkan device, the

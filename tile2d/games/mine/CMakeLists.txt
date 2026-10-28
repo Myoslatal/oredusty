@@ -22,6 +22,9 @@ add_library(mine_core STATIC
     src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/save_library.cpp
+    src/save_list.cpp
+    src/text_input.cpp
     src/types/click.cpp
     src/types/container.cpp
     src/types/drag_into.cpp
@@ -48,7 +51,9 @@ add_library(mine_core STATIC
 add_library(mine::core ALIAS mine_core)
 t2d_apply_settings(mine_core)
 target_include_directories(mine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(mine_core PUBLIC t2d::core)
+# mine_core is free of graphics, not of text: a save name is UTF-8, and the field that types one uses the
+# engine's decoder (t2d/text/utf8.h). t2d_text is the CPU half of the text engine - no renderer, no Ore.
+target_link_libraries(mine_core PUBLIC t2d::core t2d::text)
 
 # What a native mod compiles against: the API header and the types it names, and nothing to link.
 # A mod is a separate shared library with its own copy of whatever it uses, so this is an include-only
@@ -91,6 +96,9 @@ set(MINE_TABLE_SOURCES
     src/pointer_drag.cpp
     src/registry.cpp
     src/sandbox.cpp
+    src/save_library.cpp
+    src/save_list.cpp
+    src/text_input.cpp
     src/types/click.cpp
     src/types/container.cpp
     src/types/drag_into.cpp

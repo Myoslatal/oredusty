@@ -44,6 +44,13 @@ Scope<Renderer2D> Renderer2D::create(ore::rhi::GraphicsContext& context, const R
     picture_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     renderer->picture_sampler_ = ore::rhi::Sampler::create(context.device(), picture_desc);
     if (renderer->picture_sampler_ == nullptr) return nullptr;
+
+    ore::rhi::SamplerDesc smooth_desc;
+    smooth_desc.min_filter = VK_FILTER_LINEAR;
+    smooth_desc.mag_filter = VK_FILTER_LINEAR;
+    smooth_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    renderer->smooth_sampler_ = ore::rhi::Sampler::create(context.device(), smooth_desc);
+    if (renderer->smooth_sampler_ == nullptr) return nullptr;
     return renderer;
 }
 
@@ -64,12 +71,15 @@ void Renderer2D::begin_glyph_batch(ore::RenderFrame& frame, const ore::Mat4& vie
 }
 
 void Renderer2D::begin_picture_batch(ore::RenderFrame& frame, const ore::Mat4& view_projection,
-                                     ore::rhi::Texture& texture, const std::string& name) {
-    if (batch_kind_ == Batch::Picture && batch_picture_ == name) return;
+                                     ore::rhi::Texture& texture, const std::string& name, TextureFilter filter) {
+    if (batch_kind_ == Batch::Picture && batch_picture_ == name && batch_filter_ == filter) return;
     flush();
-    batch_->begin(frame, view_projection, texture, picture_sampler_->handle());
+    const VkSampler sampler =
+        filter == TextureFilter::Linear ? smooth_sampler_->handle() : picture_sampler_->handle();
+    batch_->begin(frame, view_projection, texture, sampler);
     batch_kind_ = Batch::Picture;
     batch_picture_ = name;
+    batch_filter_ = filter;
 }
 
 void Renderer2D::note_batch_cost() {
@@ -84,6 +94,7 @@ void Renderer2D::flush() {
     note_batch_cost();
     batch_kind_ = Batch::None;
     batch_picture_.clear();
+    batch_filter_ = TextureFilter::Nearest;
 }
 
 void Renderer2D::draw(ore::RenderFrame& frame, const DrawList& list, Assets& assets) {
@@ -124,7 +135,7 @@ void Renderer2D::draw(ore::RenderFrame& frame, const DrawList& list, Assets& ass
                     batch_->draw_rect_outline(command.rect, 2.0f, rgba(240, 80, 200));
                     break;
                 }
-                begin_picture_batch(frame, view_projection, *texture, command.texture);
+                begin_picture_batch(frame, view_projection, *texture, command.texture, command.filter);
                 batch_->draw_quad(command.rect, command.uv, command.color);
                 break;
             }

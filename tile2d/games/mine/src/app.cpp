@@ -179,9 +179,11 @@ void MineApp::on_configure(ore::AppConfig& config) {
     // to kMaxCellQuads quads of 20 bytes: 4 MiB of ring is what keeps a zoomed out map of hundreds of
     // cells per side inside one frame instead of being dropped.
     config.upload_segment_size = 4ull << 20;
-    // Escape is handled per screen: on the start screen it quits, on the others it goes back to it -
-    // which is what the session screen has been telling the player all along.
+    // Escape is handled per screen: on the start screen it quits; in the mine it saves the mine and
+    // goes back to the start menu's save page (docs/GAME_DESIGN.md section 1.49).
     config.quit_on_escape = false;
+    // The window platform is left at Auto: a Wayland session is the native one now that Ore carries
+    // zwp_text_input_v3 itself (section 1.49). --platform x11 is still there as a fallback.
 }
 
 ore::ConstSpan<ore::CliOption> MineApp::cli_options() const {
@@ -353,6 +355,30 @@ void MineApp::on_update(f32 delta_seconds) {
         case Screen::Sandbox: handle_sandbox_input(delta_seconds); break;
         case Screen::Content: handle_content_input(); break;
         case Screen::World: handle_world_input(delta_seconds); break;
+        case Screen::SaveName: handle_save_name_input(); break;
+        case Screen::SaveList: handle_save_list_input(); break;
+    }
+    // The platform text input (fcitx5 and the other IMEs on Wayland) is on only while the name field
+    // has the focus: every other screen, and the buttons on this one, turn it off. On X11 this is a
+    // no-op and GLFW's char callback keeps carrying the IME's committed text (section 1.49).
+    const bool text_focused = screen_ == Screen::SaveName && save_name_focus_ == SaveNameFocus::Input;
+    if (window() != nullptr) {
+        if (text_focused != text_input_enabled_) {
+            window()->set_text_input_enabled(text_focused);
+            text_input_enabled_ = text_focused;
+        }
+        if (text_focused && save_name_field_.max.x > save_name_field_.min.x) {
+            // The field is laid out in framebuffer pixels; the IME wants window content pixels, and
+            // pixel_scale is the exact factor between the two.
+            const ore::PixelScale scale = window()->pixel_scale();
+            const f32 sx = scale.x > 0.0f ? scale.x : 1.0f;
+            const f32 sy = scale.y > 0.0f ? scale.y : 1.0f;
+            const f32 width = save_name_field_.max.x - save_name_field_.min.x;
+            const f32 height = save_name_field_.max.y - save_name_field_.min.y;
+            window()->set_text_input_cursor_rect(
+                static_cast<i32>(save_name_field_.min.x / sx), static_cast<i32>(save_name_field_.min.y / sy),
+                static_cast<i32>(width / sx), static_cast<i32>(height / sy));
+        }
     }
     // The automatic save counts this frame after the world has taken its turn, so a period is a period of
     // the mine and not of the loop (docs/GAME_DESIGN.md section 1.47).
@@ -403,6 +429,20 @@ void MineApp::handle_start_input() {
         open_content_list(Screen::Start);
         return;
     }
+    // Entering the submenu is the model's own doing (MenuAction::OpenStartMenu only reports it), so
+    // there is nothing to run here: the next frame draws the page it walked to.
+    if (action == MenuAction::NewGame) {
+        open_save_name();
+        return;
+    }
+    if (action == MenuAction::LoadAutosave) {
+        open_latest_autosave();
+        return;
+    }
+    if (action == MenuAction::OpenSaveList) {
+        open_save_list();
+        return;
+    }
     if (action == MenuAction::StartSession) begin_session(menu_.session_config());
 }
 
@@ -414,6 +454,9 @@ void MineApp::begin_session(const SessionConfig& session) {
         open_sandbox();
         return;
     }
+    // Hosting and joining start a mine of their own: the save submenu's slot is not theirs, so a
+    // stale path must not decide where their F7 writes (docs/GAME_DESIGN.md section 1.48).
+    active_save_path_.clear();
     screen_ = Screen::Session;
     T2D_INFO("session: world {} role {} seed {} (content registry: {} entries)", mode_name(session_.mode),
              role_name(session_.role), session_.seed, registry_.total_count());
@@ -451,6 +494,20 @@ f32 MineApp::line_for(u16 size_px) const {
     return std::max(static_cast<f32>(size_px) * 1.45f, t2d::line_box(fonts_, style).height);
 }
 
+void MineApp::draw_status_line() {
+    if (status_.empty()) return;
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    // A failed --load or a refused save happens before there is a world to show a status line in: the
+    // start screen family is where the reason has to be readable, not only in the log (docs/SAVE.md).
+    const f32 status_top = height - padding - line_for(body_px_);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{0.0f, status_top - padding * 0.5f}, t2d::Vec2{width, height}},
+                      kPalette.panel_fill);
+    draw_fitted(padding, status_top, body_px_, status_is_error_ ? kPalette.error : kPalette.text_dim, status_,
+                width - 2.0f * padding);
+}
+
 void MineApp::draw_start_screen() {
     const f32 width = static_cast<f32>(renderer().width());
     const f32 height = static_cast<f32>(renderer().height());
@@ -483,9 +540,17 @@ void MineApp::draw_start_screen() {
     batch_->draw_rect(panel, kPalette.panel_fill);
     batch_->draw_rect_outline(panel, 2.0f, kPalette.panel_edge);
 
+    // The same panel serves the main menu and the start submenu: only the title, the subtitle's line
+    // and the hint at the bottom change with the page (docs/GAME_DESIGN.md section 1.48).
+    const bool submenu = menu_.page() == MenuPage::StartMenu;
     f32 y = panel.min.y + padding;
-    y += draw_line(left, y, title_px, kPalette.accent, locale_.text("title")) + kAfterTitle;
-    y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("subtitle")) + kAfterSubtitle;
+    y += draw_line(left, y, title_px, kPalette.accent,
+                   locale_.text(submenu ? "menu.start.title" : "title")) + kAfterTitle;
+    if (submenu) {
+        y += row_line + kAfterSubtitle;   // no subtitle: the submenu's own hint is at the bottom
+    } else {
+        y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("subtitle")) + kAfterSubtitle;
+    }
     batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left, y}, t2d::Vec2{right, y + kRule}}, kPalette.panel_edge);
     y += kAfterRule;
 
@@ -535,6 +600,7 @@ void MineApp::draw_start_screen() {
                 break;
             }
             case RowKind::Action:
+            case RowKind::Back:
                 if (focused) draw_line(value_column, y, body_px_, kPalette.text_dim, "< ENTER >");
                 break;
         }
@@ -551,18 +617,180 @@ void MineApp::draw_start_screen() {
     // The hints follow the rows instead of being pinned to the panel's bottom edge: the panel is
     // sized to its content, so there is nothing left to pin them to.
     y += kBeforeHints;
-    y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.rows")) + kBetweenHints;
-    draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.actions"));
-
-    // A failed --load happens before there is a world to show a status line in: the start screen is
-    // where the reason has to be readable, not only in the log (docs/SAVE.md).
-    if (!status_.empty()) {
-        const f32 status_top = height - padding - line_for(body_px_);
-        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{0.0f, status_top - padding * 0.5f}, t2d::Vec2{width, height}},
-                          kPalette.panel_fill);
-        draw_fitted(padding, status_top, body_px_,
-                    status_is_error_ ? kPalette.error : kPalette.text_dim, status_, width - 2.0f * padding);
+    if (submenu) {
+        draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("menu.start.hint"));
+    } else {
+        y += draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.rows")) + kBetweenHints;
+        draw_line(left, y, body_px_, kPalette.text_dim, locale_.text("hint.actions"));
     }
+    draw_status_line();
+}
+
+void MineApp::draw_save_name_screen() {
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    const f32 row_line = line_for(body_px_);
+    const u16 title_px = static_cast<u16>(body_px_ * 2);
+    const f32 field_height = row_line + padding;
+
+    // Title, the field, Create and Back, one line for a refusal, one for the hint.
+    const f32 content = line_for(title_px) + 6.0f + field_height + padding + row_line * 2.0f + row_line +
+                        6.0f * unit_ + row_line;
+    const f32 panel_width = std::min(width - 4.0f * padding, 330.0f * unit_);
+    const f32 panel_height = std::min(height - 4.0f * padding, content + 2.0f * padding);
+    const t2d::Aabb2 panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
+                                                     t2d::Vec2{panel_width * 0.5f, panel_height * 0.5f});
+    const f32 left = panel.min.x + padding;
+    const f32 right = panel.max.x - padding;
+    batch_->draw_rect(panel, kPalette.panel_fill);
+    batch_->draw_rect_outline(panel, 2.0f, kPalette.panel_edge);
+
+    f32 y = panel.min.y + padding;
+    y += draw_line(left, y, title_px, kPalette.accent, locale_.text("newgame.title")) + 6.0f;
+
+    // The field: a box that shows which of the three places has the focus, the typed name, the IME's
+    // pre-edit where it will be committed, and the caret as a bar whose x is the text before it plus
+    // the pre-edit (docs/GAME_DESIGN.md sections 1.48, 1.49).
+    const t2d::Aabb2 field{t2d::Vec2{left, y}, t2d::Vec2{right, y + field_height}};
+    save_name_field_ = field;
+    batch_->draw_rect(field, kPalette.grid_background);
+    const u32 field_edge =
+        save_name_focus_ == SaveNameFocus::Input ? kPalette.accent : kPalette.panel_edge;
+    batch_->draw_rect_outline(field, 2.0f, field_edge);
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    const f32 text_x = field.min.x + padding * 0.5f;
+    const f32 text_y = field.min.y + (field_height - row_line) * 0.5f;
+    const f32 text_width = field.max.x - text_x - padding * 0.5f;
+    // A tab is a character the model keeps and the glyph atlas has no picture of: it is drawn as a gap,
+    // and the caret is measured on the same expansion, so it stays where the next character goes
+    // (docs/GAME_DESIGN.md section 1.49).
+    const auto as_displayed = [](std::string_view text) {
+        std::string out;
+        out.reserve(text.size());
+        for (const char byte : text) {
+            if (byte == '	') out += "  ";
+            else out.push_back(byte);
+        }
+        return out;
+    };
+    const std::string_view name = save_name_.text();
+    const std::string before = as_displayed(name.substr(0, save_name_.caret()));
+    const std::string after = as_displayed(name.substr(save_name_.caret()));
+    const std::string preedit = as_displayed(input().preedit());
+    const f32 before_width = text_->measure(before, fonts_, style).width;
+    const f32 preedit_width = text_->measure(preedit, fonts_, style).width;
+    const f32 after_width = text_->measure(after, fonts_, style).width;
+    if (name.empty() && preedit.empty()) {
+        draw_fitted(text_x, text_y, body_px_, kPalette.text_dim, locale_.text("newgame.placeholder"),
+                    text_width);
+    } else if (before_width + preedit_width + after_width <= text_width) {
+        // The composing text is drawn in the accent colour and underlined: it is not in the name yet,
+        // and it goes where the next commit will land.
+        f32 x = text_x;
+        x += draw_line(x, text_y, body_px_, kPalette.text, before);
+        if (!preedit.empty()) {
+            x += draw_line(x, text_y, body_px_, kPalette.accent, preedit);
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{x - preedit_width, text_y + row_line - 2.0f},
+                                         t2d::Vec2{x, text_y + row_line}},
+                              kPalette.accent);
+        }
+        draw_line(x, text_y, body_px_, kPalette.text, after);
+    } else {
+        // Wider than the box: the whole line is clipped as it was before the pre-edit existed.
+        draw_fitted(text_x, text_y, body_px_, kPalette.text, before + preedit + after, text_width);
+    }
+    f32 prefix = before_width + preedit_width;
+    if (prefix > text_width) prefix = text_width;
+    const t2d::Aabb2 caret{t2d::Vec2{text_x + prefix, field.min.y + 3.0f * unit_},
+                           t2d::Vec2{text_x + prefix + 2.0f, field.max.y - 3.0f * unit_}};
+    batch_->draw_rect(caret, kPalette.accent);
+    y = field.max.y + padding;
+
+    // Create and Back: two rows, the focused one boxed the way the main menu boxes its rows.
+    const auto draw_focus_row = [&](const char* id, SaveNameFocus focus) {
+        const bool focused = save_name_focus_ == focus;
+        if (focused) {
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{left - 4.0f, y}, t2d::Vec2{right, y + row_line}},
+                              kPalette.highlight);
+        }
+        draw_line(left, y, body_px_, focused ? kPalette.accent : kPalette.text, locale_.text(id));
+        if (focused) draw_line(right - 60.0f * unit_, y, body_px_, kPalette.text_dim, "< ENTER >");
+        y += row_line;
+    };
+    draw_focus_row("newgame.create", SaveNameFocus::Create);
+    draw_focus_row("row.back", SaveNameFocus::Back);
+
+    // A refused name says why - the id comes from the library, which is the half that knows the rules.
+    if (save_name_error_ != nullptr && *save_name_error_ != '\0') {
+        draw_fitted(left, y, body_px_, kPalette.error, locale_.text(save_name_error_), right - left);
+    }
+    y += row_line + 6.0f * unit_;
+    draw_fitted(left, y, body_px_, kPalette.text_dim, locale_.text("newgame.hint"), right - left);
+    draw_status_line();
+}
+
+void MineApp::draw_save_list_screen() {
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    const f32 row_line = line_for(body_px_);
+    const u16 title_px = static_cast<u16>(body_px_ * 2);
+    const f32 panel_width = std::min(width - 4.0f * padding, 330.0f * unit_);
+    const f32 panel_height = std::min(height - 4.0f * padding, std::max(220.0f * unit_, height * 0.72f));
+    const t2d::Aabb2 panel = t2d::Aabb2::from_center(t2d::Vec2{width * 0.5f, height * 0.5f},
+                                                     t2d::Vec2{panel_width * 0.5f, panel_height * 0.5f});
+    const f32 left = panel.min.x + padding;
+    const f32 right = panel.max.x - padding;
+    batch_->draw_rect(panel, kPalette.panel_fill);
+    batch_->draw_rect_outline(panel, 2.0f, kPalette.panel_edge);
+
+    f32 y = panel.min.y + padding;
+    y += draw_line(left, y, title_px, kPalette.accent, locale_.text(save_list_title_id())) + 6.0f * unit_;
+    const f32 list_top = y;
+    const f32 hint_y = panel.max.y - padding - row_line;
+    // The window the list scrolls in is what fits between its title and its hint: the model keeps the
+    // selection inside it (mine/save_list.h).
+    const f32 list_room = std::max(0.0f, hint_y - 6.0f * unit_ - list_top);
+    const usize visible = std::max<usize>(1u, static_cast<usize>(list_room / row_line));
+    save_list_.set_visible_rows(visible);
+
+    if (save_list_.row_count() == 0) {
+        draw_line(left, list_top, body_px_, kPalette.text_dim, locale_.text(save_list_empty_id()));
+    } else {
+        t2d::TextStyle style;
+        style.size_px = body_px_;
+        const usize first = save_list_.first_visible();
+        const usize last = std::min(save_list_.row_count(), first + visible);
+        f32 row_y = list_top;
+        for (usize index = first; index < last; ++index) {
+            const SaveListRow& row = save_list_.row(index);
+            const SaveSlot& slot = save_list_.slots()[row.slot];
+            const bool focused = index == save_list_.selected();
+            if (focused) {
+                const t2d::Aabb2 row_box{t2d::Vec2{left - 4.0f, row_y}, t2d::Vec2{right, row_y + row_line}};
+                batch_->draw_rect(row_box, kPalette.highlight);
+            }
+            if (row.is_autosave) {
+                // Under its slot, indented: what a load would read, and the only file a slot keeps.
+                const u32 sub_color = focused ? kPalette.accent : kPalette.text_dim;
+                draw_line(left + 10.0f * unit_, row_y, body_px_, sub_color,
+                          locale_.text(save_list_latest_id()));
+            } else {
+                draw_line(left, row_y, body_px_, focused ? kPalette.accent : kPalette.text, slot.name);
+                if (!slot.has_autosave) {
+                    const f32 name_width = text_->measure(slot.name, fonts_, style).width;
+                    const f32 note_x = left + name_width + 3.0f * unit_;
+                    draw_fitted(note_x, row_y, body_px_, kPalette.text_dim,
+                                locale_.text(save_list_no_autosave_id()), right - note_x);
+                }
+            }
+            row_y += row_line;
+        }
+    }
+    draw_fitted(left, hint_y, body_px_, kPalette.text_dim, locale_.text(save_list_hint_id()), right - left);
+    draw_status_line();
 }
 
 void MineApp::draw_session_screen() {
@@ -1135,10 +1363,12 @@ void MineApp::configure_world_generator() {
 }
 
 std::string MineApp::save_file_path() const {
-    // A save the player names is theirs; one they did not still has a home, so F7 always has somewhere
-    // to write (docs/SAVE.md). A run started from --load keeps writing **that** file, so F7 after a load
-    // is a save and not a second file the player never named; F8 reads the same one.
+    // The file this game belongs to, in order of who decided it (docs/GAME_DESIGN.md section 1.48):
+    // --save (a scripted run says where), then the slot a game was started from (New Game, Load
+    // Autosave, Save List), then --load (the run was opened from that file and keeps writing it), then
+    // the default beside the working directory. F8 reads the same file F7 writes.
     if (!options_.save_path.empty()) return t2d::save::with_extension(options_.save_path);
+    if (!active_save_path_.empty()) return t2d::save::with_extension(active_save_path_);
     if (!options_.load_path.empty()) return t2d::save::with_extension(options_.load_path);
     return t2d::save::with_extension("save.t2dsave");
 }
@@ -1245,6 +1475,64 @@ bool MineApp::load_game_file(const std::string& path) {
     set_status(format_localized(locale_.text("world.load.ok"), loaded->plots, loaded->entities, file_path));
     autosave_elapsed_ = 0.0f;   // a loaded mine starts a fresh period
     return true;
+}
+
+SaveLibrary MineApp::save_library() const {
+    // The library lives with the game's working directory: a player who starts the game from a folder
+    // finds their saves in that folder's saves/ (docs/GAME_DESIGN.md section 1.48).
+    return SaveLibrary((std::filesystem::current_path() / "saves").string());
+}
+
+void MineApp::open_save_name() {
+    save_name_.clear();
+    save_name_focus_ = SaveNameFocus::Input;
+    save_name_error_ = "";
+    screen_ = Screen::SaveName;
+}
+
+void MineApp::create_game_from_name() {
+    SaveLibrary library = save_library();
+    const char* error = "";
+    SaveSlot slot;
+    if (!library.create(save_name_.text(), error, slot)) {
+        save_name_error_ = error;
+        set_status(locale_.text(error), true);
+        return;
+    }
+    // The game this run plays is that slot: F7/F8 and the automatic save write its auto.t2dsave.
+    active_save_path_ = slot.autosave_path;
+    save_name_error_ = "";
+    session_.mode = menu_.mode();
+    session_.seed = menu_.seed();
+    session_.role = Role::Single;
+    T2D_INFO("new game: slot '{}' at '{}'", slot.name, active_save_path_);
+    // The mine is built first and then written once: the player starts with a save of the world they are
+    // looking at, and a slot made here is never empty (docs/GAME_DESIGN.md section 1.48).
+    open_world();
+    (void)save_game();
+}
+
+void MineApp::open_latest_autosave() {
+    const SaveLibrary library = save_library();
+    const std::optional<SaveSlot> latest = library.latest_autosave();
+    if (!latest.has_value()) {
+        set_status(locale_.text("save.load_autosave.none"), true);
+        return;
+    }
+    active_save_path_ = latest->autosave_path;
+    (void)load_game_file(latest->autosave_path);
+}
+
+void MineApp::open_save_list() {
+    save_list_.set_slots(save_library().slots());
+    screen_ = Screen::SaveList;
+}
+
+void MineApp::load_selected_save() {
+    const std::string path = save_list_.selected_autosave_path();
+    if (path.empty()) return;
+    active_save_path_ = path;
+    (void)load_game_file(path);
 }
 
 void MineApp::enter_mine_layer(i32 index) {
@@ -1812,10 +2100,15 @@ void MineApp::handle_world_input(f32 delta_seconds) {
         return;
     }
     if (input.key_pressed(ore::Key::Escape)) {
-        // Leaving the view leaves the selection behind: it is about a plot of the layer being left.
+        // Leaving the mine writes it first - the same file F7 writes - and then goes back to the start
+        // menu's save page (docs/GAME_DESIGN.md section 1.49). A save that fails says so on the start
+        // screen's status line and does not keep the player in the mine.
+        (void)save_game();
+        // The selection is about a plot of the layer being left: it does not come back with the menu.
         clear_selection();
         double_click_.reset();
-        screen_ = Screen::Session;
+        menu_.set_page(MenuPage::StartMenu);
+        screen_ = Screen::Start;
         return;
     }
 
@@ -1982,6 +2275,92 @@ void MineApp::handle_session_input() {
     // (docs/GAME_DESIGN.md section 7), so what is entered is a layer built from whatever the registry
     // holds - empty until the layer rules arrive.
     if (input.key_pressed(ore::Key::Enter) || input.key_pressed(ore::Key::Space)) open_world();
+}
+
+void MineApp::handle_save_name_input() {
+    const ore::InputState& input = this->input();
+    // Up/down walk the three places in a ring, the way a menu's up/down does: Input -> Create -> Back.
+    // Tab is **not** a focus key here: it is a character a name may hold (docs/GAME_DESIGN.md 1.49).
+    constexpr i32 kFocusCount = 3;
+    if (input.key_pressed(ore::Key::Up)) {
+        const i32 focus = static_cast<i32>(save_name_focus_) + kFocusCount - 1;
+        save_name_focus_ = static_cast<SaveNameFocus>(focus % kFocusCount);
+        return;
+    }
+    if (input.key_pressed(ore::Key::Down)) {
+        const i32 focus = static_cast<i32>(save_name_focus_) + 1;
+        save_name_focus_ = static_cast<SaveNameFocus>(focus % kFocusCount);
+        return;
+    }
+    // While the field has the focus the typed characters go into it. Tab is inserted as a character
+    // (the model keeps a tab; the field draws it as a gap), the rest of the keys edit the caret.
+    if (save_name_focus_ == SaveNameFocus::Input) {
+        if (!input.text_input().empty()) {
+            (void)save_name_.insert(input.text_input());
+            save_name_error_ = "";
+        }
+        if (input.key_pressed(ore::Key::Tab)) {
+            (void)save_name_.insert("	");
+            save_name_error_ = "";
+        }
+        if (input.key_pressed(ore::Key::Backspace)) {
+            save_name_.backspace();
+            save_name_error_ = "";
+        }
+        if (input.key_pressed(ore::Key::Delete)) {
+            save_name_.erase();
+            save_name_error_ = "";
+        }
+        if (input.key_pressed(ore::Key::Left)) save_name_.move_left();
+        if (input.key_pressed(ore::Key::Right)) save_name_.move_right();
+        if (input.key_pressed(ore::Key::Home)) save_name_.home();
+        if (input.key_pressed(ore::Key::End)) save_name_.end();
+    }
+    // Leaving the screen and going back are the same press: Esc from anywhere, Enter on the Back button.
+    if (input.key_pressed(ore::Key::Escape) ||
+        (input.key_pressed(ore::Key::Enter) && save_name_focus_ == SaveNameFocus::Back)) {
+        menu_.set_page(MenuPage::StartMenu);
+        screen_ = Screen::Start;
+        return;
+    }
+    // Enter in the field or on Create both try to make the slot: creating is what the screen is for.
+    if (input.key_pressed(ore::Key::Enter)) create_game_from_name();
+}
+
+void MineApp::handle_save_list_input() {
+    const ore::InputState& input = this->input();
+    if (input.key_pressed(ore::Key::Up) || input.key_pressed(ore::Key::W)) save_list_.move(-1);
+    if (input.key_pressed(ore::Key::Down) || input.key_pressed(ore::Key::S)) save_list_.move(1);
+    const std::optional<usize> slot = save_list_.selected_slot();
+    const bool on_autosave = !save_list_.selected_autosave_path().empty();
+    if (input.key_pressed(ore::Key::Right) || input.key_pressed(ore::Key::D)) {
+        if (slot.has_value() && !on_autosave) {
+            // Right and Enter do the same thing on a slot's header: open it, or close it again.
+            if (save_list_.slots()[*slot].has_autosave) save_list_.toggle(*slot);
+            else set_status(locale_.text("save.list.no_autosave"));
+        }
+    }
+    if (input.key_pressed(ore::Key::Left) || input.key_pressed(ore::Key::A)) {
+        if (slot.has_value() && save_list_.is_open(*slot)) save_list_.set_open(*slot, false);
+    }
+    if (input.key_pressed(ore::Key::Enter) || input.key_pressed(ore::Key::Space)) {
+        // A sub row is a file, so Enter reads it; a slot's header opens or closes what is under it.
+        if (on_autosave) {
+            load_selected_save();
+            return;
+        }
+        if (!slot.has_value()) return;
+        if (!save_list_.slots()[*slot].has_autosave) {
+            set_status(locale_.text("save.list.no_autosave"));
+            return;
+        }
+        save_list_.toggle(*slot);
+        return;
+    }
+    if (input.key_pressed(ore::Key::Escape)) {
+        menu_.set_page(MenuPage::StartMenu);
+        screen_ = Screen::Start;
+    }
 }
 
 void MineApp::handle_playtest_input(f32 delta_seconds) {
@@ -3112,6 +3491,8 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         case Screen::Sandbox: playtest_ ? draw_playtest_screen() : draw_sandbox_screen(); break;
         case Screen::Content: draw_content_screen(); break;
         case Screen::World: draw_world_screen(); break;
+        case Screen::SaveName: draw_save_name_screen(); break;
+        case Screen::SaveList: draw_save_list_screen(); break;
     }
     batch_->end();
     dropped_quads_ = batch_->dropped_quads();

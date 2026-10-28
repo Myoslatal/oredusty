@@ -40,13 +40,14 @@ void DrawList::rect_outline(const Aabb2& bounds, t2d::f32 thickness, u32 color) 
     side(bounds.max.x - thickness, bounds.min.y + thickness, bounds.max.x, bounds.max.y - thickness); // right
 }
 
-void DrawList::sprite(std::string texture, const Aabb2& rect, const Aabb2& uv, u32 tint) {
+void DrawList::sprite(std::string texture, const Aabb2& rect, const Aabb2& uv, u32 tint, TextureFilter filter) {
     DrawCommand command;
     command.kind = DrawCommand::Kind::Sprite;
     command.rect = rect;
     command.uv = uv;
     command.color = tint;
     command.texture = std::move(texture);
+    command.filter = filter;
     commands_.push_back(std::move(command));
     ++sprites_;
 }

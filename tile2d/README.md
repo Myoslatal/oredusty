@@ -20,7 +20,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/save` | the save archive: a versioned `.t2dsave` container (magic, game name and version, chunks with id/version/size/CRC-32) with encode/decode, file helpers and payload reader/writer; **header only**, so a game compiles it into itself | `test_save` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save`, `test_text_input`, `test_save_library`, `test_save_list` |
 | `games/mefemma` | a **second, independent game project**: its own scene stack, DrawList, 2D renderer, assets, input and settings — the framework a game is written on, with no world model and no content of its own | `test_draw_list`, `test_scene_stack`, `test_settings`, `test_input`, `test_data_paths`, `test_scenes` |
 
 ## Layout
@@ -48,13 +48,14 @@ that direction. What is left is what the game actually uses, and it is all teste
     cmake --preset mefemma-debug   # the second game has its own tree: build/mefemma/debug
 
     tools/verify.sh           # every mine preset at once, plus the engine's own suite
+    tools/verify.sh mefemma-debug mefemma-release mefemma-asan mefemma-tsan   # the second game
 
 `tools/verify.sh` verifies the six targets (five mine presets here and the engine's suite next door) **in
 parallel** - the build trees are independent, and each target's tests run with `ctest -j` - so a run that
 takes about three minutes one at a time finishes in well under one. The job count is split between the
 targets (`VERIFY_JOBS=8 tools/verify.sh` to say how many cores to use); logs land in `build/verify/`.
 
-The whole suite is pure CPU work and finishes in about four seconds (35 suites, measured with `ctest` on
+The whole suite is pure CPU work and finishes in about four seconds (38 suites, measured with `ctest` on
 the `mine-debug` preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
 interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
 without Vulkan, GLFW or either game — the split that lets a dedicated server exist later.
@@ -66,14 +67,14 @@ without Vulkan, GLFW or either game — the split that lets a dedicated server e
     tests/test_executable          2 cases /  18 checks  the running program's path, and the directory rule that finds what is beside it
     tests/test_font               10 cases / 101 checks  sfnt containers, cmaps, metrics, TrueType outlines
     tests/test_cff                16 cases / 374 checks  CFF Type 2 outlines, against fontTools as an oracle
-    tests/test_text                9 cases / 367 checks  UTF-8, language tables, the line box, the shipped interface strings
+    tests/test_text                9 cases / 439 checks  UTF-8, language tables, the line box, the shipped interface strings
     tests/test_module              5 cases /  33 checks  loading a library at run time, symbols, unloading
     tests/test_code_table         33 cases / 333 checks  real compiler output packed into a table, two tables merged, a mod replacing what it was loaded by, and every hazard docs/ABI.md measured
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases /1265 checks  framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
     tests/test_render_offscreen   11 cases /  76 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
-    games/mine/tests/test_mine_menu      11 cases / 168 checks  the start screen as a state machine
+    games/mine/tests/test_mine_menu      12 cases / 274 checks  the start screen as a state machine: the save submenu and its pages, too
     games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
@@ -88,6 +89,9 @@ without Vulkan, GLFW or either game — the split that lets a dedicated server e
     games/mine/tests/test_build_sidebar  4 cases / 63 checks  the build sidebar: categories, picking, where its parts are, the pages
     games/mine/tests/test_building_unlocks  8 cases / 100 checks  which buildings a save has unlocked: the data's defaults, a reload, and the save blob
     games/mine/tests/test_game_save  9 cases / 152 checks  a mine saved to a .t2dsave and read back: session, world, plots, containers, drops, sweeps, unlocks - all of it or none of it
+    games/mine/tests/test_text_input  7 cases / 81 checks  the save name field: UTF-8 text, the caret, CJK/emoji as one character, the limit, tab as text
+    games/mine/tests/test_save_library  8 cases / 92 checks  a directory per save slot, one auto.t2dsave in it, and the names a file system takes (a tab is one)
+    games/mine/tests/test_save_list  8 cases / 66 checks  the save list: a row per slot, the recent automatic save under an open one, the selection
     games/mine/tests/test_sandbox        28 cases / 719 checks  the sandbox: map, palette, camera, reload by name, layouts, the playtest pointer
     games/mine/tests/test_content_pack   19 cases / 311 checks  packs: a directory per pack, several files each, headers, order, collisions, art, includes
     games/mine/tests/test_content_search  5 cases /  41 checks  the packs and content directories beside the executable, and a pack and a mod sharing one
@@ -514,7 +518,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 1025 sections, 3 268 symbols, 12 636 relocations (release)
+        mine.codetab         the game: 1116 sections, 3 484 symbols, 13 428 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -615,6 +619,21 @@ What exists today is the shell and the content debugger, deliberately free of an
   corrupted. `test_registry` covers it, including that failure spelled out.
 * No resource, structure, recipe or machine is hard coded anywhere: those are the designer's data.
 
+The start menu's **START GAME** opens a submenu: **NEW GAME**, **LOAD AUTOSAVE**, **SAVE LIST**, **BACK**.
+New Game asks for a save name — CJK and emoji are one character each, backspace/delete/arrows/home/end
+edit it, Up/Down walk the Input / Create / Back focus, and Tab inserts a tab while the field has it
+(the field draws the tab as a gap); the caret is drawn where the next character goes. Creating it
+makes `saves/<name>/auto.t2dsave`, builds the mine and writes it once before play. Load Autosave opens
+the newest automatic save of any slot; Save List shows every slot with its latest automatic save under
+it (`Right` or `Enter` opens one, `Enter` on the sub row loads it, `Esc` goes back). A game started that
+way keeps writing its own slot — and `--save`/`--load` still outrank it. Leaving the mine with `Esc`
+saves it first and comes back to this submenu; `Esc` from the main menu still quits.
+
+On Linux the window defaults to Wayland, and text input is the engine's own: GLFW has no Wayland text
+input, so Ore speaks `zwp_text_input_v3` itself, which is what lets fcitx5 compose Chinese in the name
+field (the committed text arrives like typing, the pre-edit is drawn under the caret). A compositor
+without the protocol is a no-op; `--platform x11` falls back to GLFW's X11 path and its XIM.
+
 ### The world
 
 A **layer** of the mine is what the game plays on: its own map, its own content, its own dice. It is
@@ -701,7 +720,8 @@ the drops, the sweeps in progress and the view ([docs/SAVE.md](docs/SAVE.md)). A
 with `--load <path>`, which opens the world view directly instead of a new mine. Two things a save
 deliberately does not hold: the drill's RNG stream (it reseeds from the content and its anchor, so a
 reloaded drill's later drops are not promised bit for bit) and the interface's own state - the
-selection, the double click, the drop on the pointer, whether the sidebar is open.
+selection, the double click, the drop on the pointer, whether the sidebar is open. A game started from
+the menu writes its own slot; `--save` and `--load` still outrank that path.
 
 While a mine is being played it is also written by itself every five minutes (`--autosave-seconds`,
 0 turns it off), and once more when the game is left - closing the window keeps the mine that was on
@@ -786,16 +806,21 @@ copy of its shell. It has its own screens, its own architecture and its own name
   to leave the room for them ([games/mefemma/docs/FRAMEWORK.md](games/mefemma/docs/FRAMEWORK.md) says where
   each would attach).
 
-What it ships is the framework and two worked examples of a scene — a title and a camera playground. It
-carries no gameplay and no game content: the designer writes those.
+It ships the framework, the **start screen the designer drew** (a wooden sign from
+`assets/textures/start_screen.png`) and a camera playground as an example of a scene. The start screen's
+rows are **New Game, Save List, Settings, Mods and Quit**: the first four open a note that says they are not
+implemented yet - that is the one function a game replaces first - and Quit is real. It carries no gameplay
+and no game content: the designer writes those.
 
-    ./build/mefemma/debug/games/mefemma/mefemma_game                              # title
+    ./build/mefemma/debug/games/mefemma/mefemma_game                              # start screen (zh-Hans)
+    ./build/mefemma/debug/games/mefemma/mefemma_game --lang en                    # the English table
     ./build/mefemma/debug/games/mefemma/mefemma_game --scene playground           # camera + pointer + HUD
-    ./build/mefemma/debug/games/mefemma/mefemma_game --lang zh-Hans               # the interface follows
     ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 4 --size 1280x720 \
         --scene playground --pointer 900,420 --screenshot out.png          # a scripted screenshot
 
-![Mefemma's title](games/mefemma/docs/images/title.png)
+![Mefemma's start screen](games/mefemma/docs/images/start_zh_hans.png)
+
+![A row that is not implemented yet](games/mefemma/docs/images/start_new_game_zh_hans.png)
 
 ![Mefemma's playground](games/mefemma/docs/images/playground.png)
 
@@ -811,17 +836,22 @@ others record the last run before the split. No result here is estimated.
 
 | Preset | Result |
 |---|---|
-| `mine-debug` | 35/35 tests green (run in this checkout) |
-| `mine-release` | 35/35 tests green (run in this checkout) |
+| `mine-debug` | 38/38 tests green (run in this checkout) |
+| `mine-release` | 38/38 tests green (run in this checkout) |
 | `mine-asan` (Address + UB sanitizers) | not re-run after the build trees were split |
 | `mine-tsan` (ThreadSanitizer) | not re-run after the build trees were split |
 | `no-renderer` | 12/12 tests green (previous run; not re-run after the split) |
-| `mefemma-debug` / `mefemma-release` | the second project's own presets (its 6 suites), not run here |
+| `mefemma-debug` | 20/20 tests green (run in this checkout) |
+| `mefemma-release` | 20/20 tests green (run in this checkout) |
+| `mefemma-asan` (Address + UB sanitizers) | 20/20 tests green (run in this checkout) |
+| `mefemma-tsan` (ThreadSanitizer) | 20/20 tests green (run in this checkout) |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,
 the strings read from `assets/text/ui.ecfg` inside the package, the window, the swapchain, the content
 pack — and the demo mod's table changes the game's own answer from `Mine, unmodified` to `Mine, modded`.
+The second game's package (`build/mefemma/release/mefemma-0.1.0-Release.zip`) is run the same way: it starts
+from an empty directory, finds its assets and the sign, and reports `1 module(s), 0 error(s)`.
 
 Ore itself is a separate tree with its own suite (13/13 in `debug`, `release` and `asan`), which now includes
 `test_debug_input`: the debug input server's command parser and a real socket round trip that ends in an

@@ -91,6 +91,10 @@ public:
     [[nodiscard]] bool cursor_inside_window() const { return cursor_inside_; }
     /// UTF-8 characters typed since the last frame (text fields, debug consoles).
     [[nodiscard]] std::string_view text_input() const { return text_; }
+    /// The input method's pre-edit: the text being composed, not yet committed. Empty when nothing is
+    /// being composed. Unlike text_input() it survives a frame - it is cleared by a commit, by
+    /// disabling the text input, or when the input method loses focus (see WaylandTextInput).
+    [[nodiscard]] std::string_view preedit() const { return preedit_; }
 
     // --- used by the window layer ---
     void set_key(Key key, bool down);
@@ -105,6 +109,9 @@ public:
     /// Leaving the content area clears the pointer tracking, so the next event starts a fresh delta.
     void set_cursor_inside(bool inside);
     void add_text(std::string_view utf8);
+    /// The window layer sets the pre-edit; begin_frame() deliberately does not clear it.
+    void set_preedit(std::string text);
+    void clear_preedit();
 
 private:
     std::array<bool, kKeyCount> key_down_{};
@@ -124,6 +131,7 @@ private:
     f32 scroll_y_ = 0.0f;
     bool cursor_inside_ = false;
     std::string text_;
+    std::string preedit_;
 };
 
 /// Binds friendly action names to keys/buttons, then evaluates them against an InputState.

@@ -1,6 +1,6 @@
 // Mefemma - the files a game draws with: fonts, the string table, and pictures.
 //
-// Assets belong to the shell, not to a scene: a scene names a picture ("placeholder") and a string id, and
+// Assets belong to the shell, not to a scene: a scene names a picture ("start_screen") and a string id, and
 // never owns a texture or a font. That is what keeps a scene testable - it only ever sees names - and what
 // makes loading, language switching and lifetime one decision in one place.
 //

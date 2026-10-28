@@ -1,4 +1,4 @@
-# Interface strings of Mefemma's two example scenes, one table per language.
+# Interface strings of Mefemma's start screen and its example scenes, one table per language.
 #
 # Text is looked up by id, never stored in code: a language is a table, and a missing string shows its id
 # (a visible failure) instead of an empty label. A game adds its own ids here or in its own table.
@@ -6,11 +6,15 @@
 # Ids are stable: a log refers to an id, never to the text, so the text can be reworded at any time.
 
 en::
-    title.name:"MEFEMMA"
-    title.tagline:"A GAME FRAMEWORK BUILT ON TILE2D"
-    title.start:"PRESS ENTER"
-    title.quit:"ESC TO QUIT"
-    title.language:"F2 SWITCHES LANGUAGE"
+    start.title:"MEFEMMA"
+    start.new_game:"NEW GAME"
+    start.load_game:"SAVE LIST"
+    start.settings:"SETTINGS"
+    start.mods:"MODS"
+    start.quit:"QUIT GAME"
+    start.hint:"UP/DOWN SELECT   ENTER CONFIRM   F2 LANGUAGE   ESC QUIT"
+    start.not_implemented:"THIS FEATURE IS NOT IMPLEMENTED YET"
+    start.back:"PRESS ESC OR ENTER TO RETURN"
     play.title:"PLAYGROUND"
     play.note:"THIS SCENE IS YOURS TO REPLACE"
     play.hint:"WASD / ARROWS PAN   WHEEL OR +/- ZOOM   C CENTRE   ESC BACK"
@@ -20,11 +24,15 @@ en::
     debug.missing:"{} PICTURE(S) MISSING"
 
 zh-Hans::
-    title.name:"MEFEMMA"
-    title.tagline:"基于 TILE2D 的游戏框架"
-    title.start:"按 Enter 开始"
-    title.quit:"ESC 退出"
-    title.language:"F2 切换语言"
+    start.title:"MEFEMMA"
+    start.new_game:"新建游戏"
+    start.load_game:"存档列表"
+    start.settings:"设置"
+    start.mods:"模组"
+    start.quit:"退出游戏"
+    start.hint:"上下选择   Enter 确认   F2 语言   Esc 退出"
+    start.not_implemented:"此功能尚未实现"
+    start.back:"按 Esc 或 Enter 返回"
     play.title:"试验场"
     play.note:"这个场景留给你替换"
     play.hint:"WASD / 方向键平移   滚轮或 +/- 缩放   C 居中   ESC 返回"
@@ -34,11 +42,15 @@ zh-Hans::
     debug.missing:"缺少 {} 张图片"
 
 zh-Hant::
-    title.name:"MEFEMMA"
-    title.tagline:"基於 TILE2D 的遊戲框架"
-    title.start:"按 Enter 開始"
-    title.quit:"ESC 離開"
-    title.language:"F2 切換語言"
+    start.title:"MEFEMMA"
+    start.new_game:"新建遊戲"
+    start.load_game:"存檔列表"
+    start.settings:"設定"
+    start.mods:"模組"
+    start.quit:"離開遊戲"
+    start.hint:"上下選擇   Enter 確認   F2 語言   Esc 離開"
+    start.not_implemented:"此功能尚未實作"
+    start.back:"按 Esc 或 Enter 返回"
     play.title:"試驗場"
     play.note:"這個場景留給你替換"
     play.hint:"WASD / 方向鍵平移   滾輪或 +/- 縮放   C 居中   ESC 返回"

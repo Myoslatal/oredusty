@@ -79,6 +79,17 @@ public:
     [[nodiscard]] const InputState& input() const { return input_; }
     [[nodiscard]] InputState& input() { return input_; }
 
+    /// Turns the platform's text input (input method) on or off for this window. On Wayland it is a
+    /// zwp_text_input_v3 object that gives fcitx5 and the other IMEs a way in; GLFW's Wayland backend
+    /// has no text-input of its own. On X11 (where GLFW's char callback already carries the IME's
+    /// committed text) and on every other platform it is a no-op, and so is it when the compositor
+    /// does not offer the protocol. Committed text arrives through input().text_input(); what the IME
+    /// is still composing arrives through input().preedit().
+    void set_text_input_enabled(bool enabled);
+    /// Where the text caret is, in window content coordinates - the IME places its candidate window
+    /// there. A no-op when the platform's text input is off or unavailable.
+    void set_text_input_cursor_rect(i32 x, i32 y, i32 w, i32 h);
+
     /// Native GLFWwindow* - for extensions that need the raw handle.
     [[nodiscard]] void* native_handle() const;
 

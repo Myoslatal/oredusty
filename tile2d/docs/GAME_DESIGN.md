@@ -303,7 +303,57 @@
     ⑤ **没做**：存档槽位、自动存档的界面开关（只有命令行）、网络同步存档；本轮不新增测试二进制（app 无单测），靠模型层
     与既有的 F7/F8 真机路径验证。
 
-以上四十七条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
+48. **开始菜单子菜单：新建游戏输入名称、读取自动存档、存档列表**（原话）："在开始游戏菜单的子菜单内添加两个选项：读取自动存档和存档列表，存档列表子菜单内展示所有存档，每个存档展开后是最近的自动存档，原来的开始变为新建游戏，并需要输入存档名称，输入框功能要完备，例如cjk字符支持，退格，tab,方向键移动输入光标等"。于是：
+    ① **菜单分页**：`MenuModel` 多一个 page（Main / StartMenu）。非沙盒主菜单是 World、Language、Content、Seed（无尽）、
+    **Start Game**（进子菜单）、Host、Join、Quit；子菜单是 **New Game**、**Load Autosave**、**Save List**、Back（Enter 或 Esc 回主
+    菜单）。Host/Join 仍在主菜单、不共享子菜单；沙盒没有子菜单（选沙盒时回到 Main 页）。
+    ② **New Game 名称输入**：`TextInput`——UTF-8 文本 + 始终落在字符边界的字节光标，最多 48 个字符；CJK 与四字节 emoji 都算
+    一个字符，C0 控制字符（tab 除外）、换行、DEL 与非法字节被跳过。编辑：Backspace 删前一个字符、Delete 删后一个、
+    Left/Right/Home/End 移光标；**Up/Down 在 Input / Create / Back 三个焦点间环走**（Down 前进、Up 后退），**Tab 在输入框有
+    焦点时插入制表符**（模型存真实的 tab，界面画成空隙；Create/Back 焦点下 Tab 不插入）。输入框画边框、文本、按前缀宽度画的
+    caret，空时显示 placeholder；Enter 在 Input 或 Create 上都尝试创建，Back/Esc 回子菜单。错误按 `SaveLibrary` 的 locale id
+    显示在面板与状态行（save.name.empty/invalid/long/exists/failed）。
+    ③ **槽位即目录**：存档根目录是**当前工作目录下的 saves/**，每个槽位一个目录、目录名就是玩家输入的名字（CJK 允许），里面
+    固定一个 **auto.t2dsave**（最近一次自动存档，不存历史）。名称规则：非空、合法 UTF-8、最多 48 字符/128 字节；不允许
+    / \ : * ? " < > |、控制字符（tab 除外）、前后空格、结尾点、"."/".."、Windows 保留名 CON/PRN/AUX/NUL/COM1..9/LPT1..9（大小写不敏感，
+    首个点前比较）；重名拒绝（目录已存在也算）。
+    ④ **读取自动存档**：在所有槽位里取 auto.t2dsave 的 mtime 最新的一条（空槽不参与），设成 active 槽位后走与 F8 相同的
+    `load_game_file`；没有自动存档时状态行说 `save.load_autosave.none`，失败留开始界面。
+    ⑤ **存档列表**：打开时扫描 `saves/`；每个槽位一行（CJK 名原样显示），有自动存档的槽位可展开出一行"最近的自动存档"；
+    上/下移动、Right 或 Enter 在头行展开/收起、Left 折叠、子行 Enter 读取、Esc 回子菜单；空列表说 `save.list.empty`，
+    无自动存档的头行说 `save.list.no_autosave`。
+    ⑥ **active 槽位**：New Game / Load Autosave / Save List 读取成功都把该槽位的 auto.t2dsave 设成 `active_save_path_`；
+    `save_file_path()` 的优先级是 **--save > active > --load > 工作目录的 save.t2dsave**，自动存档、退出存档与 F7/F8 都跟随它；
+    Host/Join 开始新会话时清掉 active，避免把别的槽位写坏。
+    ⑦ **测试**：新 `test_text_input` 6/71、`test_save_library` 7/86、`test_save_list` 8/66；`test_mine_menu` 11/168 →
+    12/274（子菜单行/进出、沙盒无子菜单、标签覆盖到存档界面 id）；`test_text` 9/367 → 9/439（三语言新键）；全量 **38/38**
+    （debug 与 release）。app 的界面仍无单测：新游戏输入、读取与列表的真机流程见（三十九）。
+    ⑧ **退出与平台**：世界视图按 Esc **先存档**再回本子菜单（不再经过会话屏，§1.49）；Linux 上窗口恢复默认 Auto（Wayland
+    优先），中文输入法由 Ore 自己的 Wayland text-input-v3 客户端接（§1.49），`--platform x11` 只是兜底。
+
+49. **四个界面问题的修复：Esc 回新开始菜单并存档、Tab 输入制表符、上下键切焦点、fcitx5 中文输入**（原话）："1) 游戏界面按 ESC 仍回到旧开始界面（Session 屏），不是新的 Start Game 子菜单；2) 按 ESC 回开始界面时也要存档一次；3) Tab 改为输入制表符，上下方向键用于切换焦点；4) 输入框无法触发 fcitx5 中文输入。"于是：
+    ① **Esc 回开始菜单并存档**：世界视图的 Esc 先 `save_game()`（世界里还有层时；失败照旧在开始界面的状态行显示错误，但不阻止
+    离开），再清掉选中/双击，`menu_.set_page(StartMenu)` 后 `screen_ = Screen::Start`——不再经过会话屏；开始界面画的就是
+    Start Game 子菜单。
+    ② **Tab 是字符，Up/Down 是焦点**：`TextInput::insert/set_text` 与 `SaveLibrary` 的名称校验都允许 0x09（tab），其它 C0
+    控制字符、换行与 DEL 仍拒绝；含 tab 的槽位可以创建。名称界面里 Tab 不再切焦点：输入框有焦点时 Tab 插入一个制表符，
+    Create/Back 焦点下不插入；Up/Down 在 Input→Create→Back 间环走（Down 前进、Up 后退）。输入框把 tab 画成两个空格宽的
+    空隙，caret 用同一展开测量（模型里仍是 tab）。hint 改为 UP/DOWN choose、TAB insert、ENTER create、ESC back（三语言）。
+    ③ **Wayland 原生 IME（zwp_text_input_v3）**：GLFW 3.5.1 的 Wayland 后端没有 text-input，所以由 **Ore 自己补**。新
+    `src/platform/wayland_text_input.{h,cpp}`：从 GLFW 的 `wl_display`/`wl_surface` 拿显示与表面，registry 绑定
+    `zwp_text_input_manager_v3`（version 1），创建 text input，监听 enter/leave/preedit_string/commit_string/
+    delete_surrounding_text/done。输入框聚焦时 enable（set_content_type + set_cursor_rectangle + commit），失焦/换按钮/离开
+    界面时 disable；commit_string 进 `InputState::add_text`，preedit_string 进新的 `InputState::preedit()`（`begin_frame()`
+    不清它，commit/disable/leave 才清）；输入框把 preedit 画在 caret 处（accent + 下划线）。compositor 没有 manager 时
+    warn 并 no-op。构建：root CMake `LANGUAGES C` + PkgConfig `wayland-client` + `wayland-scanner` + wayland-protocols 的
+    `text-input-unstable-v3.xml` 生成协议代码（`ORE_HAS_WAYLAND_TEXT_INPUT`）；找不到就编译成 no-op，不阻塞任何平台。
+    **X11 仍由 GLFW 的 XIM/char callback 工作；默认恢复 `WindowPlatform::Auto`（Wayland 优先），`--platform x11` 只是兜底。**
+    ④ **测试/验证**：无新单测，测试计数不变（`test_text_input` 7/81、`test_save_library` 8/92）；全量 **38/38**（debug 与
+    release）。窗口模式 `--platform wayland` 日志出现 `wayland text input: zwp_text_input_manager_v3 bound (version 1)` 与
+    `text input object created`（`--platform x11` 没有这些行，走 GLFW 的 XIM）；lead 已在 Wayland + Vulkan 图形会话真机验证：
+    名称框聚焦 `enter/enabled`，uinput 注入 `nihao`+空格，fcitx5 提交“你好”（`committed 6 byte(s)`）。无图形设备的环境仍可只验证协议对象创建。
+
+以上四十九条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
 
 ---
 
@@ -1773,6 +1823,68 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
   同一条退出路径。
 * **没做**：存档槽位、自动存档的界面开关、网络同步存档。
 
+### M2 交付状态（三十九）：开始菜单子菜单、新建游戏名称输入与存档列表（已落地，含单测）
+
+设计者原话："在开始游戏菜单的子菜单内添加两个选项：读取自动存档和存档列表，存档列表子菜单内展示所有存档，每个存档展开后是最近的自动存档，原来的开始变为新建游戏，并需要输入存档名称，输入框功能要完备，例如cjk字符支持，退格，tab,方向键移动输入光标等"（§1.48）。
+
+* **菜单**：`MenuModel` 加 page（Main / StartMenu）；主菜单的 **Start Game** 进子菜单，子菜单是 **New Game** / **Load Autosave** /
+  **Save List** / Back；Host/Join 仍在主菜单，沙盒没有子菜单。app 的开始界面按 page 画（同面板换标题、子菜单底部提示），
+  Enter 或 Esc/Back 行回主菜单并聚焦 Start Game。
+* **新建游戏**：app 加 Screen::SaveName 与 SaveNameFocus（Input/Create/Back）。`TextInput` 接 `input.text_input()`，CJK 与四字节
+  emoji 直接可用；Backspace/Delete/Left/Right/Home/End 编辑，Tab/Shift+Tab 环走焦点（§1.49 改为 Up/Down 切焦点、Tab 插入制表符）；输入框画边框、文本、按 measure 前缀宽度
+  画的 caret，空时 placeholder；Enter（Input 或 Create）创建，Back/Esc 返回。创建成功把 `saves/<名>/auto.t2dsave` 设为
+  `active_save_path_`，用当前菜单的 mode/seed 以 Single 身份 `open_world()`，再 `save_game()` 写一份初始自动存档，进 World。
+* **读取与列表**：Load Autosave 取全局最新 auto.t2dsave（空槽不算），没有则状态行 `save.load_autosave.none`；Save List 打开时
+  扫描 saves/，槽位头行 + 展开后的"最近的自动存档"子行，上/下移动、Right/Enter 展开/收起、Left 折叠、子行 Enter 读取、
+  Esc 回子菜单；空列表与无自动存档各有文案。读档失败不动当前世界，留在开始界面并显示原因。
+* **路径**：`save_file_path()` 优先级 **--save > active > --load > 默认 save.t2dsave**；自动存档、退出存档与 F7/F8 全跟随；
+  Host/Join 开始新会话时清掉 active，避免把别的槽位写坏。
+* **本地化**：三语言 ui.ecfg 加 row.start_game/new_game/load_autosave/save_list/back、menu.start.title/hint、newgame.title/
+  placeholder/create/hint、save.list.title/empty/recent/no_autosave/hint、save.load_autosave.none、save.name.empty/invalid/long/
+  exists/failed；`test_text` 的三语言覆盖通过。
+* **单测**：新 `test_text_input` 6/71、`test_save_library` 7/86、`test_save_list` 8/66；更新 `test_mine_menu` 12/274、
+  `test_text` 9/439；全量 **debug 38/38、release 38/38** 绿（-DT2D_BUILD_MEFEMMA=OFF 的独立目录）。
+* **实测**（本机 Vulkan，1280×720，验证包）：① 主菜单 Start Game → 子菜单 New Game/Load Autosave/Save List/Back；
+  ② New Game 输入 `存档一`：CJK 正常显示、caret 在末尾；Left×2 后 caret 在“存/档”之间，Backspace 删掉“存”，Tab 把焦点移到
+  CREATE（`menu_main.png`、`menu_submenu.png`、`name_cjk.png`、`name_arrow.png`、`name_backspace.png`、`name_tab.png`）；
+  ③ Create 后自动写 `saves/存档一/auto.t2dsave`（10021 plots），状态行 `SAVED ...`（`newgame_world.png`）；④ 重新启动后
+  Load Autosave 读回同一槽位（`LOADED 10021 PLOT(S)`，`load_auto.png`）；⑤ Save List 显示 CJK 槽位 `存档一`，Right 展开
+  显示 `LATEST AUTOSAVE`，Down+Enter 读回（`save_list.png`、`save_list_open.png`）。输入框编辑/上限由 `test_text_input` 覆盖。
+* **没做**：槽位删除/重命名、每个槽位的历史自动存档（只有一个 auto.t2dsave）、存档列表的鼠标点击。
+
+### M2 交付状态（四十）：Esc 回开始菜单并存档、Tab 制表符、上下键切焦点、Wayland 原生 fcitx5（已落地，含单测）
+
+设计者原话（四条 issue）："1) 游戏界面按 ESC 仍回到旧开始界面（Session 屏），不是新的 Start Game 子菜单；2) 按 ESC 回开始
+界面时也要存档一次；3) Tab 改为输入制表符，上下方向键用于切换焦点；4) 输入框无法触发 fcitx5 中文输入。"（§1.49）
+
+* **Esc 回开始菜单并存档**：`handle_world_input()` 的 Esc 先 `save_game()`（世界里还有层时；失败照旧在开始界面的状态行显示
+  错误，但不阻止离开），再清选中/双击，`menu_.set_page(MenuPage::StartMenu)` 后 `screen_ = Screen::Start`——不再经过
+  `Screen::Session`；开始界面画的就是 Start Game 子菜单，状态行显示保存结果。
+* **Tab 是字符，Up/Down 是焦点**：`TextInput::insert/set_text` 与 `SaveLibrary` 的名称校验允许 0x09（tab），其它 C0 控制字符、
+  换行与 DEL 仍拒绝；含 tab 的槽位可创建。名称界面 Tab 在输入框有焦点时插入制表符，Create/Back 焦点下不插入；Up/Down 在
+  Input→Create→Back 间环走（Down 前进、Up 后退）。输入框把 tab 画成两个空格宽的空隙，caret 用同一展开测量（模型里仍是
+  tab）；hint 三语言改成 UP/DOWN choose、TAB insert、ENTER create、ESC back。
+* **Wayland 原生 IME（zwp_text_input_v3）**：GLFW 的 Wayland 后端没有 text-input，于是 Ore 自己在窗口层补上——
+  `src/platform/wayland_text_input.{h,cpp}` 从 GLFW 的 `wl_display`/`wl_surface` 绑定 `zwp_text_input_manager_v3`，创建
+  text input 并监听 enter/leave/preedit/commit/delete/done；`InputState` 加 `preedit()/set_preedit()/clear_preedit()`
+  （`begin_frame()` 只清每帧文本，不清 preedit）。`Window::set_text_input_enabled()` / `set_text_input_cursor_rect()` 在
+  所有平台可调用，非 Wayland/未编译支持时 no-op。app 只在 `screen_ == SaveName && save_name_focus_ == Input` 时 enable，
+  并把输入框矩形（换算成窗口坐标）交给 IME 放候选窗；名称框把 `input().preedit()` 画在 caret 处（accent + 下划线），
+  commit 后由 `input.text_input()` 进 `TextInput`。X11 仍走 GLFW 的 XIM/char callback；默认恢复 `WindowPlatform::Auto`
+  （Wayland 优先），`--platform x11` 只是兜底。构建：root CMake 加 C 语言、PkgConfig `wayland-client`、`wayland-scanner`
+  + wayland-protocols XML 生成协议代码，`ORE_HAS_WAYLAND_TEXT_INPUT` 控制；找不到时 no-op，不阻塞其它平台。
+* **验证**：`test_text_input` 6/71 → **7/81**、`test_save_library` 7/86 → **8/92**（tab 断言与 DEL/换行仍拒绝）；其余套件
+  计数不变；全量 **debug 38/38、release 38/38** 绿（-DT2D_BUILD_MEFEMMA=OFF 的独立目录）。窗口模式日志：
+  `--platform wayland` 出现 `wayland text input: zwp_text_input_manager_v3 bound (version 1)` 与
+  `text input object created (manager version 1)`；`--platform x11` 时窗口仍是 `(x11)` 且没有这两行（走 GLFW XIM）。
+* **实测**（Wayland 会话 + fcitx5，lead 本机）：名称框聚焦日志 `enter` → `enabled`；用 uinput 注入 `nihao` + 空格，fcitx5
+  经 `zwp_text_input_v3` 提交 **“你好”**（`committed 6 byte(s)`，`build/verify-shots/wl_ime_controlled.png`）。世界视图 Esc：
+  日志先 `save:` 再回开始界面，`saves/存档一/auto.t2dsave` 的 mtime 更新，界面停在 START A GAME 子菜单且底部显示
+  `SAVED 10021 PLOT(S)...`（`esc_after_save.png`）。名称框 `AB`+Tab+`CD` 显示为 `AB  CD`，Down 把焦点移到 CREATE
+  （`tab_insert.png`、`updown_focus.png`）。`--platform x11` 仍 `(x11)` 且没有 Wayland text input 行。
+* **没做**：Wayland 的 surrounding-text（不告诉 IME 周围文本，也不处理 delete_surrounding_text）；X11 之外的系统 IME
+  仍是各平台自己的事。
+
 ### M1 验收标准（已满足）
 
 1. 本文档存在，且代码中**没有任何预设的游戏内容**（资源/结构/配方/建筑清单均无硬编码）。
@@ -1994,6 +2106,26 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
 
 | 版本 | 变更 |
 |---|---|
+| M2.43 | **四个界面问题修复 + Wayland 原生 IME**（设计者报的，§1.49）：世界视图 Esc 先 `save_game()` 再回 Start Game 子菜单
+（不再经会话屏）；`TextInput`/`SaveLibrary` 允许 tab，名称界面 Tab 插入制表符、Up/Down 在 Input/Create/Back 环走，输入框把
+tab 画成空隙；**Ore 窗口层实现 Wayland `zwp_text_input_v3`**（`src/platform/wayland_text_input.{h,cpp}`、registry 绑定
+manager、enter/leave/preedit/commit/done、enable+content-type+cursor-rect+commit），`InputState` 加
+`preedit()/set_preedit()/clear_preedit()`，`Window` 加 `set_text_input_enabled()/set_text_input_cursor_rect()`；app 名称框聚焦
+时 enable 并把 preedit 画在 caret 处；root CMake 加 C、PkgConfig wayland-client、wayland-scanner + wayland-protocols XML 生成
+协议，`ORE_HAS_WAYLAND_TEXT_INPUT` 找不到时 no-op；**默认恢复 Auto（Wayland 优先），`--platform x11` 兜底**；三语言 hint 更新。
+**单测**：`test_text_input` 7/81、`test_save_library` 8/92（无新单测）；全量 debug 38/38、release 38/38 绿。**验证**：
+`--platform wayland` 日志 `wayland text input: zwp_text_input_manager_v3 bound` + `text input object created`；实际 fcitx5 输入（uinput
+注入 `nihao`）提交“你好”；Esc 先存档再回 Start Game 子菜单，Tab/上下键实测；`--platform x11` 仍 `(x11)` 且无这些行。 |
+| M2.42 | **开始菜单子菜单：新建游戏名称输入、读取自动存档、存档列表**（设计者新要求，§1.48）：`MenuModel` 加 page
+（Main/StartMenu）与 OpenStartMenu/NewGame/LoadAutosave/OpenSaveList；主菜单 Start Game 进子菜单（New Game/Load Autosave/
+Save List/Back），Host/Join 仍主菜单、沙盒无子菜单。app 加 Screen::SaveName/SaveList 与 SaveNameFocus（Input/Create/Back），
+`TextInput` 输入框（CJK/四字节 emoji、Backspace/Delete/方向键/Home/End、Tab/Shift+Tab 焦点、caret、placeholder、48 字符上限）；
+`SaveLibrary` 槽位 = `saves/<名>/auto.t2dsave`（48 字符/128 字节、非法字符/保留名/重名拒绝，CJK 合法）；Load Autosave 取全局最新
+auto（`save.load_autosave.none`），Save List 槽位头 + 展开的最近自动存档子行（上/下/Right/Enter/Left/Enter/Esc）；
+`save_file_path()` 优先级 --save > active > --load > 默认；三语言 ui.ecfg 新键。**单测**：新 test_text_input 6/71、
+test_save_library 7/86、test_save_list 8/66，更新 test_mine_menu 12/274、test_text 9/439；全量 debug 38/38、release 38/38 绿。
+**实测**：主菜单/子菜单、CJK 名称输入（caret/Left/Backspace/Tab）、新建即写 `saves/存档一/auto.t2dsave`、重启后 Load
+Autosave 读回、Save List 展开最近自动存档并读回 |
 | M2.40 | **自动存档：每 5 分钟 + 退出即存**（设计者新要求，§1.47）：`MineOptions::autosave_seconds`（默认 300，0 关）+
 `--autosave-seconds <n>`；`MineApp::maybe_autosave(dt)` 只在世界视图、有层时累计，到时清零再 `save_game()`，F7/成功存档/
 读档/进世界都重新计时；`on_shutdown()` 在释放 GPU 资源前存一次（窗口叉、quit 都走这里，开始界面无层不存）；新增

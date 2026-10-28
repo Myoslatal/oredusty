@@ -80,6 +80,8 @@ T2D_TEST(a_picture_defaults_to_its_whole_texture_and_keeps_its_name) {
     T2D_CHECK_EQ(command.texture, std::string("placeholder"));
     T2D_CHECK_EQ(command.uv, full_uv());
     T2D_CHECK_EQ(command.color, kWhite);
+    // A tile or a pixel sprite keeps its hard edges unless it asks otherwise.
+    T2D_CHECK(command.filter == TextureFilter::Nearest);
     T2D_CHECK_EQ(list.sprite_count(), 1u);
 
     const Aabb2 part{Vec2{0.0f, 0.0f}, Vec2{0.5f, 0.5f}};
@@ -87,6 +89,11 @@ T2D_TEST(a_picture_defaults_to_its_whole_texture_and_keeps_its_name) {
     T2D_REQUIRE(list.size() == 2u);
     T2D_CHECK_EQ(list.commands()[1].uv, part);
     T2D_CHECK_EQ(list.commands()[1].color, rgba(255, 0, 0));
+
+    // A painted background asks for linear filtering; the command carries the request to the renderer.
+    list.sprite("start_screen", box, full_uv(), kWhite, TextureFilter::Linear);
+    T2D_REQUIRE(list.size() == 3u);
+    T2D_CHECK(list.commands()[2].filter == TextureFilter::Linear);
 }
 
 T2D_TEST(a_line_of_text_carries_its_pen_size_colour_and_wrap_width) {

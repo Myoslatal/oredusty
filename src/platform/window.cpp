@@ -8,6 +8,15 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#if ORE_HAS_WAYLAND_TEXT_INPUT
+// The native Wayland handles are what the text-input client needs; GLFW's own backend has no
+// text-input protocol (docs/GAME_DESIGN.md section 1.49).
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#include <GLFW/glfw3native.h>
+
+#include "wayland_text_input.h"
+#endif
+
 #include <algorithm>
 #include <cstring>
 
@@ -33,6 +42,11 @@ void glfw_error_callback(int code, const char* description) {
 
 struct Window::Impl {
     GLFWwindow* handle = nullptr;
+#if ORE_HAS_WAYLAND_TEXT_INPUT
+    /// The Wayland IME client; created only when the platform really is Wayland, null on X11 and on
+    /// builds without the protocol.
+    Scope<WaylandTextInput> text_input;
+#endif
 };
 
 Scope<Window> Window::create(const WindowDesc& desc) {
@@ -185,6 +199,13 @@ Scope<Window> Window::create(const WindowDesc& desc) {
              "unit)",
              desc.title, window->width_, window->height_, static_cast<f64>(window->dpi_scale_),
              static_cast<f64>(window->pixel_scale_.x), static_cast<f64>(window->pixel_scale_.y));
+
+#if ORE_HAS_WAYLAND_TEXT_INPUT
+    if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+        window->impl_->text_input = WaylandTextInput::create(
+            window->input_, glfwGetWaylandDisplay(), glfwGetWaylandWindow(window->impl_->handle));
+    }
+#endif
     return window;
 }
 
@@ -212,6 +233,11 @@ void Window::refresh_pixel_scale() {
 
 Window::~Window() {
     if (impl_ != nullptr && impl_->handle != nullptr) {
+#if ORE_HAS_WAYLAND_TEXT_INPUT
+        // The text input holds the wl_surface the GLFW window owns: it is disabled and destroyed while
+        // both are still alive.
+        impl_->text_input.reset();
+#endif
         glfwDestroyWindow(impl_->handle);
         impl_->handle = nullptr;
         if (g_window_count > 0) --g_window_count;
@@ -220,6 +246,25 @@ Window::~Window() {
             g_glfw_ready = false;
         }
     }
+}
+
+void Window::set_text_input_enabled(bool enabled) {
+#if ORE_HAS_WAYLAND_TEXT_INPUT
+    if (impl_ != nullptr && impl_->text_input != nullptr) impl_->text_input->set_enabled(enabled);
+#else
+    (void)enabled;
+#endif
+}
+
+void Window::set_text_input_cursor_rect(i32 x, i32 y, i32 w, i32 h) {
+#if ORE_HAS_WAYLAND_TEXT_INPUT
+    if (impl_ != nullptr && impl_->text_input != nullptr) impl_->text_input->set_cursor_rect(x, y, w, h);
+#else
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+#endif
 }
 
 std::vector<std::string> Window::required_instance_extensions() {

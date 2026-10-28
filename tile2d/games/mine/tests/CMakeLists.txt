@@ -120,6 +120,18 @@ target_link_libraries(test_building_unlocks PRIVATE mine_core)
 t2d_add_test(test_game_save test_game_save.cpp)
 target_link_libraries(test_game_save PRIVATE mine_core)
 
+# A save name typed into a field: UTF-8, the caret, CJK, and a limit counted in characters.
+t2d_add_test(test_text_input test_text_input.cpp)
+target_link_libraries(test_text_input PRIVATE mine_core)
+
+# The save library: one directory per slot, one auto.t2dsave inside it, and the names a file system takes.
+t2d_add_test(test_save_library test_save_library.cpp)
+target_link_libraries(test_save_library PRIVATE mine_core)
+
+# The save list: a row per slot, the recent automatic save under an open one, and the selection.
+t2d_add_test(test_save_list test_save_list.cpp)
+target_link_libraries(test_save_list PRIVATE mine_core)
+
 # Two presses on one cell are one gesture: the double click a selection is made of.
 t2d_add_test(test_double_click test_double_click.cpp)
 t2d_add_test(test_build_sidebar test_build_sidebar.cpp)

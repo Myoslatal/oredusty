@@ -21,12 +21,27 @@ using t2d::usize;
 [[nodiscard]] const char* mode_value_id(Mode mode);
 
 /// What the start screen asks the application to do.
-enum class MenuAction : u8 { None, StartSession, OpenContent, Quit };
+enum class MenuAction : u8 {
+    None,
+    StartSession,
+    OpenContent,
+    Quit,
+    /// The main menu's Start Game was confirmed: the model is already on the submenu page, and the
+    /// action says so for a caller that wants to know a page changed.
+    OpenStartMenu,
+    NewGame,
+    LoadAutosave,
+    OpenSaveList,
+};
+
+/// Which page of the start screen is shown: the main menu, or the Start Game submenu (New Game, Load
+/// Autosave, Save List, Back). The sandbox never has a submenu, so it only ever shows Main.
+enum class MenuPage : u8 { Main, StartMenu };
 
 /// One key press, translated from the platform so the model never sees a window.
 enum class MenuKey : u8 { Up, Down, Left, Right, Confirm, Back, Randomise };
 
-enum class RowKind : u8 { World, Language, Seed, Content, Action };
+enum class RowKind : u8 { World, Language, Seed, Content, Action, Back };
 
 struct MenuRow {
     RowKind kind = RowKind::Action;
@@ -52,8 +67,14 @@ public:
     [[nodiscard]] usize selected() const { return selected_; }
     void select(usize index);
 
-    /// Applies a key press; returns the action to run when the press confirmed an action row.
+    /// Applies a key press; returns the action to run when the press confirmed an action row. Enter on
+    /// the main menu's Start Game walks into the submenu, and Esc walks back out of it.
     [[nodiscard]] MenuAction handle(MenuKey key);
+
+    [[nodiscard]] MenuPage page() const { return page_; }
+    /// Jumps to a page and focuses its first row: what returning to the start screen needs after a
+    /// submenu's own screen is left.
+    void set_page(MenuPage page);
 
     [[nodiscard]] Mode mode() const { return mode_; }
     void set_mode(Mode mode);
@@ -77,7 +98,10 @@ private:
     void rebuild_rows();
     /// Focuses the first action row: used when the focused row disappears from under the cursor.
     void select_first_action();
+    /// Leaves the submenu for the main page and focuses the row that opened it.
+    void back_to_main();
 
+    MenuPage page_ = MenuPage::Main;
     Mode mode_ = Mode::Story;
     t2d::Language language_ = t2d::Language::English;
     u32 seed_ = 1;

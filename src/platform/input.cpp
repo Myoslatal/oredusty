@@ -3,6 +3,7 @@
 #include <ore/core/assert.h>
 
 #include <algorithm>
+#include <utility>
 
 namespace ore {
 namespace {
@@ -126,6 +127,10 @@ void InputState::set_cursor_inside(bool inside) {
 }
 
 void InputState::add_text(std::string_view utf8) { text_.append(utf8); }
+
+void InputState::set_preedit(std::string text) { preedit_ = std::move(text); }
+
+void InputState::clear_preedit() { preedit_.clear(); }
 
 // ---------------------------------------------------------------- InputMap ---
 

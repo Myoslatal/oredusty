@@ -159,9 +159,9 @@ const std::vector<u8> bytes = save::encode(file);
 
 * **F7 保存、F8 读取**。文件默认是当前工作目录的 `save.t2dsave`，路径用 `--save <path>` 指定；没写扩展名时由
   `t2d::save::with_extension` 补上。F8 读的就是 F7 写的那个文件。
-* `--load <path>` 在启动时直接读档并进入世界视图（跳过开始/会话界面）；失败时回到开始界面并报错。若没有
-  同时给 `--save`，F7/F8 就用 `--load` 的同一个路径（否则用 `save.t2dsave`）——读档后按 F7 是把这座矿存回它
-  来的那个文件，不是另起一个名字。
+* `--load <path>` 在启动时直接读档并进入世界视图（跳过开始/会话界面）；失败时回到开始界面并报错。写哪个文件由
+  `save_file_path()` 决定：`--save` > 本局槽位（active，见下面“菜单里的存档”）> `--load` > 默认 `save.t2dsave`——
+  读档后按 F7 是把这座矿存回它来的那个文件，不是另起一个名字。
 * **自动存档**：在世界视图里每 5 分钟自动存一次（`--autosave-seconds <秒>` 改周期，0 关闭）；只算世界视图里的时间，
   F7、每次成功存档、读档与进入世界都会重新计时。成功与手动保存一样在状态行显示，失败走 `world.save.failed`。
 * **退出即存**：点窗口的叉或 quit 时，只要世界里还有层（开始界面没有）就存一次——会话/内容界面也会存，因为矿还在内存里；
@@ -175,6 +175,38 @@ const std::vector<u8> bytes = save::encode(file);
   重建建造栏并清掉选中与双击。
 * 模型层测试：`tile2d/games/mine/tests/test_game_save.cpp`（9 例 / 152 断言）；容器本身在
   `tile2d/tests/test_save.cpp`（11 例 / 158 断言）。
+
+### 菜单里的存档（槽位）
+
+开始菜单的 **Start Game** 是一个子菜单：**New Game** / **Load Autosave** / **Save List** / **Back**。它把存档组织成
+**槽位**（`mine/save_library.h`）：
+
+    saves/<名称>/auto.t2dsave
+
+* 存档根目录是**当前工作目录下的 saves/**（app 用 `current_path()/saves` 构造 `SaveLibrary`，测试用临时目录）。
+* 每个槽位是一个目录，目录名就是玩家输入的名字；里面固定一个 `auto.t2dsave`——**最近一次自动存档**，不存历史。
+* **名称规则**（`save_name_error_id`，失败返回 locale id）：非空、合法 UTF-8、最多 48 个字符且最多 128 字节；不允许
+  `/ \ : * ? " < > |` 与控制字符（tab 除外：它是名字的一个字符，见下）；不允许前后空格、结尾点、`.` / `..`、Windows 保留名
+  CON/PRN/AUX/NUL/COM1..9/LPT1..9（大小写不敏感，比较首个点前的部分，所以 `con.txt` 也拒绝）；CJK 合法；已存在目录算重名。
+* **New Game**：输入名称（CJK、四字节 emoji、退格、Delete、Left/Right/Home/End；**Up/Down 在 Input / Create / Back 之间
+  环走焦点**；**Tab 在输入框有焦点时插入一个制表符**，Create/Back 焦点下不插入；模型里存真实的 tab，输入框画成空隙；其它
+  C0 控制字符、换行与 DEL 仍拒绝）；Enter 在输入框或 Create 上都创建，Back/Esc 返回。创建成功后以该槽位的 `auto.t2dsave`
+  为 active 路径，进入世界并立刻写一份初始自动存档。
+* **Load Autosave**：取所有槽位里 mtime 最新的 `auto.t2dsave`（空槽不参与）；没有时状态行显示 `save.load_autosave.none`。
+* **Esc 离开矿场**：世界视图里按 Esc **先存档一次**（有层时；失败只在开始界面的状态行报错，不阻止离开），然后回到这个
+  存档子菜单——不再经过会话屏。
+* **窗口平台与输入法（fcitx5）**：默认 `WindowPlatform::Auto`（Linux 上 Wayland 优先）。GLFW 的 Wayland 后端没有
+  text-input，所以 Ore 自己在窗口层接了 `zwp_text_input_v3`：名称框聚焦时 enable，commit 的文本进 `InputState::add_text`，
+  preedit 单独给界面显示（见 `src/platform/wayland_text_input.h`）；compositor 不支持时只是 no-op。`--platform x11` 仍可
+  兜底，X11 的输入法走 GLFW 的 XIM/char callback。
+* **Save List**：每个槽位一行；有自动存档的槽位可以展开出"最近的自动存档"子行。上/下移动，Right 或 Enter 在头行
+  展开/收起，Left 折叠，子行 Enter 读取，Esc 回子菜单；空列表显示 `save.list.empty`。
+* **active 路径与覆盖**：New Game / Load Autosave / Save List 读取成功都把该槽位的 `auto.t2dsave` 记为 active；
+  `save_file_path()` 的优先级是 `--save` > active > `--load` > 默认 `save.t2dsave`，所以 F7/F8、自动存档与退出存档都写同
+  一个文件。Host/Join 开始新会话时清掉 active。
+* 这三个模型在 `games/mine/tests/test_text_input.cpp`（7/81）、`test_save_library.cpp`（8/92）、
+  `test_save_list.cpp`（8/66）。
+
 ## header-only 的取舍
 
 这个模块**只有头文件**（`include/t2d/save/archive.h`），CMake 里是一个 `INTERFACE` target（`t2d::save`）：
