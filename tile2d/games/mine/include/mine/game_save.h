@@ -22,6 +22,7 @@
 #include <mine/building_unlocks.h>
 #include <mine/content_loader.h>
 #include <mine/registry.h>
+#include <mine/research_state.h>
 #include <mine/session.h>
 #include <mine/world.h>
 
@@ -44,6 +45,9 @@ inline constexpr t2d::u32 kUnlocks = t2d::save::fourcc('U', 'N', 'L', 'K');
 inline constexpr t2d::u32 kPlots = t2d::save::fourcc('P', 'L', 'O', 'T');
 inline constexpr t2d::u32 kEntities = t2d::save::fourcc('E', 'N', 'T', 'T');
 inline constexpr t2d::u32 kBuilds = t2d::save::fourcc('B', 'U', 'I', 'L');
+/// Which research nodes this mine has studied. Optional at load: a save written before the technology
+/// tree existed simply has none and comes back with nothing researched (docs/GAME_DESIGN.md 1.50).
+inline constexpr t2d::u32 kResearch = t2d::save::fourcc('R', 'S', 'C', 'H');
 
 } // namespace game_save_chunk
 
@@ -71,6 +75,7 @@ struct GameSaveData {
     SessionConfig session;
     std::unique_ptr<MineWorld> world;
     BuildingUnlocks unlocks;
+    ResearchState research;
     BuildAnimation builds;
     f32 world_seconds = 0.0f;
     t2d::Vec2 camera_center{};
@@ -83,8 +88,9 @@ struct GameSaveData {
 /// layer writes a save that says so (and load_game_save() refuses it); the app only saves while a layer
 /// is being played.
 [[nodiscard]] t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& session,
-                                             const BuildingUnlocks& unlocks, const BuildAnimation& builds,
-                                             f32 world_seconds, t2d::Vec2 camera_center, f32 camera_zoom,
+                                             const BuildingUnlocks& unlocks, const ResearchState& research,
+                                             const BuildAnimation& builds, f32 world_seconds,
+                                             t2d::Vec2 camera_center, f32 camera_zoom,
                                              const ContentRegistry& registry);
 
 /// Rebuilds the state make_game_save() wrote. Anything that cannot come back exactly - a chunk that is

@@ -21,6 +21,8 @@ add_library(mine_core STATIC
     src/mod_package.cpp
     src/pointer_drag.cpp
     src/registry.cpp
+    src/research.cpp
+    src/research_state.cpp
     src/sandbox.cpp
     src/save_library.cpp
     src/save_list.cpp
@@ -95,6 +97,8 @@ set(MINE_TABLE_SOURCES
     src/mod_package.cpp
     src/pointer_drag.cpp
     src/registry.cpp
+    src/research.cpp
+    src/research_state.cpp
     src/sandbox.cpp
     src/save_library.cpp
     src/save_list.cpp

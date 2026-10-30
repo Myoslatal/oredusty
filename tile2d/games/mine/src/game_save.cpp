@@ -92,9 +92,9 @@ struct SavedBuild {
 } // namespace
 
 t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& session,
-                               const BuildingUnlocks& unlocks, const BuildAnimation& builds,
-                               f32 world_seconds, t2d::Vec2 camera_center, f32 camera_zoom,
-                               const ContentRegistry& registry) {
+                               const BuildingUnlocks& unlocks, const ResearchState& research,
+                               const BuildAnimation& builds, f32 world_seconds, t2d::Vec2 camera_center,
+                               f32 camera_zoom, const ContentRegistry& registry) {
     t2d::save::File file;
     file.game = std::string(kGameSaveName);
     file.game_version = kGameSaveVersion;
@@ -128,6 +128,9 @@ t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& sess
 
     // UNLK: which buildings this save has unlocked.
     file.chunks.push_back(t2d::save::Chunk{game_save_chunk::kUnlocks, kChunkVersion, unlocks.serialize()});
+
+    // RSCH: which research nodes this mine has studied (docs/GAME_DESIGN.md section 1.50).
+    file.chunks.push_back(t2d::save::Chunk{game_save_chunk::kResearch, kChunkVersion, research.serialize()});
 
     // PLOT: every plot, in the order it was placed - which is the order a load has to place it in again.
     Writer plots;
@@ -506,6 +509,23 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
         return refuse("the UNLK chunk cannot be read");
     }
 
+    // --- RSCH: which research nodes the save had studied -------------------------------------------
+    // The chunk is optional: a save written before the technology tree existed has none, and comes back
+    // with nothing researched (docs/GAME_DESIGN.md section 1.50). A chunk that is there but cannot be
+    // read refuses the load like every other one.
+    ResearchState research;
+    research.reset(registry, definitions);
+    if (const t2d::save::Chunk* research_chunk = file.find(game_save_chunk::kResearch);
+        research_chunk != nullptr) {
+        if (research_chunk->version != kChunkVersion) {
+            return refuse(std::format("the RSCH chunk is at version {}, and this build reads version {}",
+                                      research_chunk->version, kChunkVersion));
+        }
+        if (!research.apply_saved(ConstSpan<const t2d::u8>(research_chunk->payload), remap)) {
+            return refuse("the RSCH chunk cannot be read");
+        }
+    }
+
     // --- ENTT again: the drops, adopted rather than dropped in, so a pile keeps its order and place ---
     for (const SavedDrop& saved : saved_drops) {
         const auto kind = static_cast<ContentKind>(saved.kind);
@@ -558,6 +578,7 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
     data.session = session;
     data.world = std::move(world);
     data.unlocks = std::move(unlocks);
+    data.research = std::move(research);
     data.builds = std::move(builds);
     data.world_seconds = world_seconds;
     data.camera_center = camera_center;

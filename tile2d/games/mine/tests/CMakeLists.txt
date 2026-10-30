@@ -120,6 +120,14 @@ target_link_libraries(test_building_unlocks PRIVATE mine_core)
 t2d_add_test(test_game_save test_game_save.cpp)
 target_link_libraries(test_game_save PRIVATE mine_core)
 
+# The technology tree the content data declares: nodes, parents, cycles, depth, layout and visibility.
+t2d_add_test(test_research test_research.cpp)
+target_link_libraries(test_research PRIVATE mine_core)
+
+# Which nodes a save has researched: the RST1 blob, its names, its remap and its refusals.
+t2d_add_test(test_research_state test_research_state.cpp)
+target_link_libraries(test_research_state PRIVATE mine_core)
+
 # A save name typed into a field: UTF-8, the caret, CJK, and a limit counted in characters.
 t2d_add_test(test_text_input test_text_input.cpp)
 target_link_libraries(test_text_input PRIVATE mine_core)

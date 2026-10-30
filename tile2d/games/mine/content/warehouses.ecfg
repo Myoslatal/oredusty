@@ -8,6 +8,9 @@
 # 仓库要等以后解锁；故事层里 place_block 直接放下的那块仓库不受影响（它不走建造栏/解锁）。
 #
 # 贴图 art/capacity_stone_warehouse.png 是设计者放进本体包的图（128×128；一块内容一张图，§1.18）。
+#
+# 石头仓库同时是**科技树**的根节点（§1.50）：research:: 说自己属于 "intro" 树、是根、研究消耗 20 石头、
+# 从第 1 层起可以研究。研究节点不是新类别的内容，只是已有条目上的一个子对象。
 
 warehouse::
     stone::
@@ -18,3 +21,8 @@ warehouse::
             time:10
             category:"storage"
             default_unlock:false
+        research::
+            cost:["stone",20]
+            is_root:true
+            tree:"intro"
+            min_layer:1

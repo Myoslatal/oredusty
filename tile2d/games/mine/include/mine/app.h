@@ -25,6 +25,8 @@
 #include <mine/mod_package.h>
 #include <mine/pointer_drag.h>
 #include <mine/registry.h>
+#include <mine/research.h>
+#include <mine/research_state.h>
 #include <mine/sandbox.h>
 #include <mine/save_list.h>
 #include <mine/session.h>
@@ -145,7 +147,7 @@ protected:
     [[nodiscard]] ore::ConstSpan<ore::CliOption> cli_options() const override;
 
 private:
-    enum class Screen : u8 { Start, Session, Sandbox, Content, World, SaveName, SaveList };
+    enum class Screen : u8 { Start, Session, Sandbox, Content, World, Research, SaveName, SaveList };
 
     /// Where Tab/Shift+Tab walk on the new game screen: the name field, Create, Back.
     enum class SaveNameFocus : u8 { Input, Create, Back };
@@ -169,6 +171,34 @@ private:
     void load_selected_save();
     /// The library under saves/ in the working directory: one directory per slot, one auto.t2dsave each.
     [[nodiscard]] SaveLibrary save_library() const;
+    /// The technology tree over the world (docs/GAME_DESIGN.md section 1.50): built from the content data
+    /// when the sidebar's TECH button opens it; Esc goes back to the world.
+    void open_research();
+    void handle_research_input(f32 delta_seconds);
+    void draw_research_screen();
+    /// Pays for the selected node out of the selected warehouse, marks it researched and unlocks the
+    /// building it names (the stone warehouse is a node and a building at once).
+    void research_selected();
+    /// Where the research screen puts its parts for this window. The drawing pass and the hit tests both
+    /// ask this one question, so a click lands on what is drawn.
+    struct ResearchLayout {
+        t2d::Aabb2 categories{};
+        std::vector<t2d::Aabb2> category_rows;
+        t2d::Aabb2 graph{};
+        std::vector<t2d::Aabb2> nodes;
+        /// The square each node's preview is drawn in, on the left of its box: the chrome draws the box
+        /// and the words, the image pass draws the picture into this square (section 1.50).
+        std::vector<t2d::Aabb2> icons;
+        std::vector<usize> visible;   ///< the tree indices those node boxes stand for
+        t2d::Aabb2 details{};
+        t2d::Aabb2 button{};
+    };
+    [[nodiscard]] ResearchLayout research_layout() const;
+    /// Keeps the panned graph inside what there is to see: a tree smaller than the window does not move.
+    void clamp_research_pan();
+    /// The selected node's box and the hovered node's tooltip, drawn after the icons so a picture cannot
+    /// cover the words (the chrome pass after the image pass).
+    void draw_research_tooltip();
     /// The content list: move, open a source, reload. Escape goes back to the screen it was opened
     /// from, because the list is a view of the game, not a place in it.
     void handle_content_input();
@@ -276,6 +306,10 @@ private:
         usize quads = 0;
         u32 dropped = 0;
     };
+    /// The previews of the research nodes, each in its box's icon square: one batch per distinct picture,
+    /// like the build sidebar's icons and the map itself (section 1.50).
+    [[nodiscard]] ImagePassCost draw_research_images(ore::RenderFrame& frame,
+                                                     const ore::Mat4& view_projection);
     /// Draws the pictures of the visible cells and of the palette. Each content entry has its own
     /// texture, and a batch binds one texture, so this is one batch per distinct picture on screen -
     /// the price of not packing the art into an atlas.
@@ -461,6 +495,19 @@ private:
     /// (docs/GAME_DESIGN.md sections 1.36, 1.44). A new save starts from the data's defaults; a reload
     /// carries the state across **by name** (mine/building_unlocks.h).
     BuildingUnlocks unlocked_{};
+    /// Which research nodes this mine has studied (docs/GAME_DESIGN.md section 1.50): read by the tree
+    /// screen, written into the save's RSCH chunk, carried across a reload by name.
+    ResearchState research_{};
+    /// The tree the research screen draws (rebuilt when it opens), which category and node are chosen,
+    /// and far the graph is panned with WASD (docs/GAME_DESIGN.md section 1.50).
+    ResearchTree research_tree_{};
+    /// One plot preview per tree node, made when the screen opens: what the content's own get_preview()
+    /// answers, drawn as the node's icon (section 1.50).
+    std::vector<types::TilePreview> research_previews_;
+    usize research_category_ = 0;
+    std::optional<usize> research_selected_{};
+    std::optional<usize> research_hovered_{};
+    t2d::Vec2 research_pan_{};
     /// Draws it and answers a click on it. Returns true when the click was the sidebar's, so the map does
     /// not also act on it.
     /// What is going up and how far along it is (mine/build_animation.h): the world view draws the sweep, the

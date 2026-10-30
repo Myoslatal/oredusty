@@ -46,6 +46,14 @@ struct Palette {
 };
 constexpr Palette kPalette{};
 
+/// The research screen's node boxes and the space between columns and rows, in interface units. The
+/// layout multiplies them by unit_, and a node's place in that grid comes from the model's column/row
+/// (docs/GAME_DESIGN.md section 1.50).
+constexpr f32 kResearchNodeWidth = 42.0f;
+constexpr f32 kResearchNodeHeight = 42.0f;
+constexpr f32 kResearchNodeGapX = 40.0f;
+constexpr f32 kResearchNodeGapY = 22.0f;
+
 /// Fonts are looked up in the usual system locations; the command line can override both.
 constexpr const char* kLatinCandidates[] = {
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
@@ -355,6 +363,7 @@ void MineApp::on_update(f32 delta_seconds) {
         case Screen::Sandbox: handle_sandbox_input(delta_seconds); break;
         case Screen::Content: handle_content_input(); break;
         case Screen::World: handle_world_input(delta_seconds); break;
+        case Screen::Research: handle_research_input(delta_seconds); break;
         case Screen::SaveName: handle_save_name_input(); break;
         case Screen::SaveList: handle_save_list_input(); break;
     }
@@ -1320,6 +1329,7 @@ void MineApp::open_world() {
     // A new mine is a **new save**: every building starts at the state its definition says, and whatever
     // an earlier session unlocked is not carried over (docs/GAME_DESIGN.md section 1.44).
     unlocked_.reset(registry_, content_.report().definitions);
+    research_.reset(registry_, content_.report().definitions);
     enter_mine_layer(options_.mine_layer);
     if (options_.has_view) {
         world_camera_.look_at(
@@ -1379,8 +1389,8 @@ bool MineApp::save_game() {
         return false;
     }
     const t2d::save::File save =
-        make_game_save(world_, session_, unlocked_, building_, world_seconds_, world_camera_.centre(),
-                       world_camera_.zoom(), registry_);
+        make_game_save(world_, session_, unlocked_, research_, building_, world_seconds_,
+                       world_camera_.centre(), world_camera_.zoom(), registry_);
     const std::string path = save_file_path();
     std::string error;
     if (!t2d::save::write_file(path, save, &error)) {
@@ -1455,6 +1465,7 @@ bool MineApp::load_game_file(const std::string& path) {
     // from when the player walks to one (mine/world.h).
     configure_world_generator();
     unlocked_ = std::move(loaded->unlocks);
+    research_ = std::move(loaded->research);
     building_ = std::move(loaded->builds);
     world_seconds_ = loaded->world_seconds;
     // The camera comes back where it was, in the window that is drawing it: the save holds the view,
@@ -1533,6 +1544,503 @@ void MineApp::load_selected_save() {
     if (path.empty()) return;
     active_save_path_ = path;
     (void)load_game_file(path);
+}
+
+// --- the technology tree -----------------------------------------------------------------------
+
+void MineApp::open_research() {
+    std::vector<std::string> errors;
+    research_tree_ = ResearchTree::build(registry_, content_.report().definitions, &errors);
+    for (const std::string& error : errors) T2D_WARN("research: {}", error);
+    research_category_ = 0;
+    // The first visible node is selected on entry: the details and the research button are about it,
+    // and an empty details panel on a screen that has exactly one node would be a screen that hides it.
+    research_selected_.reset();
+    if (!research_tree_.trees().empty()) {
+        const std::string_view tree = research_tree_.trees().front();
+        for (usize index = 0; index < research_tree_.node_count(); ++index) {
+            if (research_tree_.node(index).tree != tree) continue;
+            if (!research_tree_.visible(index, research_)) continue;
+            research_selected_ = index;
+            break;
+        }
+    }
+    // Each node's icon is the plot's own complete render preview, made the way the map makes one:
+    // types::make_tile -> get_preview(0), so the screen draws the content, not a picture it invented.
+    research_previews_.assign(research_tree_.node_count(), types::TilePreview{});
+    for (usize index = 0; index < research_tree_.node_count(); ++index) {
+        const ResearchNode& node = research_tree_.node(index);
+        const types::TileDefinition* definition =
+            content_.report().definitions.find_tile(node.kind, node.name);
+        if (definition == nullptr) continue;
+        const std::unique_ptr<types::SceneTile> plot =
+            types::make_tile(*definition, node.id, 0, GridPos{0, 0});
+        if (plot != nullptr) research_previews_[index] = plot->get_preview(0.0f);
+    }
+    research_hovered_.reset();
+    research_pan_ = t2d::Vec2{};
+    screen_ = Screen::Research;
+}
+
+MineApp::ResearchLayout MineApp::research_layout() const {
+    ResearchLayout out;
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const f32 title_line = line_for(static_cast<u16>(body_px_ * 2));
+    const f32 hint_y = height - padding - line;
+    const f32 details_height = line * 4.5f;
+    out.details = t2d::Aabb2{t2d::Vec2{padding, hint_y - details_height - padding},
+                             t2d::Vec2{width - padding, hint_y - padding}};
+    const f32 body_top = padding + title_line + padding;
+    const f32 body_bottom = out.details.min.y - padding;
+    const f32 category_width = 150.0f * unit_;
+    out.categories = t2d::Aabb2{t2d::Vec2{padding, body_top},
+                                t2d::Vec2{padding + category_width, body_bottom}};
+    out.graph = t2d::Aabb2{t2d::Vec2{out.categories.max.x + padding, body_top},
+                           t2d::Vec2{width - padding, body_bottom}};
+    for (usize index = 0; index < research_tree_.trees().size(); ++index) {
+        const f32 y = out.categories.min.y + static_cast<f32>(index) * line;
+        out.category_rows.push_back(t2d::Aabb2{t2d::Vec2{out.categories.min.x, y},
+                                               t2d::Vec2{out.categories.max.x, y + line}});
+    }
+    const f32 node_width = kResearchNodeWidth * unit_;
+    const f32 node_height = kResearchNodeHeight * unit_;
+    const f32 step_x = node_width + kResearchNodeGapX * unit_;
+    const f32 step_y = node_height + kResearchNodeGapY * unit_;
+    const std::string_view tree =
+        research_category_ < research_tree_.trees().size() ? research_tree_.trees()[research_category_] : "";
+    // The tree grows **up** (docs/GAME_DESIGN.md section 1.50): the root sits at the graph bottom centre,
+    // depth is the vertical step and the visible nodes of one depth are centred above the graph's middle,
+    // in the order the data declared them. The uncentred place the model reports is (place, depth); the
+    // screen adds the centring and the direction.
+    std::vector<usize> candidates;
+    for (usize index = 0; index < research_tree_.node_count(); ++index) {
+        const ResearchNode& node = research_tree_.node(index);
+        if (node.tree == tree && research_tree_.visible(index, research_)) candidates.push_back(index);
+    }
+    std::vector<i32> level_counts;
+    for (const usize index : candidates) {
+        const usize level = static_cast<usize>(std::max(research_tree_.node(index).depth, 0));
+        if (level >= level_counts.size()) level_counts.resize(level + 1, 0);
+        ++level_counts[level];
+    }
+    std::vector<i32> level_seen(level_counts.size(), 0);
+    const f32 centre_x = out.graph.min.x + out.graph.width() * 0.5f + research_pan_.x;
+    for (const usize index : candidates) {
+        const ResearchNode& node = research_tree_.node(index);
+        const usize level = static_cast<usize>(std::max(node.depth, 0));
+        const i32 count = level_counts[level];
+        const f32 place = static_cast<f32>(level_seen[level]++);
+        const f32 x = centre_x + (place - static_cast<f32>(count - 1) * 0.5f) * step_x - node_width * 0.5f;
+        // The tree grows from the graph bottom: the root sits at the bottom centre and a deeper node
+        // is drawn higher (docs/GAME_DESIGN.md section 1.50).
+        const f32 y = out.graph.max.y - research_pan_.y - static_cast<f32>(level) * step_y - node_height;
+        out.visible.push_back(index);
+        out.nodes.push_back(t2d::Aabb2{t2d::Vec2{x, y}, t2d::Vec2{x + node_width, y + node_height}});
+        const f32 icon_side = node_height - 8.0f * unit_;
+        const t2d::Vec2 icon_at{x + 4.0f * unit_, y + 4.0f * unit_};
+        out.icons.push_back(
+            t2d::Aabb2{icon_at, t2d::Vec2{icon_at.x + icon_side, icon_at.y + icon_side}});
+    }
+    const f32 button_height = line + 6.0f * unit_;
+    out.button = t2d::Aabb2{t2d::Vec2{out.details.max.x - 150.0f * unit_, out.details.max.y - button_height},
+                            t2d::Vec2{out.details.max.x, out.details.max.y}};
+    return out;
+}
+
+void MineApp::clamp_research_pan() {
+    const ResearchLayout layout = research_layout();
+    const f32 node_width = kResearchNodeWidth * unit_;
+    const f32 node_height = kResearchNodeHeight * unit_;
+    const f32 step_x = node_width + kResearchNodeGapX * unit_;
+    const f32 step_y = node_height + kResearchNodeGapY * unit_;
+    f32 content_width = 0.0f;
+    f32 content_height = 0.0f;
+    std::vector<i32> level_counts;
+    i32 deepest = -1;
+    for (const usize index : layout.visible) {
+        const usize level = static_cast<usize>(std::max(research_tree_.node(index).depth, 0));
+        deepest = std::max(deepest, static_cast<i32>(level));
+        if (level >= level_counts.size()) level_counts.resize(level + 1, 0);
+        ++level_counts[level];
+    }
+    for (const i32 count : level_counts) {
+        content_width = std::max(content_width, static_cast<f32>(count) * step_x - kResearchNodeGapX * unit_);
+    }
+    if (deepest >= 0) {
+        content_height = (static_cast<f32>(deepest) + 1.0f) * step_y - kResearchNodeGapY * unit_;
+    }
+    // A small margin makes WASD respond even when the tree is smaller than the viewport: the view is
+    // a canvas, not a picture pinned to the corner. A level is centred, so the horizontal pan is
+    // symmetric; the root sits at the graph bottom and a deeper level is higher, so a tall tree is
+    // revealed by panning the view up (the content down).
+    const f32 margin = 40.0f * unit_;
+    const f32 slack_x = layout.graph.width() - content_width;
+    const f32 slack_y = layout.graph.height() - content_height;
+    const f32 limit_x = std::max(0.0f, slack_x * 0.5f) + margin;
+    research_pan_.x = std::clamp(research_pan_.x, -limit_x, limit_x);
+    if (slack_y >= 0.0f) {
+        research_pan_.y = std::clamp(research_pan_.y, -margin, margin);
+    } else {
+        research_pan_.y = std::clamp(research_pan_.y, slack_y - margin, margin);
+    }
+}
+
+void MineApp::handle_research_input(f32 delta_seconds) {
+    const ore::InputState& input = this->input();
+    // WASD pans the view; the arrow keys belong to the selection and the categories (section 1.50).
+    const f32 speed = 420.0f * unit_ * delta_seconds;
+    t2d::Vec2 moved{};
+    if (input.key_down(ore::Key::A)) moved.x += speed;
+    if (input.key_down(ore::Key::D)) moved.x -= speed;
+    // The tree grows upwards, so W (look up) moves the content down and the pan value down.
+    if (input.key_down(ore::Key::W)) moved.y -= speed;
+    if (input.key_down(ore::Key::S)) moved.y += speed;
+    if (moved.x != 0.0f || moved.y != 0.0f) {
+        research_pan_ += moved;
+        clamp_research_pan();
+    }
+
+    const usize tree_count = research_tree_.trees().size();
+    if (tree_count > 0 && input.key_pressed(ore::Key::Left)) {
+        research_category_ = (research_category_ + tree_count - 1) % tree_count;
+        research_selected_.reset();
+    }
+    if (tree_count > 0 && input.key_pressed(ore::Key::Right)) {
+        research_category_ = (research_category_ + 1) % tree_count;
+        research_selected_.reset();
+    }
+
+    const ResearchLayout layout = research_layout();
+    if (!layout.visible.empty()) {
+        usize at = 0;
+        if (research_selected_.has_value()) {
+            const auto found = std::find(layout.visible.begin(), layout.visible.end(), *research_selected_);
+            if (found != layout.visible.end()) at = static_cast<usize>(found - layout.visible.begin());
+        }
+        if (input.key_pressed(ore::Key::Up)) {
+            at = at == 0 ? layout.visible.size() - 1 : at - 1;
+            research_selected_ = layout.visible[at];
+        }
+        if (input.key_pressed(ore::Key::Down)) {
+            at = (at + 1) % layout.visible.size();
+            research_selected_ = layout.visible[at];
+        }
+    } else {
+        research_selected_.reset();
+    }
+
+    // What the pointer is over, for the tooltip: the selected node is not the hovered one (a player may
+    // read a node without choosing it), and the hover ends as soon as the pointer leaves the graph.
+    const t2d::Vec2 mouse{input.mouse_x(), input.mouse_y()};
+    research_hovered_.reset();
+    if (layout.graph.contains(mouse)) {
+        for (usize slot = 0; slot < layout.nodes.size(); ++slot) {
+            if (!layout.nodes[slot].contains(mouse)) continue;
+            research_hovered_ = layout.visible[slot];
+            break;
+        }
+    }
+    if (input.mouse_pressed(ore::MouseButton::Left)) {
+        for (usize index = 0; index < layout.category_rows.size(); ++index) {
+            if (!layout.category_rows[index].contains(mouse)) continue;
+            research_category_ = index;
+            research_selected_.reset();
+            return;
+        }
+        if (layout.graph.contains(mouse)) {
+            for (usize index = 0; index < layout.nodes.size(); ++index) {
+                if (!layout.nodes[index].contains(mouse)) continue;
+                research_selected_ = layout.visible[index];
+                return;
+            }
+            return;
+        }
+        if (layout.button.contains(mouse)) {
+            research_selected();
+            return;
+        }
+    }
+    if (input.key_pressed(ore::Key::Enter)) research_selected();
+    if (input.key_pressed(ore::Key::Escape)) screen_ = Screen::World;
+}
+
+void MineApp::research_selected() {
+    if (!research_selected_.has_value()) return;
+    const usize index = *research_selected_;
+    if (!research_tree_.visible(index, research_)) return;
+    const ResearchNode& node = research_tree_.node(index);
+    const std::string name = content_name(node.kind, node.id);
+    if (research_.researched(node.kind, node.id)) {
+        set_status(format_localized(locale_.text("research.researched"), name));
+        return;
+    }
+    if (!research_tree_.prereqs_met(index, research_)) {
+        set_status(locale_.text("research.prereq"), true);
+        return;
+    }
+    if (!layer_reaches(node.min_layer, world_.layer().index())) {
+        set_status(format_localized(locale_.text("research.layer"), node.min_layer), true);
+        return;
+    }
+    // The price comes out of the selected warehouse, the same box the building price comes out of
+    // (docs/GAME_DESIGN.md section 1.37).
+    types::SceneTile* holder = selected_plot_to_change();
+    types::Container* stock = holder != nullptr ? holder->container() : nullptr;
+    if (stock == nullptr) {
+        set_status(locale_.text("research.no_stock"), true);
+        return;
+    }
+    std::string short_of;
+    if (!can_afford(*stock, registry_, node.cost, &short_of)) {
+        set_status(format_localized(locale_.text("research.short"), short_of), true);
+        return;
+    }
+    pay_for(*stock, registry_, node.cost);
+    research_.set_researched(node.kind, node.id, true);
+    // The stone warehouse is a node and a building at once: studying it is what unlocks it (section 1.45).
+    unlocked_.set_unlocked(node.kind, node.id, true);
+    sidebar_.rebuild(registry_, content_.report().definitions, unlocked_);
+    const bool saved = save_game();
+    if (saved) set_status(format_localized(locale_.text("research.done"), name));
+}
+
+void MineApp::draw_research_screen() {
+    const ResearchLayout layout = research_layout();
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    const f32 line = line_for(body_px_);
+    const u16 title_px = static_cast<u16>(body_px_ * 2);
+    const auto category_label = [this](std::string_view tree) {
+        const std::string id = std::format("research.category.{}", tree);
+        const std::string_view text = locale_.text(id);
+        return text == id ? std::string(tree) : std::string(text);
+    };
+
+    draw_line(padding, padding, title_px, kPalette.accent, locale_.text("research.title"));
+    batch_->draw_rect(layout.categories, kPalette.panel_fill);
+    batch_->draw_rect_outline(layout.categories, 2.0f, kPalette.panel_edge);
+    for (usize index = 0; index < layout.category_rows.size(); ++index) {
+        const bool picked = index == research_category_;
+        if (picked) batch_->draw_rect(layout.category_rows[index], kPalette.highlight);
+        draw_fitted(layout.category_rows[index].min.x + 6.0f * unit_, layout.category_rows[index].min.y,
+                    body_px_, picked ? kPalette.accent : kPalette.text,
+                    category_label(research_tree_.trees()[index]), layout.categories.width() - 12.0f * unit_);
+    }
+
+    batch_->draw_rect(layout.graph, kPalette.grid_background);
+    batch_->draw_rect_outline(layout.graph, 2.0f, kPalette.panel_edge);
+    const auto box_of = [&layout](usize tree_index) -> std::optional<usize> {
+        for (usize slot = 0; slot < layout.visible.size(); ++slot) {
+            if (layout.visible[slot] == tree_index) return slot;
+        }
+        return std::nullopt;
+    };
+    // The connections first, so a box covers the line that ends under it: only the edges whose two ends
+    // are both visible are drawn (docs/GAME_DESIGN.md section 1.50).
+    for (usize edge = 0; edge < research_tree_.edge_count(); ++edge) {
+        const ResearchEdge& connection = research_tree_.edge(edge);
+        const std::optional<usize> from = box_of(connection.parent);
+        const std::optional<usize> to = box_of(connection.child);
+        if (!from.has_value() || !to.has_value()) continue;
+        const t2d::Aabb2& a = layout.nodes[*from];
+        const t2d::Aabb2& b = layout.nodes[*to];
+        // The parent is below its children, so the link leaves the parent top centre and arrives at
+        // the child bottom centre.
+        const t2d::Vec2 start{a.min.x + a.width() * 0.5f, a.min.y};
+        const t2d::Vec2 end{b.min.x + b.width() * 0.5f, b.max.y};
+        // An orthogonal branch: up from the parent, across at the halfway line, then up into the
+        // child. Two axis-aligned rectangles draw with the atlas's white texel, so the branch is a
+        // solid tree limb rather than a rotated texture sample.
+        const f32 thickness = 2.0f * unit_;
+        const f32 mid_y = (start.y + end.y) * 0.5f;
+        const auto vertical = [&](f32 x, f32 from_y, f32 to_y) {
+            batch_->draw_rect(t2d::Aabb2{t2d::Vec2{x - thickness * 0.5f, std::min(from_y, to_y)},
+                                         t2d::Vec2{x + thickness * 0.5f, std::max(from_y, to_y)}},
+                              kPalette.text_dim);
+        };
+        vertical(start.x, start.y, mid_y);
+        batch_->draw_rect(t2d::Aabb2{t2d::Vec2{std::min(start.x, end.x), mid_y - thickness * 0.5f},
+                                     t2d::Vec2{std::max(start.x, end.x), mid_y + thickness * 0.5f}},
+                          kPalette.text_dim);
+        vertical(end.x, mid_y, end.y);
+    }
+    for (usize slot = 0; slot < layout.nodes.size(); ++slot) {
+        const usize index = layout.visible[slot];
+        const ResearchNode& node = research_tree_.node(index);
+        const bool studied = research_.researched(node.kind, node.id);
+        const bool focused = research_selected_.has_value() && *research_selected_ == index;
+        // The border is the node's state: gold once researched, grey while it is not. Selection only
+        // makes it thicker, so a focused unstudied node is not mistaken for a studied one.
+        const u32 border = studied ? kPalette.accent : kPalette.text_dim;
+        batch_->draw_rect(layout.nodes[slot], kPalette.panel_fill);
+        batch_->draw_rect_outline(layout.nodes[slot], focused ? 3.0f : 2.0f, border);
+        // The node is its picture: the preview fills the square and the name, layer and cost live in
+        // the hover tooltip and the selected node's details (docs/GAME_DESIGN.md section 1.50).
+    }
+
+    batch_->draw_rect(layout.details, kPalette.panel_fill);
+    batch_->draw_rect_outline(layout.details, 2.0f, kPalette.panel_edge);
+    f32 y = layout.details.min.y + 4.0f * unit_;
+    if (research_selected_.has_value()) {
+        const ResearchNode& node = research_tree_.node(*research_selected_);
+        draw_fitted(layout.details.min.x + 6.0f * unit_, y, body_px_, kPalette.accent,
+                    content_name(node.kind, node.id), layout.details.width() - 170.0f * unit_);
+        y += line;
+        std::string costs{locale_.text("research.cost")};
+        for (const ContentStack& stack : node.cost) {
+            const ContentId id = registry_.find(ContentKind::Item, stack.name);
+            costs += std::format(" {} x{}", content_name(ContentKind::Item, id), stack.count);
+        }
+        draw_fitted(layout.details.min.x + 6.0f * unit_, y, body_px_, kPalette.text, costs,
+                    layout.details.width() - 170.0f * unit_);
+        y += line;
+        if (node.parents.empty()) {
+            draw_fitted(layout.details.min.x + 6.0f * unit_, y, body_px_, kPalette.text_dim,
+                        locale_.text("research.root"), layout.details.width() - 170.0f * unit_);
+        } else {
+            std::string parents{locale_.text("research.parents")};
+            for (const usize parent : node.parents) {
+                parents += std::format(" {}", research_tree_.node(parent).name);
+            }
+            draw_fitted(layout.details.min.x + 6.0f * unit_, y, body_px_, kPalette.text_dim, parents,
+                        layout.details.width() - 170.0f * unit_);
+        }
+    }
+
+    const bool studied = research_selected_.has_value() &&
+                         research_.researched(research_tree_.node(*research_selected_).kind,
+                                              research_tree_.node(*research_selected_).id);
+    const bool usable = research_selected_.has_value() && !studied &&
+                        research_tree_.prereqs_met(*research_selected_, research_) &&
+                        layer_reaches(research_tree_.node(*research_selected_).min_layer,
+                                      world_.layer().index());
+    batch_->draw_rect(layout.button, usable ? kPalette.grid_background : kPalette.panel_fill);
+    batch_->draw_rect_outline(layout.button, 2.0f, usable ? kPalette.accent : kPalette.panel_edge);
+    const f32 button_text_y = layout.button.min.y + (layout.button.height() - line) * 0.5f;
+    const u32 button_text_color = usable ? kPalette.accent : kPalette.text_dim;
+    const std::string_view button_label = locale_.text(studied ? "research.researched" : "research.research");
+    t2d::TextStyle button_style;
+    button_style.size_px = body_px_;
+    button_style.color = button_text_color;
+    const std::string fitted_label =
+        fit_text(*text_, fonts_, button_style, button_label, layout.button.width() - 12.0f * unit_);
+    const f32 label_width = text_->measure(fitted_label, fonts_, button_style).width;
+    draw_line(layout.button.min.x + (layout.button.width() - label_width) * 0.5f, button_text_y, body_px_,
+              button_text_color, fitted_label);
+
+    const f32 hint_y = height - padding - line;
+    draw_fitted(padding, hint_y, body_px_, kPalette.text_dim, locale_.text("research.hint"),
+                width * 0.6f);
+    draw_fitted(width - padding - 160.0f * unit_, hint_y, body_px_, kPalette.text_dim,
+                locale_.text("research.close"), 160.0f * unit_ - padding);
+    draw_status_line();
+}
+
+MineApp::ImagePassCost MineApp::draw_research_images(ore::RenderFrame& frame,
+                                                    const ore::Mat4& view_projection) {
+    ImagePassCost cost;
+    const ResearchLayout layout = research_layout();
+    const t2d::Aabb2 full_uv{t2d::Vec2{0.0f, 0.0f}, t2d::Vec2{1.0f, 1.0f}};
+    const t2d::Aabb2 mirrored_uv{t2d::Vec2{1.0f, 0.0f}, t2d::Vec2{0.0f, 1.0f}};
+    // One batch per picture, the same preview the map draws: a drill's icon is its base with the top
+    // over it, and a picture whose texture is not there draws nothing (docs/GAME_DESIGN.md section 1.50).
+    for (usize slot = 0; slot < layout.icons.size() && slot < layout.visible.size(); ++slot) {
+        const usize index = layout.visible[slot];
+        if (index >= research_previews_.size()) continue;
+        const ResearchNode& node = research_tree_.node(index);
+        for (const types::PreviewImage& image : research_previews_[index].images) {
+            const auto texture = content_textures_.find(image_key(node.kind, node.name, image.part));
+            if (texture == content_textures_.end()) {
+                if (image.part.empty()) break;   // no base: the top alone would float
+                continue;
+            }
+            batch_->begin(frame, view_projection, *texture->second, image_sampler_->handle());
+            batch_->draw_quad_rotated(layout.icons[slot], image.mirrored ? mirrored_uv : full_uv,
+                                      image.pivot, image.radians, 0xFFFFFFFFu);
+            batch_->end();
+            cost.draw_calls += batch_->draw_calls();
+            cost.quads += batch_->quads();
+            cost.dropped += batch_->dropped_quads();
+        }
+    }
+    return cost;
+}
+
+void MineApp::draw_research_tooltip() {
+    const ResearchLayout layout = research_layout();
+    // The icon border belongs over the picture: a picture fills its square, so the chrome pass before
+    // the image pass cannot draw the border and keep it (the sidebar's selected box, section 1.36).
+    for (usize slot = 0; slot < layout.icons.size() && slot < layout.visible.size(); ++slot) {
+        const ResearchNode& node = research_tree_.node(layout.visible[slot]);
+        const bool studied = research_.researched(node.kind, node.id);
+        const u32 color = studied ? kPalette.accent : kPalette.text_dim;
+        batch_->draw_rect_outline(layout.icons[slot], 1.0f, color);
+    }
+    if (!research_hovered_.has_value()) return;
+    const ResearchNode& node = research_tree_.node(*research_hovered_);
+    const bool studied = research_.researched(node.kind, node.id);
+    const bool layer_ok = layer_reaches(node.min_layer, world_.layer().index());
+    const bool prereq_ok = research_tree_.prereqs_met(*research_hovered_, research_);
+    // A node the player is only looking at still says everything the details panel would: what it costs,
+    // when it is allowed and what it needs (docs/GAME_DESIGN.md section 1.50).
+    std::vector<std::string> lines;
+    std::string head{content_name(node.kind, node.id)};
+    if (node.is_root) head += std::format("  {}", locale_.text("research.root"));
+    lines.push_back(std::move(head));
+    std::string costs{locale_.text("research.cost")};
+    for (const ContentStack& stack : node.cost) {
+        const ContentId id = registry_.find(ContentKind::Item, stack.name);
+        costs += std::format(" {} x{}", content_name(ContentKind::Item, id), stack.count);
+    }
+    lines.push_back(std::move(costs));
+    lines.push_back(format_localized(locale_.text("research.min_layer"), node.min_layer));
+    if (node.parents.empty()) {
+        lines.push_back(std::string(locale_.text("research.root")));
+    } else {
+        std::string parents{locale_.text("research.parents")};
+        for (const usize parent : node.parents) {
+            parents += std::format(" {}", research_tree_.node(parent).name);
+        }
+        lines.push_back(std::move(parents));
+    }
+    if (studied) {
+        lines.push_back(std::string(locale_.text("research.researched")));
+    } else if (!prereq_ok) {
+        lines.push_back(std::string(locale_.text("research.prereq")));
+    } else if (!layer_ok) {
+        lines.push_back(format_localized(locale_.text("research.layer"), node.min_layer));
+    } else {
+        lines.push_back(std::string(locale_.text("research.ready")));
+    }
+
+    const f32 width = static_cast<f32>(renderer().width());
+    const f32 height = static_cast<f32>(renderer().height());
+    const f32 padding = 8.0f * unit_;
+    const u16 small_px = static_cast<u16>(body_px_ * 3 / 4);
+    const f32 line = line_for(small_px);
+    const f32 panel_width = std::clamp(layout.graph.width() * 0.45f, 240.0f * unit_, 420.0f * unit_);
+    const f32 panel_height = static_cast<f32>(lines.size()) * line + 8.0f * unit_;
+    const t2d::Vec2 mouse{input().mouse_x(), input().mouse_y()};
+    f32 x = mouse.x + 16.0f * unit_;
+    f32 y = mouse.y + 16.0f * unit_;
+    if (x + panel_width > width - padding) x = mouse.x - panel_width - 16.0f * unit_;
+    if (y + panel_height > height - padding) y = mouse.y - panel_height - 16.0f * unit_;
+    x = std::clamp(x, padding, std::max(padding, width - padding - panel_width));
+    y = std::clamp(y, padding, std::max(padding, height - padding - panel_height));
+    const t2d::Aabb2 panel{t2d::Vec2{x, y}, t2d::Vec2{x + panel_width, y + panel_height}};
+    batch_->draw_rect(panel, kPalette.panel_fill);
+    batch_->draw_rect_outline(panel, 2.0f, kPalette.accent);
+    for (usize index = 0; index < lines.size(); ++index) {
+        const bool heading = index == 0;
+        const bool last = index + 1 == lines.size();
+        const u32 color = heading ? kPalette.accent : (last ? kPalette.text : kPalette.text_dim);
+        draw_fitted(x + 6.0f * unit_, y + 4.0f * unit_ + static_cast<f32>(index) * line, small_px, color,
+                    lines[index], panel_width - 12.0f * unit_);
+    }
 }
 
 void MineApp::enter_mine_layer(i32 index) {
@@ -2199,13 +2707,19 @@ void MineApp::reload_content() {
     // state to whichever building happens to have that number now (docs/GAME_DESIGN.md section 1.44).
     const ContentTable before = ContentTable::from_registry(registry_);
     const std::vector<u8> unlocked_before = unlocked_.serialize();
+    const std::vector<u8> researched_before = research_.serialize();
     const ContentPipelineReport& loaded = load_content();
     // A new save first - content that appeared in this load starts at its definition's default - and then
     // the old state over it, by name: what is gone is skipped and what is new keeps its default. This is
     // the same path a save file will take when the save system lands; nothing is written to disk yet.
+    const ContentRemap remap = ContentRemap::build(before, registry_);
     unlocked_.reset(registry_, loaded.definitions);
-    if (!unlocked_.apply_saved(unlocked_before, ContentRemap::build(before, registry_))) {
+    if (!unlocked_.apply_saved(unlocked_before, remap)) {
         T2D_WARN("unlocks: the state written before the reload could not be read back; using defaults");
+    }
+    research_.reset(registry_, loaded.definitions);
+    if (!research_.apply_saved(researched_before, remap)) {
+        T2D_WARN("research: the state written before the reload could not be read back; using defaults");
     }
     // The list is a view of this load, so it is rebuilt with it: a reload that happened while the list
     // is open must not leave the list describing the load before it.
@@ -2926,6 +3440,11 @@ bool MineApp::sidebar_click(t2d::Vec2 point) {
         sidebar_.toggle();
         return true;
     }
+    // The technology tree button is on the sidebar, so it is the sidebar's click as well (section 1.50).
+    if (sidebar_.tech_at(layout, point)) {
+        open_research();
+        return true;
+    }
     if (!layout.visible || !layout.panel.contains(point)) return false;
     if (const std::optional<types::BuildingCategory> category = sidebar_.category_at(layout, point);
         category.has_value()) {
@@ -3046,6 +3565,14 @@ void MineApp::draw_build_sidebar() {
                     layout.page_label.width());
     }
     draw_sidebar_button(layout);
+    // The research screen's button, right of the close button on the same line (section 1.50).
+    if (layout.visible) {
+        batch_->draw_rect(layout.tech, kPalette.panel_fill);
+        batch_->draw_rect_outline(layout.tech, 2.0f, kPalette.panel_edge);
+        draw_fitted(layout.tech.min.x + 4.0f * unit_, layout.tech.min.y + 3.0f * unit_, body_px_,
+                    kPalette.accent, std::string(locale_.text("build.tech")),
+                    layout.tech.width() - 8.0f * unit_);
+    }
     // What the picked one is called and what it costs, under the grid.
     const BuildEntry* picked = sidebar_.selected();
     if (picked == nullptr) {
@@ -3491,6 +4018,7 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         case Screen::Sandbox: playtest_ ? draw_playtest_screen() : draw_sandbox_screen(); break;
         case Screen::Content: draw_content_screen(); break;
         case Screen::World: draw_world_screen(); break;
+        case Screen::Research: draw_research_screen(); break;
         case Screen::SaveName: draw_save_name_screen(); break;
         case Screen::SaveList: draw_save_list_screen(); break;
     }
@@ -3537,6 +4065,20 @@ void MineApp::on_render(ore::RenderFrame& frame) {
         draw_calls += panels.draw_calls;
         quads += panels.quads;
         dropped_quads_ += panels.dropped;
+    } else if (screen_ == Screen::Research) {
+        // Each node's icon is the content's own picture, in its own batch, like the sidebar's icons.
+        const ImagePassCost icons = draw_research_images(frame, view_projection);
+        draw_calls += icons.draw_calls;
+        quads += icons.quads;
+        dropped_quads_ += icons.dropped;
+        // The borders and the hovered tooltip go over the pictures: a picture fills the icon square
+        // (docs/GAME_DESIGN.md section 1.50).
+        batch_->begin(frame, view_projection, *text_->texture(), sampler_->handle());
+        draw_research_tooltip();
+        batch_->end();
+        draw_calls += batch_->draw_calls();
+        quads += batch_->quads();
+        dropped_quads_ += batch_->dropped_quads();
     }
 
     frame.counters.draw_calls = draw_calls;

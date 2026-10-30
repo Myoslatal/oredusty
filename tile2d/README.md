@@ -20,7 +20,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/save` | the save archive: a versioned `.t2dsave` container (magic, game name and version, chunks with id/version/size/CRC-32) with encode/decode, file helpers and payload reader/writer; **header only**, so a game compiles it into itself | `test_save` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save`, `test_text_input`, `test_save_library`, `test_save_list` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save`, `test_research`, `test_research_state`, `test_text_input`, `test_save_library`, `test_save_list` |
 | `games/mefemma` | a **second, independent game project**: its own scene stack, DrawList, 2D renderer, assets, input and settings — the framework a game is written on, with no world model and no content of its own | `test_draw_list`, `test_scene_stack`, `test_settings`, `test_input`, `test_data_paths`, `test_scenes` |
 
 ## Layout
@@ -55,7 +55,7 @@ parallel** - the build trees are independent, and each target's tests run with `
 takes about three minutes one at a time finishes in well under one. The job count is split between the
 targets (`VERIFY_JOBS=8 tools/verify.sh` to say how many cores to use); logs land in `build/verify/`.
 
-The whole suite is pure CPU work and finishes in about four seconds (38 suites, measured with `ctest` on
+The whole suite is pure CPU work and finishes in about four seconds (40 suites, measured with `ctest` on
 the `mine-debug` preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
 interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
 without Vulkan, GLFW or either game — the split that lets a dedicated server exist later.
@@ -88,7 +88,9 @@ without Vulkan, GLFW or either game — the split that lets a dedicated server e
     games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_build_sidebar  4 cases / 63 checks  the build sidebar: categories, picking, where its parts are, the pages
     games/mine/tests/test_building_unlocks  8 cases / 100 checks  which buildings a save has unlocked: the data's defaults, a reload, and the save blob
-    games/mine/tests/test_game_save  9 cases / 152 checks  a mine saved to a .t2dsave and read back: session, world, plots, containers, drops, sweeps, unlocks - all of it or none of it
+    games/mine/tests/test_game_save  10 cases / 159 checks  a mine saved to a .t2dsave and read back: session, world, plots, containers, drops, sweeps, unlocks, research - all of it or none of it
+    games/mine/tests/test_research  13 cases / 141 checks  the technology tree: research:: fields, parents, cycles, depth and layout, visibility, one multi-node tree revealed a level at a time, 1-based layers
+    games/mine/tests/test_research_state  5 cases / 35 checks  which nodes a save has studied: the RST1 blob, the name remap and its refusals
     games/mine/tests/test_text_input  7 cases / 81 checks  the save name field: UTF-8 text, the caret, CJK/emoji as one character, the limit, tab as text
     games/mine/tests/test_save_library  8 cases / 92 checks  a directory per save slot, one auto.t2dsave in it, and the names a file system takes (a tab is one)
     games/mine/tests/test_save_list  8 cases / 66 checks  the save list: a row per slot, the recent automatic save under an open one, the selection
@@ -518,7 +520,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 1116 sections, 3 484 symbols, 13 428 relocations (release)
+        mine.codetab         the game: 1161 sections, 3 651 symbols, 14 369 relocations (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -723,6 +725,16 @@ reloaded drill's later drops are not promised bit for bit) and the interface's o
 selection, the double click, the drop on the pointer, whether the sidebar is open. A game started from
 the menu writes its own slot; `--save` and `--load` still outrank that path.
 
+The build sidebar has a **TECH** button beside its close button: it opens the technology tree of a mine - the
+categories on the left, the nodes on the right as icon-only previews laid out bottom-up by the program (root at
+the bottom, deeper nodes above, each level centred), orthogonal branches only between nodes both of which are
+visible, and a node is visible when it is a root, already researched, or one of its parents is; hovering a node
+shows its name and research details.
+`Up`/`Down` selects, `Left`/`Right` switches category, `Enter` researches, `Esc` goes back, and `W` `A` `S` `D` pans
+the view. Researching takes its `research:: cost` out of the selected warehouse (the same box a build price comes
+from): in the game's own content the stone warehouse is the root of the `intro` tree, costs 20 stone and is what
+unlocks the warehouse as a building. The state is saved in a `RSCH` chunk ([docs/SAVE.md](docs/SAVE.md)).
+
 While a mine is being played it is also written by itself every five minutes (`--autosave-seconds`,
 0 turns it off), and once more when the game is left - closing the window keeps the mine that was on
 screen. A headless run does neither unless `--save` or `--load` named a file, so a screenshot or a
@@ -836,8 +848,8 @@ others record the last run before the split. No result here is estimated.
 
 | Preset | Result |
 |---|---|
-| `mine-debug` | 38/38 tests green (run in this checkout) |
-| `mine-release` | 38/38 tests green (run in this checkout) |
+| `mine-debug` | 40/40 tests green (run in this checkout) |
+| `mine-release` | 40/40 tests green (run in this checkout) |
 | `mine-asan` (Address + UB sanitizers) | not re-run after the build trees were split |
 | `mine-tsan` (ThreadSanitizer) | not re-run after the build trees were split |
 | `no-renderer` | 12/12 tests green (previous run; not re-run after the split) |

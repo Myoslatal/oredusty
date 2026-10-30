@@ -97,6 +97,10 @@ BuildSidebar::Layout BuildSidebar::layout(t2d::Vec2 screen, t2d::f32 unit) const
     // belongs at the near edge of the thing it closes, not at the far one (docs/GAME_DESIGN.md 1.36).
     out.toggle = t2d::Aabb2{t2d::Vec2{out.panel.min.x + padding, out.panel.min.y + padding},
                             t2d::Vec2{out.panel.min.x + padding + button, out.panel.min.y + padding + line}};
+    // The technology tree button sits right of the close button on the same line (section 1.50).
+    const t2d::f32 tech_width = 48.0f * unit;
+    out.tech = t2d::Aabb2{t2d::Vec2{out.toggle.max.x + padding * 0.5f, out.toggle.min.y},
+                          t2d::Vec2{out.toggle.max.x + padding * 0.5f + tech_width, out.toggle.max.y}};
     const t2d::f32 body_top = out.panel.min.y + padding + line * 1.5f;
     for (usize index = 0; index < categories_.size(); ++index) {
         const t2d::f32 y = body_top + static_cast<t2d::f32>(index) * line;

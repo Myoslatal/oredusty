@@ -125,7 +125,7 @@ const std::vector<u8> bytes = save::encode(file);
 ## Mine 的存档
 
 `mine` 的存档（`tile2d/games/mine/include/mine/game_save.h`）用同一个容器：`game` = `"mine"`，
-`game_version` = 1，每个 chunk 的 `version` 也都是 1（`kGameSaveChunkVersion`）。六个 chunk 缺一不可：
+`game_version` = 1，每个 chunk 的 `version` 也都是 1（`kGameSaveChunkVersion`）。六个 chunk 缺一不可，RSCH 可选：
 
 | chunk | 内容 |
 |---|---|
@@ -135,6 +135,7 @@ const std::vector<u8> bytes = save::encode(file);
 | `PLOT` | 每块地的 kind/id、所在层、锚点、尺寸、镜像、建造中、计时参数、钻头产量、容器内容；**按放置顺序** |
 | `ENTT` | 地上的掉落物：kind/id、位置、数量（堆） |
 | `BUIL` | 进行中的建造扫描线：地块在 `PLOT` 里的下标、已扫时间、总时间 |
+| `RSCH` | 已研究的科技节点（`ResearchState::serialize`：'RST1' + 版本 + 每行 kind/id/researched）。**可选**：旧存档没有它，读档按无研究处理 |
 
 读档是**要么整座矿、要么什么都没有**（`load_game_save`）：
 
@@ -147,9 +148,11 @@ const std::vector<u8> bytes = save::encode(file);
 * 掉落物用 `adopt` 原样放回，不再合并：堆的大小和位置与存档一致。
 * 已销毁但还没被 tick 扫掉的掉落物**不写进存档**（只写 `alive()` 的），否则它会在读档时复活。
 * 镜像计数在全部地块放好之后用 `MineLayer::recount_mirrored()` 重新统计：放置时按层 RNG 掷的骰子不是存档里的那个。
+* `RSCH` 在 **RSCH chunk 存在** 时才应用（版本必须是 1）：没有它的旧存档按“什么都没研究”读，节点表由本次构建的内容数据重建；
+  有它但读不完整则整档拒绝。
 
-**保存了**：会话、世界/层的种子与形状、层的编号、全部地块与容器、掉落物、进行中的建造、建筑解锁、世界时钟、
-镜头位置与缩放。
+**保存了**：会话、世界/层的种子与形状、层的编号、全部地块与容器、掉落物、进行中的建造、建筑解锁、已研究的科技节点、
+世界时钟、镜头位置与缩放。
 
 **没有保存**：钻头的 RNG 流（读档后按内容 id/锚点重新播种，之后的产出序列不保证逐位相同）、界面状态
 （选中的地块、双击计时、拖在指针上的掉落物、建造栏是否打开）、内容包/模组的加载列表本身（存档只记内容的
@@ -207,6 +210,25 @@ const std::vector<u8> bytes = save::encode(file);
 * 这三个模型在 `games/mine/tests/test_text_input.cpp`（7/81）、`test_save_library.cpp`（8/92）、
   `test_save_list.cpp`（8/66）。
 
+### 科技树与研究
+
+内容条目可以用 `research::` 声明自己是科技树的一个节点（`docs/GAME_DESIGN.md` §1.50）：
+
+    research::
+        cost:["stone",20]      # 研究消耗：从**选中的仓库**里扣，和建造价一样
+        parent:["a","b"]       # 前置节点名，可以多个；根节点不写
+        is_root:true           # 根节点：一开始就可见
+        tree:"intro"           # 分类；界面左侧按它分组
+        min_layer:1            # 最小第几层允许研究（engine 层号，0 表示任意层）
+
+* 节点名就是**内容名**，一个构建里必须唯一；`parent` 必须存在，根节点不能有 parent，非根至少一个，不能成环。
+* 树的位置**由程序算**：`column = depth`（根为 0），同列的节点按出现顺序排行；界面用 `kResearchColumnStep` /
+  `kResearchRowStep` 乘自己的节点尺寸，视图由 WASD 平移。
+* 可见性：根、已研究、或任一 parent 已研究的节点才显示；连线只画两端都可见的 parent→child。
+* 研究条件：可见、未研究、所有 parent 已研究、`world_.layer().index() >= min_layer`；成功后记入 `ResearchState`，
+  同一内容在 `BuildingUnlocks` 里解锁（石头仓库研究后进建造栏），并立刻 `save_game()` 一次。
+* 状态写进 `RSCH` chunk；没有这一块的旧存档读成“什么都没研究”。界面入口是建造侧边栏的 **TECH** 按钮：左侧分类、
+  右侧节点图、鼠标点分类/节点/RESEARCH，键盘 Up/Down 选节点、Left/Right 切分类、Enter 研究、Esc 返回。
 ## header-only 的取舍
 
 这个模块**只有头文件**（`include/t2d/save/archive.h`），CMake 里是一个 `INTERFACE` target（`t2d::save`）：

@@ -1,5 +1,6 @@
 # Build outputs (the presets write to build/, use those instead of an in-source cmake .)
 build/
+build-vm/
 out/
 /CMakeCache.txt
 /CMakeFiles/

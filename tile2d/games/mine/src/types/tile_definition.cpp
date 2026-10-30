@@ -148,6 +148,88 @@ std::optional<TileDefinition> read_tile_definition(ContentKind kind, std::string
                                         name, field.key()));
             }
         }
+    // "research::" - the technology tree node this content is (types/research.h). A definition
+    // attribute like building: shared by every plot of the entry, and a layer placement cannot write it
+    // (docs/GAME_DESIGN.md section 1.50).
+    if (const t2d::EcfgValue* research = entry.find("research"); research != nullptr) {
+        if (!research->is_table()) {
+            return fail(std::format(
+                "research '{}': research must be a table (research:: cost:[...] tree:\"...\")", name));
+        }
+        Research parsed;
+        for (const t2d::EcfgValue& field : research->children()) {
+            if (field.key() == "cost") {
+                if (!field.is_array()) {
+                    return fail(std::format("research '{}': cost must be an array of item names and counts",
+                                            name));
+                }
+                if (field.size() % 2 != 0) {
+                    return fail(std::format(
+                        "research '{}': cost has {} entries, and they come in pairs of name and count", name,
+                        field.size()));
+                }
+                for (usize index = 0; index + 1 < field.size(); index += 2) {
+                    const t2d::EcfgValue& item = field.children()[index];
+                    const t2d::EcfgValue& count = field.children()[index + 1];
+                    if (!item.is_string() || item.as_string().empty()) {
+                        return fail(std::format("research '{}': cost[{}] is not the quoted name of an item",
+                                                name, index));
+                    }
+                    if (count.type() != t2d::EcfgType::Int || count.as_int() <= 0) {
+                        return fail(std::format("research '{}': cost[{}] for '{}' is not a count above zero",
+                                                name, index + 1, item.as_string()));
+                    }
+                    parsed.cost.push_back(ContentStack{std::string(item.as_string()), count.as_int()});
+                }
+                continue;
+            }
+            if (field.key() == "parent") {
+                if (!field.is_array()) {
+                    return fail(std::format("research '{}': parent must be an array of research node names",
+                                            name));
+                }
+                for (const t2d::EcfgValue& item : field.children()) {
+                    if (!item.is_string() || item.as_string().empty()) {
+                        return fail(std::format(
+                            "research '{}': a parent is not the quoted name of a research node", name));
+                    }
+                    parsed.parents.push_back(std::string(item.as_string()));
+                }
+                continue;
+            }
+            if (field.key() == "is_root") {
+                if (field.type() != t2d::EcfgType::Bool) {
+                    return fail(std::format("research '{}': is_root must be true or false", name));
+                }
+                parsed.is_root = field.as_bool();
+                continue;
+            }
+            if (field.key() == "tree") {
+                if (!field.is_string() || field.as_string().empty()) {
+                    return fail(std::format("research '{}': tree must be the quoted name of a tree", name));
+                }
+                parsed.tree = std::string(field.as_string());
+                continue;
+            }
+            if (field.key() == "min_layer") {
+                if (field.type() != t2d::EcfgType::Int) {
+                    return fail(std::format("research '{}': min_layer must be a whole mine layer", name));
+                }
+                const t2d::i64 value = field.as_int();
+                if (value < 0 || value > 1000000) {
+                    return fail(std::format(
+                        "research '{}': min_layer is {}, and a mine layer is not negative", name, value));
+                }
+                parsed.min_layer = static_cast<i32>(value);
+                continue;
+            }
+            return fail(std::format(
+                "research '{}': the research table has no field '{}' (cost, parent, is_root, tree, "
+                "min_layer)",
+                name, field.key()));
+        }
+        definition.research = std::move(parsed);
+    }
     if (kind == ContentKind::Drill) {
         if (std::optional<std::string> problem = positive("dig_power", definition.dig_power);
             problem.has_value()) {

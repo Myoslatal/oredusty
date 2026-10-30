@@ -60,7 +60,8 @@ struct Fixture {
         return id;
     }
 
-    ContentId add_warehouse(std::string_view name, usize capacity, bool default_unlock = true) {
+    ContentId add_warehouse(std::string_view name, usize capacity, bool default_unlock = true,
+                            bool research_node = false) {
         const ContentId id = registry.register_content(ContentKind::Warehouse, name);
         TileDefinition definition;
         definition.kind = ContentKind::Warehouse;
@@ -69,6 +70,14 @@ struct Fixture {
         definition.building.category = BuildingCategory::Storage;
         definition.building.seconds = 10.0f;
         if (!default_unlock) definition.building.default_unlock = false;
+        if (research_node) {
+            Research research;
+            research.is_root = true;
+            research.tree = "intro";
+            research.min_layer = 1;
+            research.cost.push_back(ContentStack{"stone", 20});
+            definition.research = std::move(research);
+        }
         definitions.add(std::move(definition));
         return id;
     }
@@ -93,6 +102,7 @@ struct BuiltScene {
     MineWorld world{7, LayerShape{8, 6, 3}};
     BuildAnimation builds;
     BuildingUnlocks unlocks;
+    ResearchState research;
     ContentId stone = kNoContent;
     ContentId bin = kNoContent;
     ContentId rig = kNoContent;
@@ -103,7 +113,7 @@ struct BuiltScene {
 [[nodiscard]] std::optional<BuiltScene> build_scene(Fixture& content) {
     BuiltScene scene;
     scene.stone = content.add_item("stone");
-    scene.bin = content.add_warehouse("bin", 100);
+    scene.bin = content.add_warehouse("bin", 100, true, /*research_node=*/true);
     scene.rig = content.add_drill("rig", 1.0f);
     (void)content.add_floor("dirt");
     (void)content.add_ore("stone", 1.0f, "stone");
@@ -149,6 +159,9 @@ struct BuiltScene {
 
     scene.unlocks.reset(content.registry, content.definitions);
     scene.unlocks.set_unlocked(ContentKind::Warehouse, scene.bin, false);
+    // The warehouse is a research node as well, and this mine has studied it.
+    scene.research.reset(content.registry, content.definitions);
+    scene.research.set_researched(ContentKind::Warehouse, scene.bin, true);
     scene.world.install_layer(std::move(layer), report);
     return scene;
 }
@@ -168,8 +181,8 @@ struct BuiltScene {
                                              const SessionConfig& session, f32 world_seconds = 12.5f,
                                              t2d::Vec2 center = t2d::Vec2{3.25f, 4.5f},
                                              f32 zoom = 0.75f) {
-    return make_game_save(scene.world, session, scene.unlocks, scene.builds, world_seconds, center, zoom,
-                          content.registry);
+    return make_game_save(scene.world, session, scene.unlocks, scene.research, scene.builds, world_seconds,
+                          center, zoom, content.registry);
 }
 
 } // namespace
@@ -185,10 +198,11 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     const t2d::save::File file = make_test_save(*scene, content, session);
     T2D_CHECK_EQ(file.game, std::string("mine"));
     T2D_CHECK_EQ(file.game_version, kGameSaveVersion);
-    // All six chunks are there, each at the version this build reads.
+    // All seven chunks are there, each at the version this build reads.
     for (const t2d::u32 id : {game_save_chunk::kMeta, game_save_chunk::kContent,
-                              game_save_chunk::kUnlocks, game_save_chunk::kPlots,
-                              game_save_chunk::kEntities, game_save_chunk::kBuilds}) {
+                              game_save_chunk::kUnlocks, game_save_chunk::kResearch,
+                              game_save_chunk::kPlots, game_save_chunk::kEntities,
+                              game_save_chunk::kBuilds}) {
         const t2d::save::Chunk* chunk = file.find(id);
         T2D_REQUIRE(chunk != nullptr);
         T2D_CHECK_EQ(chunk->version, kGameSaveChunkVersion);
@@ -305,11 +319,15 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     T2D_CHECK_FALSE(loaded->unlocks.unlocked(ContentKind::Warehouse, scene->bin));
     T2D_CHECK(loaded->unlocks.unlocked(ContentKind::Drill, scene->rig));
 
+    // --- the research: the warehouse's node was studied, and is again --------------------------------
+    T2D_CHECK_EQ(loaded->research.size(), 1u);
+    T2D_CHECK(loaded->research.researched(ContentKind::Warehouse, scene->bin));
+
     // --- and the save is a value: the same state encodes to the same bytes --------------------------
     T2D_CHECK_EQ(t2d::save::encode(make_test_save(*scene, content, session)), bytes);
     // What came back writes the same file: the round trip loses nothing.
     const t2d::save::File resaved =
-        make_game_save(*loaded->world, loaded->session, loaded->unlocks, loaded->builds,
+        make_game_save(*loaded->world, loaded->session, loaded->unlocks, loaded->research, loaded->builds,
                        loaded->world_seconds, loaded->camera_center, loaded->camera_zoom, content.registry);
     T2D_CHECK_EQ(t2d::save::encode(resaved), bytes);
 }
@@ -460,8 +478,8 @@ T2D_TEST(a_world_with_no_layer_saves_a_file_that_cannot_load) {
     (void)content.add_item("stone");
     const MineWorld world(5, LayerShape{4, 4, 1});
     const SessionConfig session;
-    const t2d::save::File file = make_game_save(world, session, BuildingUnlocks{}, BuildAnimation{}, 0.0f,
-                                                t2d::Vec2{}, 1.0f, content.registry);
+    const t2d::save::File file = make_game_save(world, session, BuildingUnlocks{}, ResearchState{},
+                                                BuildAnimation{}, 0.0f, t2d::Vec2{}, 1.0f, content.registry);
     T2D_CHECK_EQ(file.game, std::string("mine"));
     GameLoadReport report;
     T2D_CHECK_FALSE(load_game_save(file, content.registry, content.definitions, &report).has_value());
@@ -619,7 +637,7 @@ T2D_TEST(a_mirrored_plots_are_counted_again_after_a_load) {
     world.install_layer(std::move(layer), report);
     const std::optional<t2d::save::File> decoded =
         t2d::save::decode(t2d::save::encode(make_game_save(world, test_session(), BuildingUnlocks{},
-                                                           BuildAnimation{}, 2.0f,
+                                                           ResearchState{}, BuildAnimation{}, 2.0f,
                                                            t2d::Vec2{1.0f, 2.0f}, 1.5f, content.registry)));
     T2D_REQUIRE(decoded.has_value());
     GameLoadReport load_report;
@@ -632,6 +650,28 @@ T2D_TEST(a_mirrored_plots_are_counted_again_after_a_load) {
     T2D_CHECK(loaded->world->layer().plots()[0]->mirrored());
     T2D_CHECK(loaded->world->layer().plots()[1]->mirrored());
     T2D_CHECK_FALSE(loaded->world->layer().plots()[2]->mirrored());
+}
+
+T2D_TEST(a_save_written_before_the_technology_tree_loads_with_nothing_researched) {
+    // The RSCH chunk is optional: a save from before the tree existed has none, and must still load -
+    // with the node table rebuilt from this build's data and nothing studied.
+    Fixture content;
+    const std::optional<BuiltScene> scene = build_scene(content);
+    T2D_REQUIRE(scene.has_value());
+    t2d::save::File old = make_test_save(*scene, content, test_session());
+    old.chunks.erase(std::remove_if(old.chunks.begin(), old.chunks.end(),
+                                    [](const t2d::save::Chunk& chunk) {
+                                        return chunk.id == game_save_chunk::kResearch;
+                                    }),
+                     old.chunks.end());
+    T2D_CHECK(old.find(game_save_chunk::kResearch) == nullptr);
+    GameLoadReport report;
+    const std::optional<GameSaveData> loaded =
+        load_game_save(old, content.registry, content.definitions, &report);
+    T2D_REQUIRE(loaded.has_value());
+    T2D_CHECK(report.ok);
+    T2D_CHECK_EQ(loaded->research.size(), 1u);
+    T2D_CHECK_FALSE(loaded->research.researched(ContentKind::Warehouse, scene->bin));
 }
 
 T2D_TEST_MAIN

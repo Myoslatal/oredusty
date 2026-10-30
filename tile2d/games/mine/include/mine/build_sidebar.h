@@ -87,11 +87,17 @@ public:
         /// The open/close button, flush against the right edge and vertically centred. It is laid out
         /// **whether the sidebar is open or not**, because it is what opens it (docs/GAME_DESIGN.md 1.36).
         t2d::Aabb2 toggle{};
+        /// The technology tree button, right of the toggle on the same line. Laid out only while the
+        /// sidebar is open - a door belongs on the wall it opens a room behind (section 1.50).
+        t2d::Aabb2 tech{};
     };
     [[nodiscard]] Layout layout(t2d::Vec2 screen, t2d::f32 unit) const;
 
     /// What a point is over, for the clicks the world view hands over. npos / nullopt when it is over
     /// nothing.
+    [[nodiscard]] bool tech_at(const Layout& layout, t2d::Vec2 point) const {
+        return layout.visible && layout.tech.contains(point);
+    }
     [[nodiscard]] usize entry_at(const Layout& layout, t2d::Vec2 point) const;
     [[nodiscard]] std::optional<types::BuildingCategory> category_at(const Layout& layout,
                                                                      t2d::Vec2 point) const;

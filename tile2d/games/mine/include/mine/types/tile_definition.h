@@ -16,6 +16,7 @@
 #pragma once
 
 #include <mine/types/building.h>
+#include <mine/types/research.h>
 #include <mine/types/scene_tile.h>
 
 #include <t2d/core/ecfg.h>
@@ -65,6 +66,10 @@ struct TileDefinition {
     /// placement cannot change it (docs/GAME_DESIGN.md section 1.35). Empty for content that is not a
     /// building - a floor, an ore vein.
     Building building;
+    /// "research::" - the technology tree node this entry is, when it declares one (types/research.h).
+    /// A definition attribute like building: every plot of the entry shares the node, and a placement
+    /// cannot write it (docs/GAME_DESIGN.md section 1.50). Not set for content that is not researchable.
+    std::optional<Research> research;
 
     /// True for the kinds whose entries describe something that occupies cells. An item, a recipe, a
     /// layer or a channel describes something else, and is not a plot.

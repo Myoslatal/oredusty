@@ -353,7 +353,46 @@
     `text input object created`（`--platform x11` 没有这些行，走 GLFW 的 XIM）；lead 已在 Wayland + Vulkan 图形会话真机验证：
     名称框聚焦 `enter/enabled`，uinput 注入 `nihao`+空格，fcitx5 提交“你好”（`committed 6 byte(s)`）。无图形设备的环境仍可只验证协议对象创建。
 
-以上四十九条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
+50. **科技树：建造菜单的科技树按钮、分类、石头仓库根节点、研究扣料/解锁、WASD 视图**（原话）："在建造菜单返回按钮右边加科技树按钮；
+科技树左边分类（暂时只有“入门科技”），添加石头仓库节点，研究消耗 20 石头，minlayer=1，根节点。research 子对象参数：cost（从选中的
+仓库提取消耗）、parent（父节点，可多个，节点间画线）、is_root、tree（分类）、min_layer（最小第几层允许研究）。节点树位置由程序计算；
+科技树界面支持 WASD 移动视图。"于是：
+    ① **内容字段**：`TileDefinition` 多一个可选 `research`（types/research.h），`tile_definition.cpp` 解析 `research::` 表：cost
+    （item 名字/count 成对，同 building materials）、parent（节点名字符串数组，可多个）、is_root（bool）、tree（非空字符串，分类）、
+    min_layer（非负整数）；未知字段/类型错误报错。石头仓库本体内容（`content/warehouses.ecfg`）是根：cost `["stone",20]`、
+    `is_root:true`、`tree:"intro"`、`min_layer:1`。
+    ② **ResearchState**（mine/research_state.h）：每份存档每个研究节点一行（kind/id/researched），reset/refresh/researched/
+    set_researched；编码 magic `RST1` + 版本 1 + varint 条数 + kind/id/bool，`apply_saved` 经 ContentRemap 按名字、坏 blob 整块
+    不改。
+    ③ **ResearchTree**（mine/research.h）：从有 research:: 的 tile 定义建节点（名字唯一），parent 必须存在、root 无 parent、
+    非 root 至少一个 parent、不能成环；depth=从根最长路径，column=depth、同列按出现顺序排行（`kResearchColumnStep=4`、
+    `kResearchRowStep=3`，`position()` 给布局单位）；`trees()` 按出现顺序去重；visible=根/已研究/任一 parent 已研究，
+    prereqs_met=所有 parent 已研究；edges 是 parent→child。
+    ④ **界面**：建造侧边栏返回按钮右边加 **TECH** 按钮（只在 sidebar 打开时显示），点它进入 `Screen::Research`（Esc 回世界）。
+    左边分类列表（intro → `research.category.intro` "入门科技"），右边程序布局的节点图。树**自下而上**画：根在图底部居中，
+    depth 越大越高（`y = graph.max.y - pan.y - depth*(node_height+gapY) - node_height`），同一 depth 的可见节点按出现顺序
+    在图中心左右展开（`x = 图中心 + (place - (count-1)/2)*(node_width+gapX) - node_width/2`）；连线只画两端都可见的
+    parent→child，起点是 parent 顶边中点、终点是 child 底边中点（多父各一条）。节点盒左边是图标方区（边长=节点高-8u），
+    右侧是名称（min_layer>0 时下面再一行层号）；图标是节点内容自己的完整渲染预览：`definitions.find_tile` →
+    `types::make_tile(def,node.id,0,{0,0})` → `get_preview(0)`，on_render 在 chrome 后按 preview image 逐张画
+    （纹理 `image_key(kind,name,part)`、mirrored/pivot/radians 与侧边栏/地图一致），无贴图时只留背景与名称。
+    鼠标悬停节点出现浮层 tooltip（鼠标右/下偏移、clamp 到屏内），内容：名称/ROOT、cost、min_layer、parents/ROOT、
+    状态（已研究/可研究/前置未满足/层不够）；底部 details 保留选中摘要与 **RESEARCH** 按钮。
+    节点颜色分已研究/可研究/前置未满足/层不够，选中框。鼠标可点分类/节点/按钮；键盘 Up/Down 选节点、Left/Right 切换分类、
+    Enter 研究、Esc 返回；**WASD 按住按 dt 平移视图**，clamp 到图范围（树高超过图时可以向上平移看高层）。
+    ⑤ **研究动作**：节点可见、未研究、所有 parent 已研究、按**玩家看到的层号**（第 1 层 = `index()+1`，`layer_reaches`）
+    达到 `min_layer` 才可研究；从
+    `selected_plot_to_change()` 的容器扣 cost（没选中仓库/不够给状态文案），成功后 ResearchState 记已研究、BuildingUnlocks 解锁
+    同一内容（石头仓库研究后进建造栏）、`sidebar_.rebuild`、`save_game()` 写一次持久化（失败只报状态）。
+    ⑥ **存档**：game_save 加 **RSCH** chunk（`R,S,C,H`，版本 1）保存 ResearchState；`GameSaveData.research`；旧存档没有 RSCH 时按
+    无研究处理（后向兼容）。app 的 open_world reset、reload 按名字、load 应用、save 带上。
+    ⑦ **测试**：新 `test_research` 13/141、`test_research_state` 5/35；`test_game_save` 9/152 → 10/159（RSCH 往返 + 无 RSCH 的
+    旧档）；全量 **40/40**（debug 与 release）。界面真机截图见（四十一）。
+    ⑧ **多节点测试**（设计者追加）：`test_research` 里造 1 root + 3 child + 1 grandchild（grandchild 一个多父），验证初始只
+    root、研究 root 后 children 可见而 grandchild 不可见；研究一个 child 后 grandchild 可见（但仍需两个父才能研究）；只画
+    两端都可见的边（0→3→5 条）；depth/同层位置。正式内容仍只有石头仓库一个节点。
+
+以上五十条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
 
 ---
 
@@ -1885,6 +1924,46 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
 * **没做**：Wayland 的 surrounding-text（不告诉 IME 周围文本，也不处理 delete_surrounding_text）；X11 之外的系统 IME
   仍是各平台自己的事。
 
+### M2 交付状态（四十一）：科技树（内容字段、研究状态、树布局、界面、扣料/解锁、存档）（已落地，含单测）
+
+设计者原话：见 §1.50（建造菜单的科技树按钮、入门分类、石头仓库根节点、研究消耗 20 石头、minlayer=1、research 参数、
+节点位置程序计算、WASD 移动视图）。
+
+* **内容字段**：`TileDefinition::research` + `research::` 解析（cost/parent/is_root/tree/min_layer，坏类型/未知字段拒绝）；
+  石头仓库 `content/warehouses.ecfg` 加 `research:: cost:["stone",20] is_root:true tree:"intro" min_layer:1`。
+* **模型**：`ResearchState`（每节点一行、RST1、按名字 remap）与 `ResearchTree`（名字唯一、parent 存在、root 无父、非 root 有父、
+  无环、depth/column/row 程序布局、trees() 去重、visible/prereqs_met、edges）都进 mine_core 与 MINE_TABLE_SOURCES。
+* **界面**：`BuildSidebar::Layout::tech` 在返回按钮右边；点击进入 `Screen::Research`，Esc 回世界。左侧分类（intro →
+  入门科技），右侧节点图（程序布局、自下而上、同层居中）、只画两端可见的连线、颜色分已研究/可研究/前置未满足/层不够、
+  选中框、底部名称/cost/min_layer/前置与 RESEARCH 按钮；鼠标点分类/节点/按钮，Up/Down 选节点、Left/Right 切分类、Enter 研究、Esc 返回，
+  WASD 按 dt 平移并 clamp；节点位置程序计算为**自下而上**（root 在底、depth 越高越上、同层节点居中）。
+* **增强（设计者追加，§1.50）**：节点**只显示地块自己的完整预览**（`make_tile` → `get_preview(0)`，`draw_research_images`
+  在 chrome 后逐张画，方形图标节点，节点内不再写名称/层号）；树改成**自下而上**（根在图底居中、depth 越高越上、同层按出现
+  顺序居中，连线从 parent 顶边到 child 底边的正交树枝；节点边框已研究金色、未研究灰色，选中只加粗；鼠标悬停浮层 tooltip
+  显示名称/ROOT、cost、min_layer、前置、状态，选中节点的摘要仍在底部；RESEARCH 按钮按文字测量居中、边框留出高度；新增多节点单测（root + 3 child + 1 多父 grandchild）覆盖逐层可见与“只画两端都可见的边”。正式内容
+  仍只有石头仓库一个节点。
+* **研究动作**：可见+未研究+前置齐+`layer_reaches(min_layer, index)`（玩家层号 1 基；故事初始第 1 层满足 min_layer 1）；
+  从 `selected_plot_to_change()` 的容器扣 cost，
+  成功后 `research_.set_researched`、`unlocked_.set_unlocked`、`sidebar_.rebuild`、`save_game()`；失败给状态文案。
+* **存档**：新 `RSCH` chunk（R,S,C,H，版本 1）；旧存档没有 RSCH 按无研究处理；app open_world reset / reload 按名字 / load 应用 /
+  save 带上。
+* **本地化**：三语言加 build.tech、research.title/category.intro/cost/min_layer/parents/research/researched/no_stock/short/
+  layer/prereq/hint/close/done/root；test_text 三语言覆盖通过。
+* **单测**：新 `test_research` 13/141（含多节点树与 1 基层号）、`test_research_state` 5/35；`test_game_save` 9/152 → **10/159**（RSCH
+  往返与无 RSCH 的旧档向后兼容）；全量 **debug 40/40、release 40/40** 绿（-DT2D_BUILD_MEFEMMA=OFF 的独立目录）。
+* **实测**（lead 本机，verify 包第 1 层）：建造侧边栏 `>` 右边出现 TECH；点击进入科技树，左侧 INTRODUCTION，右侧程序布局的
+  STONE WAREHOUSE 根节点（FROM LAYER 1）；默认选中后底部显示 `COST: STONE x20` / `ROOT NODE` 和 RESEARCH；A 键按住 0.7s，
+  节点随视图右移（`research_wasd_before.png` / `research_wasd_after.png`）。选中仓库有 100 石，研究后容器变 80/100、状态行
+  `RESEARCHED STONE WAREHOUSE`、按钮变 RESEARCHED、存档写入 RSCH；重开 `save.t2dsave` 后仍是 RESEARCHED，存档状态行 LOADED，
+  建造栏 STORAGE 分类出现已解锁的石仓库（`research_fixed.png`、`research_success.png`、`research_reload.png`、`research_storage3.png`）。
+* **实测（多节点、preview、悬停、自下而上）**：临时内容包（root + 2 children + 1 多父 leaf）验证：根在底部、children 在上、
+  leaf 再上一层；节点是 `get_preview(0)` 的 drill/vault 方形图标，节点内无文字；树枝是 parent 顶边到 child 底边的正交连线；
+  鼠标移到节点上浮层显示名称、`COST: STONE x10`、`REQUIRES: stone`、`READY TO RESEARCH`（`icon_nodes.png`、
+  `icon_nodes_hover2.png`）；边框颜色与按钮居中见 `node_borders.png`、`button_center_crop.png`。leaf 逐层研究后才从隐藏变可见
+  （单测 13/141 覆盖）；正式内容仍只保留石头仓库一个节点。故事第 1 层
+  （index 0）按研究按钮不再报层号不足，只按仓库里的 10 石报 `stone: 10 of 20`（`layer1_research.png`）。
+* **没做**：科技树节点的鼠标拖拽/缩放、多分类的排序配置、研究完成后的通知动画。
+
 ### M1 验收标准（已满足）
 
 1. 本文档存在，且代码中**没有任何预设的游戏内容**（资源/结构/配方/建筑清单均无硬编码）。
@@ -2106,6 +2185,15 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
 
 | 版本 | 变更 |
 |---|---|
+| M2.44 | **科技树**（设计者新要求，§1.50）：`TileDefinition::research` + `research::` 解析（cost/parent/is_root/tree/min_layer）；
+`ResearchState`（RST1 + ContentRemap）；`ResearchTree`（父子校验/环/depth/列行布局/可见性/前置/边）；石头仓库本体内容成 intro 根节点
+（20 石，min_layer=1）；app 侧边栏 TECH 按钮 + Screen::Research（分类、程序布局、只画两端可见的连线、WASD 平移、鼠标/键盘、
+研究扣料 + 解锁 + save_game）；game_save 加 RSCH chunk（旧档无 RSCH 按无研究）；三语言文案。增强：节点图标=地块自己的
+preview（`make_tile` → `get_preview(0)`，节点只显示图标、无文字）、鼠标悬停 tooltip、树自下而上（根在底、depth 越高越上、
+正交树枝 parent 顶边→child 底边）、多节点单测、研究层号 1 基、已研究金/未研究灰的节点边框与居中 RESEARCH 按钮。**单测**：
+新 test_research 13/141、test_research_state 5/35，test_game_save 10/159；全量 debug 40/40、
+release 40/40 绿。**实测**：TECH 按钮、INTRODUCTION/根节点、WASD 平移、研究扣 20 石、重开后仍已研究、STORAGE 解锁；临时多节点包
+（root 底 + children 上 + leaf 顶层）验证 preview 图标、正交树枝、悬停 `REQUIRES`/`READY`（`multi_tree_levels.png`、`multi_tree_hover.png`）。 |
 | M2.43 | **四个界面问题修复 + Wayland 原生 IME**（设计者报的，§1.49）：世界视图 Esc 先 `save_game()` 再回 Start Game 子菜单
 （不再经会话屏）；`TextInput`/`SaveLibrary` 允许 tab，名称界面 Tab 插入制表符、Up/Down 在 Input/Create/Back 环走，输入框把
 tab 画成空隙；**Ore 窗口层实现 Wayland `zwp_text_input_v3`**（`src/platform/wayland_text_input.{h,cpp}`、registry 绑定
