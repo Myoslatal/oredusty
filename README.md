@@ -448,4 +448,10 @@ glTF 加载、渲染图（render graph）自动屏障、时间戳查询。
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。
+- **Ore 本体**：MIT，见 [LICENSE](LICENSE)。
+- **Tile2D**：MIT，见 [tile2d/LICENSE](tile2d/LICENSE)。
+- **codetab**：MIT，见 [tile2d/tools/codetab/LICENSE](tile2d/tools/codetab/LICENSE)。
+- **Mine / Mefemma 的游戏代码**：Reciprocal MIT（MIT + ShareAlike，传染性改编条款），见各自目录的 `LICENSE`。
+- **Mine / Mefemma 的游戏资源**：CC BY-SA 4.0，见各自目录的 `LICENSE-ASSETS`。
+
+完整的分层说明见 [LICENSING.md](LICENSING.md)。

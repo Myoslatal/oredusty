@@ -1,0 +1,39 @@
+Reciprocal MIT License (MIT + ShareAlike)
+
+Copyright (c) 2026 Mefemma contributors
+
+This software is released under the MIT License below, together with the
+Reciprocal Condition. The condition is what makes this a share-alike
+("infectious") MIT-style license; it is not the OSI MIT license on its own.
+
+Reciprocal Condition
+--------------------
+1. If You modify, adapt, or create a derivative work of the Software and
+   distribute that derivative work in source or binary form, You must license
+   the derivative work under this same Reciprocal MIT License.
+2. This condition applies only to derivative works of the Software. It does
+   not apply to separate works that merely use, link to, or are distributed
+   alongside the Software (including the Ore and Tile2D engines), unless those
+   works are themselves derivative works of the Software.
+3. Every copy or derivative work must include this license and the copyright
+   notice above.
+
+MIT License terms
+-----------------
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

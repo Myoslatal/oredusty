@@ -871,3 +871,10 @@ Ore itself is a separate tree with its own suite (13/13 in `debug`, `release` an
 
 Hardware: **Intel Arc Pro 130T/140T (Arrow Lake-P), Mesa 26.2.3, Wayland**. The windowed path is
 verified by real screenshots, and the offscreen path is what the render test asserts on.
+
+## License
+
+Tile2D is **MIT** ([LICENSE](LICENSE)); codetab is **MIT** ([tools/codetab/LICENSE](tools/codetab/LICENSE)).
+The two games' code is under the **Reciprocal MIT** license (MIT with a share-alike condition) and their
+game assets are **CC BY-SA 4.0** - see each game's `LICENSE` and `LICENSE-ASSETS`, and the repository-wide
+[LICENSING.md](../LICENSING.md).

@@ -299,6 +299,13 @@ add_custom_target(mine_package
             "${CMAKE_CURRENT_BINARY_DIR}/shaders" "${MINE_PACKAGE_DIR}/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/packs" "${MINE_PACKAGE_DIR}/packs"
+    # Licenses travel with the binary: the game's code/assets plus the engines and toolchain it carries.
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${MINE_PACKAGE_DIR}/LICENSE"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE-ASSETS"
+            "${MINE_PACKAGE_DIR}/LICENSE-ASSETS"
+    COMMAND ${CMAKE_COMMAND} -E copy "${T2D_ORE_DIR}/LICENSE" "${MINE_PACKAGE_DIR}/LICENSE-Ore"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/LICENSE" "${MINE_PACKAGE_DIR}/LICENSE-Tile2D"
+    COMMAND ${CMAKE_COMMAND} -E copy "${T2D_ORE_DIR}/LICENSING.md" "${MINE_PACKAGE_DIR}/LICENSING.md"
     ${MINE_PACKAGE_STRIP}
     COMMAND ${CMAKE_COMMAND} -E remove "${MINE_PACKAGE_ZIP}"
     COMMAND ${CMAKE_COMMAND} -E tar cf "${MINE_PACKAGE_ZIP}" --format=zip -- "${MINE_PACKAGE_NAME}"
@@ -336,6 +343,15 @@ add_custom_target(builddev
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/packs" "${MINE_DEV_DIR}/packs"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "${MINE_DEV_DIR}/docs"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${MINE_DEV_DIR}/README.md"
+    # A mod author receives the game code and codetab, so both licenses travel with them.
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${MINE_DEV_DIR}/LICENSE"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE-ASSETS"
+            "${MINE_DEV_DIR}/LICENSE-ASSETS"
+    COMMAND ${CMAKE_COMMAND} -E copy "${T2D_ORE_DIR}/LICENSE" "${MINE_DEV_DIR}/LICENSE-Ore"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/LICENSE" "${MINE_DEV_DIR}/LICENSE-Tile2D"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/codetab/LICENSE"
+            "${MINE_DEV_DIR}/LICENSE-codetab"
+    COMMAND ${CMAKE_COMMAND} -E copy "${T2D_ORE_DIR}/LICENSING.md" "${MINE_DEV_DIR}/LICENSING.md"
     COMMAND ${CMAKE_COMMAND} -E remove "${MINE_DEV_ZIP}"
     COMMAND ${CMAKE_COMMAND} -E tar cf "${MINE_DEV_ZIP}" --format=zip -- "${MINE_DEV_NAME}"
     WORKING_DIRECTORY "${MINE_PACKAGE_ROOT}"

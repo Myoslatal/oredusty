@@ -100,6 +100,12 @@ one would attach, with the extension points and the reasons.
 4. Put the game's own fields in `assets/config/game.ecfg` and read them with `Settings::find`; put its
    strings in `assets/text/ui.ecfg` and its pictures in `assets/textures/`.
 
+## License
+
+The game code is under the **Reciprocal MIT** license (MIT plus a share-alike condition); its assets are
+**CC BY-SA 4.0**. See [LICENSE](LICENSE), [LICENSE-ASSETS](LICENSE-ASSETS), and the repository-wide
+[LICENSING.md](../../../LICENSING.md).
+
 ## Verification
 
 Run in this checkout, on this machine (Intel Arc via Mesa when a display is available; the screenshots above
