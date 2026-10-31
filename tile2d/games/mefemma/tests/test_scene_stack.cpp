@@ -55,6 +55,8 @@ public:
     [[nodiscard]] const t2d::Locale& locale() const override { return locale_; }
     [[nodiscard]] std::string_view text(std::string_view id) const override { return id; }
     [[nodiscard]] t2d::TextMetrics measure_text(std::string_view, t2d::u16) const override { return {}; }
+    [[nodiscard]] t2d::Language language() const override { return language_; }
+    void set_language(t2d::Language language) override { language_ = language; }
     [[nodiscard]] t2d::Rng& random() override { return rng_; }
     [[nodiscard]] f32 elapsed_seconds() const override { return 0.0f; }
     [[nodiscard]] t2d::u64 frame() const override { return 0; }
@@ -72,6 +74,7 @@ private:
     Settings settings_{};
     t2d::Locale locale_{};
     t2d::Rng rng_{1};
+    t2d::Language language_ = t2d::Language::English;
 };
 
 } // namespace

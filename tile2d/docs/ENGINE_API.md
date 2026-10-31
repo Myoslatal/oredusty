@@ -17,14 +17,17 @@ Release 表（927 节 / 2923 符号，由 `codetab build` 编——工具链先�
 
 引擎的那 85 个（`t2d::` + `ore::`）就是公开面的**下限**：本体要用的，模组至少要能用。实测它们**全部**
 在 `engine.api` 里（启动器报告 0 个越界）。一个模组通常只用其中一小部分——多数只碰日志、.ecfg、注册表
-与世界查询。
+与世界查询。清单此后只在需要时变长：Mefemma 的开放世界场景带来 25 个新符号（`t2d/sim` 23、`t2d/core`
+2，均为 B 层；其中 `OpenWorld::set_origin` 是超远内容原点用的），核对 mine 的表时又补上 6 个**此前
+漏登的实测需求**（文本输入字段的 `ore::Window` 两个、`t2d::utf8_*` 三个、`t2d::Rng::next_float`
+一个），现在清单共 118 个（A 40、B 78）。
 
 ## 二、分层
 
 | 层 | 模块 | 个数 | 政策 |
 |---|---|---|---|
 | **A 常用 + 稳定** | `t2d/core` 30、`t2d/text` 10 | **40** | **冻结**：改动 = 显式决定 + 引擎版本号 +1 |
-| **B 常用但会变** | `t2d/render` 14、`ore/app` 9、`ore/platform` 7、`ore/rhi` 5、`t2d/net` 5、`ore/renderer` 4、`ore/debug` 1 | **45** | **提供，但会随渲染器/网络/加载机制改**；加载时照常校验 |
+| **B 常用但会变** | `t2d/sim` 23、`t2d/render` 16、`ore/app` 9、`ore/platform` 9、`t2d/net` 5、`ore/rhi` 5、`ore/renderer` 4、`t2d/core` 3、`t2d/text` 3、`ore/debug` 1 | **78** | **提供，但会随渲染器/网络/加载机制改**；加载时照常校验 |
 | **C 不提供** | `mine/app.h`（应用外壳）、`mine/sandbox.h`（开发工具）、各 `.cpp` 内部、模组宿主内部 | — | **拒绝**并指名符号；要改行为就覆盖本体表里的符号 |
 | **平台层** | libc、libstdc++、Vulkan、GLFW | — | 不是我们的 API；校验时**不要求**在清单里 |
 
@@ -32,13 +35,17 @@ Release 表（927 节 / 2923 符号，由 `codetab build` 编——工具链先�
 `t2d/render/sprite_batch.h` 与 `ore/platform/window.h` 各 3 次，而 `t2d/core`、`t2d/text` 的头文件基本
 1–2 次。改得多的进 B（提供，但别指望不动），改得少又常用的进 A（冻结）。
 
-`t2d/sim` 现在**不在清单里**：游戏自己用的是 `mine::ContentGrid`，本体这张表不需要它。需要它的模组会在
-构建期被拒绝并指名——比"用了但没人管"清楚。
+`t2d/sim` 的**开放世界子集**现在在清单里：Mefemma 的 `openworld` 场景
+（`games/mefemma/src/scenes/open_world_scene.cpp`）真的用到 `OpenWorld`/`WorldChunk`/`ChunkStore`，
+那 23 个符号按实测加进 B 层；`Camera2D::move`/`visible_world` 两个 `t2d/core` 符号同理。固定地图的
+`TileMap` 等类型仍不在清单里——mine 本体用的是 `mine::ContentGrid`，本体表不需要它们；需要它们的模组
+会在构建期被拒绝并指名，比"用了但没人管"清楚。
 
 ## 三、怎么执行（已经落地）
 
 1. **构建期**：`codetab build|pack --api engine.api`——表里引用到的引擎符号逐个对照清单，越界即**构建失败**，
-   在作者还能改的时候报出来。本体自己的表就是这么打的（`games/mine/CMakeLists.txt`），演示模组也是。
+   在作者还能改的时候报出来。两个游戏自己的表就是这么打的（`games/mine/CMakeLists.txt`、
+   `games/mefemma/CMakeLists.txt`），演示模组也是。
 2. **加载期兜底**：启动器读随可执行文件走的 `engine.api`，对每个模块**真正向宿主索取**的符号查表；
    不在清单 → **拒绝该模块**并逐个指名。`requires` 的版本校验照旧：版本是粗筛，符号是细筛。
 3. **随时可查**：`codetab api --surface engine.api <表>` 对任何已经存在的表给出同样的结论；

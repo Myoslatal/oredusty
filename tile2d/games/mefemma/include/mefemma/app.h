@@ -41,9 +41,21 @@ struct MefemmaOptions {
     std::optional<t2d::Language> language;
     std::string font_path;
     std::string cjk_font_path;
-    /// "title" (the default) or "playground": which scene the process starts in. A scripted run and a
-    /// screenshot need a way to skip the title.
+    /// "title" (the default), "playground" or "openworld": which scene the process starts in. A scripted
+    /// run and a screenshot need a way to skip the title.
     std::string start_scene;
+    /// The open-world scene's chunk store. Empty means the scene's own default:
+    /// "mefemma_openworld.t2dk" in the process' working directory.
+    std::string world_file;
+    /// The ABSOLUTE chunk the open-world scene's two test chunks start at (default {0,0}). A scripted run
+    /// can put the content near the practical limit; relative cells and geometry stay small anyway.
+    t2d::i64 world_origin_x = 0;
+    t2d::i64 world_origin_y = 0;
+    /// redirect.ecfg to read and replace. Empty means the default beside the executable.
+    std::string redirect_path;
+    /// A save directory given on the command line. It skips the first-run prompt, is not written to
+    /// redirect.ecfg, and wins over the prompt for this run only - the way a scripted run says where to save.
+    std::string save_path;
     std::optional<t2d::u64> seed;
     /// Where the pointer starts, in framebuffer pixels. A headless run has no mouse, so a scripted run that
     /// wants to show (or test) what the pointer does has to say where it is. A real pointer, once it moves,
@@ -63,6 +75,8 @@ public:
     [[nodiscard]] const t2d::Locale& locale() const override;
     [[nodiscard]] std::string_view text(std::string_view id) const override;
     [[nodiscard]] t2d::TextMetrics measure_text(std::string_view text, t2d::u16 size_px) const override;
+    [[nodiscard]] t2d::Language language() const override { return language_; }
+    void set_language(t2d::Language language) override;
     [[nodiscard]] t2d::Rng& random() override { return random_; }
     [[nodiscard]] f32 elapsed_seconds() const override { return elapsed_seconds_; }
     [[nodiscard]] t2d::u64 frame() const override { return frame_; }
@@ -88,13 +102,31 @@ private:
     /// The debug overlay is the shell's own: one line with the frame's numbers, toggled with F1. A scene
     /// that wants its own debug output draws it itself.
     void draw_debug_overlay(DrawList& out) const;
-    /// Puts the first scene of the run on the stack: the title, unless the command line named another.
+    /// Builds the scene the run should start in (title, playground or openworld), with the save directory
+    /// resolved into the open-world default when the command line did not name a store.
+    [[nodiscard]] std::unique_ptr<Scene> make_first_scene();
+    /// Puts the first scene of the run on the stack: the title, unless the command line named another - or,
+    /// while the run has no configured save directory yet, the first-run prompt.
     void start_first_scene();
+    /// Resolves redirect_path_ and save_directory_ from --save-path/redirect.ecfg and sets prompt_pending_.
+    /// Runs before assets and the language: <save dir>/config.ecfg is part of choosing the startup language.
+    void resolve_save_directory();
+    /// Reads <save dir>/config.ecfg and makes its language the runtime one, unless --lang named another.
+    /// When \p live is true it also reloads the string table and fonts (used when the first-run prompt chose
+    /// the directory).
+    void apply_saved_language(bool live);
 
     MefemmaOptions options_{};
     DataPaths paths_{};
     Settings settings_{};
     std::optional<t2d::EcfgError> settings_error_{};
+
+    /// The redirect file this run uses (default beside the executable, or --redirect) and the save
+    /// directory resolved from it - empty until the first-run prompt is answered or a valid file is read.
+    std::string redirect_path_;
+    std::string save_directory_;
+    /// True when no save directory is configured yet and the first-run prompt must be the only scene.
+    bool prompt_pending_ = false;
 
     Scope<Assets> assets_{};
     Scope<Renderer2D> renderer_{};

@@ -13,7 +13,9 @@
 
 #include <t2d/core/executable.h>
 #include <t2d/core/log.h>
+#include <t2d/sim/open_world.h>
 
+#include <cerrno>
 #include <cstdlib>
 #include <string>
 
@@ -40,6 +42,33 @@ extern "C" int mefemma_game_main(int argc, char** argv) {
     if (const auto font = cli.value("font"); font.has_value()) options.font_path = *font;
     if (const auto cjk = cli.value("cjk-font"); cjk.has_value()) options.cjk_font_path = *cjk;
     if (const auto scene = cli.value("scene"); scene.has_value()) options.start_scene = *scene;
+    if (const auto redirect = cli.value("redirect"); redirect.has_value()) options.redirect_path = *redirect;
+    if (const auto save_path = cli.value("save-path"); save_path.has_value()) options.save_path = *save_path;
+    if (const auto world_file = cli.value("world-file"); world_file.has_value()) options.world_file = *world_file;
+    if (const auto world_origin = cli.value("world-origin"); world_origin.has_value()) {
+        const std::size_t separator = world_origin->find(',');
+        if (separator == std::string::npos) {
+            T2D_ERROR("--world-origin wants chunk coordinates like 34359738364,-34359738364, got '{}'", *world_origin);
+            return 1;
+        }
+        const std::string x_text = world_origin->substr(0, separator);
+        const std::string y_text = world_origin->substr(separator + 1);
+        char* x_end = nullptr;
+        char* y_end = nullptr;
+        errno = 0;
+        const long long x = std::strtoll(x_text.c_str(), &x_end, 10);
+        const long long y = std::strtoll(y_text.c_str(), &y_end, 10);
+        const long long limit = static_cast<long long>(t2d::OpenWorld::kMaxAbsoluteChunk);
+        const bool parsed = !x_text.empty() && !y_text.empty() && x_end != nullptr && *x_end == '\0' &&
+                            y_end != nullptr && *y_end == '\0' && errno == 0;
+        if (!parsed || x < -limit || x > limit || y < -limit || y > limit) {
+            T2D_ERROR("--world-origin wants two whole absolute chunks inside -{}..{}, got '{}'", limit, limit,
+                      *world_origin);
+            return 1;
+        }
+        options.world_origin_x = static_cast<t2d::i64>(x);
+        options.world_origin_y = static_cast<t2d::i64>(y);
+    }
     if (const auto seed = cli.uint_value("seed"); seed.has_value()) options.seed = *seed;
     if (const auto pointer = cli.value("pointer"); pointer.has_value()) {
         const std::size_t separator = pointer->find(',');

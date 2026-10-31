@@ -60,6 +60,14 @@ public:
     /// number the renderer will use, because both ask the same text engine.
     [[nodiscard]] virtual t2d::TextMetrics measure_text(std::string_view text, u16 size_px) const = 0;
 
+    /// The interface language in force: what text() looks up and what the shell's fonts were loaded for.
+    [[nodiscard]] virtual t2d::Language language() const = 0;
+    /// Switches the interface language for the rest of the run: the string table and the fonts the language
+    /// needs change now, and a scene that draws from text() redraws in the new language on the next frame.
+    /// The choice is not written to the settings file - the startup language still comes from --lang and the
+    /// settings file, and the settings file may live in a read-only assets directory.
+    virtual void set_language(t2d::Language language) = 0;
+
     /// The game's own random stream. A game draws from it; the shell only seeds it (Settings::seed).
     [[nodiscard]] virtual t2d::Rng& random() = 0;
     [[nodiscard]] virtual f32 elapsed_seconds() const = 0;

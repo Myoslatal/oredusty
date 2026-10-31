@@ -24,6 +24,8 @@ target_compile_definitions(t2d_core PUBLIC T2D_SOURCE_DIR="${T2D_SOURCE_DIR}")
 # The tile map and the tileset: storage, collision queries, serialisation, ASCII authoring. What a
 # tile means is the game's data; the framework only knows how to store and query it.
 add_library(t2d_sim STATIC
+    sim/chunk_store.cpp
+    sim/open_world.cpp
     sim/tilemap.cpp
     sim/tileset.cpp
 )
@@ -92,5 +94,7 @@ if(T2D_WITH_RENDERER)
     )
     add_library(t2d::render ALIAS t2d_render)
     t2d_apply_settings(t2d_render)
-    target_link_libraries(t2d_render PUBLIC t2d::net t2d::text ore::ore)
+    # t2d::sim is public because tilemap_renderer.cpp draws a TileMap or an OpenWorld: a consumer
+    # that links only t2d::render has to get the map types and their symbols with it.
+    target_link_libraries(t2d_render PUBLIC t2d::net t2d::sim t2d::text ore::ore)
 endif()

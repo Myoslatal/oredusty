@@ -1,5 +1,10 @@
 # Unit tests. Everything here is pure CPU work: no window, no threads, no sleeps, milliseconds.
 t2d_add_test(test_tilemap test_tilemap.cpp)
+# The open world: unbounded chunk streams, deterministic generation, edits through a byte store.
+t2d_add_test(test_open_world test_open_world.cpp)
+# The file-backed store behind that byte store: an in-file hash index and append-only CRC records.
+t2d_add_test(test_chunk_store test_chunk_store.cpp)
+target_link_libraries(test_chunk_store PRIVATE t2d::save)
 # The camera: coordinates, zooming, fitting a map of hundreds of cells and bounding the view.
 t2d_add_test(test_camera2d test_camera2d.cpp)
 # The .ecfg configuration reader (format: example.ecfg in the repository root).

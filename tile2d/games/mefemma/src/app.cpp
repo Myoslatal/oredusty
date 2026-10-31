@@ -1,6 +1,10 @@
 #include <mefemma/app.h>
 
+#include <mefemma/config.h>
+#include <mefemma/redirect.h>
+#include <mefemma/scenes/open_world_scene.h>
 #include <mefemma/scenes/playground_scene.h>
+#include <mefemma/scenes/save_path_scene.h>
 #include <mefemma/scenes/title_scene.h>
 
 #include <t2d/core/executable.h>
@@ -19,6 +23,18 @@ namespace {
 template <class... Args>
 [[nodiscard]] std::string format_localized(std::string_view pattern, Args&&... args) {
     return std::vformat(pattern, std::make_format_args(args...));
+}
+
+/// An absolute, lexically normal path for a command-line option. When the platform will not resolve it the
+/// original text is returned: a useful diagnostic beats an invented path.
+[[nodiscard]] std::string normalized_absolute(std::string_view path) {
+    std::error_code code;
+    std::filesystem::path result{std::string(path)};
+    if (!result.is_absolute()) {
+        result = std::filesystem::absolute(result, code);
+        if (code) return std::string(path);
+    }
+    return result.lexically_normal().string();
 }
 
 /// The input enums mirror the engine's values; if either side ever renumbers, this is where the build
@@ -91,13 +107,24 @@ ore::ConstSpan<ore::CliOption> MefemmaApp::cli_options() const {
         {"font", "<path>", "Latin font file (default: the first system font found)"},
         {"cjk-font", "<path>", "CJK font file used for Chinese text"},
         {"seed", "<n>", "the game's random seed (default: the settings file's)"},
-        {"scene", "<title|playground>", "which scene to start in (default: title)"},
+        {"scene", "<title|playground|openworld>", "which scene to start in (default: title)"},
+        {"redirect", "<path>", "the redirect.ecfg file (default: beside the executable)"},
+        {"save-path", "<dir>", "the save directory; skips the first-run prompt and does not write redirect.ecfg"},
+        {"world-file", "<path>", "the open-world scene's chunk store (default: <save dir>/mefemma_openworld.t2dk)"},
+        {"world-origin", "<x,y>", "absolute chunk origin of the openworld content (default: 0,0)"},
         {"pointer", "<x,y>", "put the pointer at this pixel (a scripted run has no mouse)"},
     };
     return ore::ConstSpan<ore::CliOption>(kOptions, std::size(kOptions));
 }
 
 void MefemmaApp::on_start() {
+    // The save directory is decided before any asset exists: <save dir>/config.ecfg is part of choosing the
+    // startup language, and no scene may open a save store before the directory is configured. The language
+    // is then --lang > <save dir>/config.ecfg > assets/config/game.ecfg; this reads the middle one without
+    // writing anything.
+    resolve_save_directory();
+    apply_saved_language(false);
+
     assets_ = std::make_unique<Assets>(context(), paths_, options_.font_path, options_.cjk_font_path);
     assets_->load_text();
     assets_->set_language(language_);
@@ -112,24 +139,131 @@ void MefemmaApp::on_start() {
     renderer_->set_fonts(assets_->fonts());
 
     random_.seed(options_.seed.value_or(settings_.seed));
-    start_first_scene();
+
+    if (prompt_pending_) {
+        // The prompt is the ONLY scene started: nothing behind it may open a store or a save list before the
+        // directory exists. Its callback finishes the decision and applies any config.ecfg the chosen
+        // directory already has, so choosing an existing save directory picks up its language immediately.
+        scenes_.push(make_save_path_scene(
+            redirect_path_, default_save_directory(redirect_path_), [this](std::string_view path) {
+                save_directory_ = std::string(path);
+                prompt_pending_ = false;
+                apply_saved_language(true);
+                return make_first_scene();
+            }));
+    } else {
+        start_first_scene();
+    }
     scenes_.begin_frame(*this);
 
     T2D_INFO("mefemma: assets '{}', language {}, {} scene(s)", paths_.root(), t2d::language_code(language_),
              scenes_.size());
 }
 
-void MefemmaApp::start_first_scene() {
-    const std::string& scene = options_.start_scene;
-    if (scene.empty() || scene == "title") {
-        scenes_.push(make_title_scene());
-    } else if (scene == "playground") {
-        scenes_.push(make_playground_scene());
-    } else {
-        T2D_WARN("scene: unknown start scene '{}' (title, playground); starting at the title", scene);
-        scenes_.push(make_title_scene());
+void MefemmaApp::resolve_save_directory() {
+    // The redirect file is the package's own record; --redirect points at another one (a test, a per-player
+    // setup), and --save-path is a one-run override that writes nothing. A --save-path that cannot be used is
+    // not a decision: fall through to the redirect file/prompt instead of starting a scene that would write
+    // somewhere nobody chose.
+    redirect_path_ =
+        options_.redirect_path.empty() ? default_redirect_path() : normalized_absolute(options_.redirect_path);
+    T2D_INFO("mefemma: redirect '{}'", redirect_path_);
+
+    bool configured = false;
+    if (!options_.save_path.empty()) {
+        std::string error;
+        const std::optional<std::string> normalized =
+            normalize_save_path(options_.save_path, t2d::parent_directory_of(redirect_path_), &error);
+        if (normalized.has_value()) {
+            save_directory_ = *normalized;
+            configured = true;
+            if (!ensure_save_directory(save_directory_, &error)) {
+                T2D_WARN("first-run: save directory '{}': {}", save_directory_, error);
+            } else {
+                T2D_INFO("first-run: save directory '{}' (from --save-path; redirect not written)", save_directory_);
+            }
+        } else {
+            T2D_WARN("first-run: --save-path '{}': {} (falling back to the redirect file)", options_.save_path,
+                     error);
+        }
     }
+
+    if (!configured) {
+        t2d::EcfgError redirect_error;
+        const std::optional<RedirectConfig> redirect = load_redirect(redirect_path_, &redirect_error);
+        if (redirect.has_value()) {
+            std::string error;
+            const std::optional<std::string> normalized = normalize_save_path(
+                redirect->save_path, t2d::parent_directory_of(redirect_path_), &error);
+            if (normalized.has_value()) {
+                save_directory_ = *normalized;
+                configured = true;
+                if (!ensure_save_directory(save_directory_, &error)) {
+                    // A configured directory that cannot be created is still the player's choice: report it
+                    // and let the game run, exactly like a failing save would.
+                    T2D_WARN("first-run: save directory '{}': {}", save_directory_, error);
+                } else {
+                    T2D_INFO("first-run: configured save directory '{}'", save_directory_);
+                }
+            } else {
+                T2D_WARN("first-run: redirect '{}': {}", redirect_path_, error);
+            }
+        } else {
+            std::error_code code;
+            if (std::filesystem::exists(redirect_path_, code)) {
+                // An existing but unreadable/invalid file is worth a line; a missing one is the normal
+                // first run and says nothing until the player has answered.
+                T2D_WARN("first-run: redirect '{}': {}", redirect_path_,
+                         redirect_error.describe(redirect_path_));
+            }
+        }
+    }
+    prompt_pending_ = !configured;
 }
+
+void MefemmaApp::apply_saved_language(bool live) {
+    // --lang wins over the save directory's file; the packaged assets/config/game.ecfg is the last fallback
+    // (language_ already holds it from the constructor). A missing file is silent, an invalid one is logged
+    // and skipped, and nothing here writes.
+    if (options_.language.has_value() || save_directory_.empty()) return;
+
+    const std::string file = config_path(save_directory_);
+    std::error_code code;
+    const bool file_exists = std::filesystem::exists(file, code);
+    t2d::EcfgError error;
+    const std::optional<GameConfig> config = load_game_config(file, &error);
+    if (!config.has_value()) {
+        if (file_exists) T2D_WARN("{}", error.describe(file));
+        return;
+    }
+    if (!config->language.has_value()) return;
+
+    const t2d::Language saved = *config->language;
+    const bool changed = saved != language_;
+    language_ = saved;
+    T2D_INFO("config: language {} from '{}'", t2d::language_code(language_), file);
+    if (!live || !changed || assets_ == nullptr) return;
+    assets_->set_language(language_);
+    if (renderer_ != nullptr) renderer_->set_fonts(assets_->fonts());
+}
+
+std::unique_ptr<Scene> MefemmaApp::make_first_scene() {
+    const std::string& scene = options_.start_scene;
+    if (scene.empty() || scene == "title") return make_title_scene();
+    if (scene == "playground") return make_playground_scene();
+    if (scene == "openworld") {
+        // The open-world store lives in the configured save directory unless the command line named one.
+        std::string world_file = options_.world_file;
+        if (world_file.empty() && !save_directory_.empty()) {
+            world_file = (std::filesystem::path(save_directory_) / "mefemma_openworld.t2dk").string();
+        }
+        return make_open_world_scene(world_file, t2d::ChunkKey{options_.world_origin_x, options_.world_origin_y});
+    }
+    T2D_WARN("scene: unknown start scene '{}' (title, playground, openworld); starting at the title", scene);
+    return make_title_scene();
+}
+
+void MefemmaApp::start_first_scene() { scenes_.push(make_first_scene()); }
 
 void MefemmaApp::on_update(f32 delta_seconds) {
     sync_input();
@@ -196,14 +330,29 @@ void MefemmaApp::sync_input() {
     input_.set_text(source.text_input());
 }
 
+void MefemmaApp::set_language(t2d::Language language) {
+    if (language == language_) return;
+    language_ = language;
+    // Assets::set_language() logs the language and its string counts; the shell does not repeat that.
+    if (assets_ != nullptr) {
+        assets_->set_language(language_);
+        if (renderer_ != nullptr) renderer_->set_fonts(assets_->fonts());
+    }
+    // The Settings menu and F2 are user choices, so they are the one path that writes the save directory's
+    // config.ecfg. A startup --lang never comes here, and an unconfigured run (still at the prompt) has no
+    // file to write.
+    if (save_directory_.empty()) return;
+    std::string error;
+    if (!save_game_config(config_path(save_directory_), language_, &error)) {
+        T2D_WARN("config: cannot save language '{}': {}", t2d::language_code(language_), error);
+        return;
+    }
+    T2D_INFO("config: language {} written to '{}'", t2d::language_code(language_),
+             config_path(save_directory_));
+}
+
 void MefemmaApp::cycle_language() {
-    const usize count = t2d::kLanguageCount;
-    const usize next = (static_cast<usize>(language_) + 1) % count;
-    language_ = static_cast<t2d::Language>(next);
-    assets_->set_language(language_);
-    renderer_->set_fonts(assets_->fonts());
-    T2D_INFO("language: {} ({} strings, {} missing)", t2d::language_code(language_),
-             assets_->locale().count(language_), assets_->locale().missing_for_active_language().size());
+    set_language(static_cast<t2d::Language>((static_cast<usize>(language_) + 1) % t2d::kLanguageCount));
 }
 
 void MefemmaApp::on_render(ore::RenderFrame& frame) {

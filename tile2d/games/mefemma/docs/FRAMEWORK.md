@@ -61,12 +61,53 @@ Add it to the first frame in `MefemmaApp::start_first_scene()` and to `CMakeList
 The start screen is `TitleScene` (`src/scenes/title_scene.cpp`): it draws the designer's sign
 (`assets/textures/start_screen.png`), the game's name and five rows - New Game, Save List, Settings, Mods and
 Quit - and answers the keyboard (Up/Down, Enter, Escape) and the mouse (hover selects, click activates). New
-Game, Save List, Settings and Mods open a note that says they are not implemented yet; `TitleScene::activate()`
-is the one function a game replaces to make them real. Quit leaves the game.
+Game, Save List and Mods open a note that says they are not implemented yet; `TitleScene::activate()` is the
+one function a game replaces to make them real. Quit leaves the game.
+
+**Settings is a real internal menu**, drawn on the same sign under a dim overlay (the title screen stays
+visible behind it). It has two rows:
+
+    LANGUAGE  < 简体中文 >      LEFT/RIGHT or A/D change the language by +/-1 (wrapping),
+                                ENTER/SPACE advances it; the endonym is t2d::language_name()
+    BACK                        ENTER/SPACE, a click, or Escape closes the menu
+
+Up/Down and W/S move the selection (wrapping); the pointer hovers and clicks the same rows; a click outside
+the panel and the title rows behind it do nothing. The choice applies immediately through
+`GameServices::set_language()` - the string table and the fonts reload, and the next frame of the menu, the
+title screen behind it and every other scene draw in the new language - and it is saved to the save
+directory's `config.ecfg` (see §7). F2 keeps cycling the language from the shell, persists it the same way,
+and the LANGUAGE row reflects it, because the row reads `services.language()` every frame.
+
+`SavePathScene` is the only scene a run can start with before any other: when `redirect.ecfg` beside the
+executable is missing or invalid and the command line gave no `--save-path`, `MefemmaApp::on_start()` pushes
+this prompt alone. It owns a `PathInput` prefilled with `default_save_directory(redirect_path)`; typed text,
+Backspace/Delete, Left/Right/Home/End edit it; Enter (or keypad Enter) confirms and Escape quits without
+writing. Confirming runs the same rules as the core (`normalize_save_path` against the redirect file's
+directory, `ensure_save_directory`, `save_redirect`), and only then replaces itself with the scene the run
+would have started, through the factory the shell handed it. A failure (empty answer, a path that cannot be
+created, an unwritable redirect file) shows a localized reason and keeps the prompt up. It draws a dark
+panel through the `DrawList` - heading, question, a bordered field with a blinking caret, the hint and the
+error - and a path longer than the field is shown as a tail with a leading `...` so the caret stays visible.
+Its testable surface is `text()`, `error()`, `redirect_path()` and `default_save_path()`.
 
 `PlaygroundScene` is the other worked example: a camera, the pointer, a world-space grid and a HUD. It is not
-reachable from the menu while New Game is a placeholder; `--scene playground` starts the process in it. Neither
-scene is a design: a game keeps the start screen's shape and replaces the rest.
+reachable from the menu while New Game is a placeholder; `--scene playground` starts the process in it.
+
+`OpenWorldScene` (`--scene openworld`, `--world-file <path>`, `--world-origin <x,y>`) is the worked
+example of the engine's optional open world: two test tiles from `assets/textures/test_tiles.png` in two
+test chunks at an absolute **content origin** (default `{0,0}`, then the chunk to its right), streamed
+around a camera that pans, zooms and can be recentred (C moves the floating origin and the camera with
+it). The world's origin is moved to the content origin before anything streams, so relative cells,
+geometry and the camera stay near zero however far that chunk is: `--world-origin` can put the content
+at `34359738364,-34359738364` (four chunks inside the ±2^35 absolute clamp) and the frame is identical,
+while generation and the store still use the exact absolute keys. A left click cycles the cell under the
+pointer A → B → empty; 1/2/0 place A/B/empty; S saves; Escape saves and goes back. The scene owns a
+`t2d::ChunkStore` at the path `--world-file` names (default `<save directory>/mefemma_openworld.t2dk`,
+where the save directory comes from the first-run prompt or `redirect.ecfg`) and passes
+`store.loader()`/`store.saver()` to the world, so an edit survives a restart and
+an unedited chunk is regenerated rather than stored. If the store cannot be opened the scene says so on
+the HUD and keeps running in memory. None of these scenes is a design: a game keeps the start
+screen's shape and replaces the rest.
 
 ### The services a scene is handed
 
@@ -78,6 +119,7 @@ scene is a design: a game keeps the start screen's shape and replaces the rest.
 | `settings()` | the settings file, including the game's own fields |
 | `locale()`, `text(id)` | the string table and the string for an id |
 | `measure_text(text, size)` | the box a line will fill, for centring and layout |
+| `language()`, `set_language(language)` | the interface language in force, and switching it for the rest of the run (no settings-file write) |
 | `random()` | the game's random stream, seeded from the settings |
 | `elapsed_seconds()`, `frame()` | the shell's clock |
 | `viewport()` | the framebuffer size in pixels |
@@ -142,6 +184,12 @@ so a scene stays testable and a missing file is a shell-level report.
 
 `assets/README.md` is the designer-facing version of this section.
 
+Two runtime files live **outside** `assets/`. `redirect.ecfg` sits beside the executable and names the save
+directory chosen on the first run; `config.ecfg` sits inside that save directory and holds the settings
+chosen for it (today: the language). Neither is shipped content - the build does not copy them, a package
+does not carry them, and a player who deletes them gets the first-run prompt or the shipped default again.
+The save directory may be anywhere the player can write; `assets/` may be read-only.
+
 ## 6. Input
 
 `InputState` separates the situation from the event:
@@ -180,11 +228,64 @@ A command line overrides the file:
     --font <path>       the Latin font
     --cjk-font <path>   the CJK collection
     --seed <n>          the random seed
-    --scene <name>      title or playground
+    --scene <name>      title, playground or openworld
+    --redirect <path>   the redirect.ecfg to read/replace (default: beside the executable)
+    --save-path <dir>   the save directory for this run; skips the prompt and writes no redirect.ecfg
+    --world-file <path> the openworld scene's chunk store (default: <save dir>/mefemma_openworld.t2dk)
+    --world-origin <x,y> the absolute chunk the openworld content starts at (default: 0,0)
     --pointer <x,y>     where the pointer starts in a scripted run
 
 Ore adds `--headless`, `--frames`, `--size`, `--screenshot`, `--input-server` and the rest; `--help`
 lists both sets.
+
+**The language is live and saved.** Settings → LANGUAGE (or F2) switches the running game immediately - the
+string table and the fonts reload, and every scene draws from `services.text()` again next frame - and writes
+the choice to `<save directory>/config.ecfg`:
+
+    # Mefemma's settings for this save directory. Written by the Settings menu.
+    language:"en"
+
+The file is part of the save directory, not of the package: it travels with the saves, and a packaged
+`assets/config/game.ecfg` stays the read-only shipped default. Startup precedence is
+
+    --lang  >  <save directory>/config.ecfg  >  assets/config/game.ecfg
+
+so a scripted `--lang` wins and writes nothing, and a missing `config.ecfg` is silent. A file that exists but
+is malformed, has a non-string language or an unknown code is logged and ignored, and the run falls back to
+the packaged default. Deletion is the deliberate "go back to the shipped default"; the Settings menu writes
+the file again on the next change. A failed write is logged and the live language is kept - the game never
+refuses to switch because it could not save the choice.
+
+### First run: the save directory
+
+The game needs one thing before any scene can open a save store: where saves live. `MefemmaApp::on_start()`
+resolves it in this order:
+
+1. `--save-path <dir>` - normalised against the redirect file's directory, created, and used for this run
+   only; **nothing is written**. A value that cannot be normalised is logged and resolution falls through
+   to the redirect file (or the first-run prompt) instead of starting with no save directory.
+2. A valid `redirect.ecfg` - its `save_path` is normalised the same way and the directory is created; a
+   directory that cannot be created is a warning, not a reason to refuse the run.
+3. Otherwise the run starts with `SavePathScene` as the **only** scene; the title, playground and openworld
+   scenes are not started before the answer exists, so `--scene openworld` cannot open a store at an
+   unconfigured path.
+
+`redirect.ecfg` is a one-field `.ecfg` file: a short comment and
+
+    save_path:"/absolute/path/to/saves"
+
+A relative answer is resolved against the redirect file's own directory, `~`/`~/` expands from HOME, the
+result is absolute and lexically normal, and empty answers, control characters and a target that is a
+regular file are refused with a readable reason. The prompt writes through a temp file in the same
+directory and renames it over the old one. If the file exists but is malformed or invalid, the run logs the
+reason, shows the prompt anyway, and a confirmation replaces it. Escape quits without writing, so the next
+run asks again. Once the directory is chosen, a `config.ecfg` already in it is applied before the first
+scene starts (unless `--lang` wins), so choosing an existing save directory adopts its language immediately.
+
+The directory's saved language is read before the assets exist: `MefemmaApp::on_start()` resolves the save
+directory, reads `<save dir>/config.ecfg` when `--lang` is absent, and only then creates the string table
+and fonts. The first-run prompt's callback repeats that read for the directory the player picked, and
+switches the live assets/fonts without writing the file.
 
 ## 8. Adding things a game needs
 
@@ -194,6 +295,16 @@ lists both sets.
 put it in `mefemma_core` and test it; if it draws, give it a scene or let a scene call it during `draw`.
 The framework has no world model on purpose: a game that wants an ECS, a tile map or a scene graph adds it
 here, and the framework neither knows nor cares.
+
+The one engine facility aimed at this shell is optional rather than part of it: Tile2D's
+`t2d::OpenWorld` (`docs/OPEN_WORLD.md`) is a streamed tile plane in **relative coordinates** around a
+movable origin, with absolute chunk keys for generation and the byte store. A game that wants a streamed
+tile world opts in by owning one in its own module and calling `update(camera)` from a scene; the shell
+still has no world model, but `OpenWorldScene` is that opt-in shown working, and it is where a game's
+own world module would go. Edits made in it can be persisted through the engine's optional
+`t2d::ChunkStore`, a single-file store keyed by the same absolute chunks. Damage is reported per chunk
+(`fetch()`/`scan()`) and choosing to drop, regenerate or abort is the game's policy, never a silent
+engine decision.
 
 **A service** - derive from `GameServices`, add the members, implement them in `MefemmaApp`. The scenes see
 the game's own type because they are the game's.
@@ -222,6 +333,11 @@ function of, and it has two consequences a game author has to know:
   already exists. Mefemma's table currently reports **0 symbols outside the surface**.
 * `codetab build` compiles the table itself, with the flags in `games/mefemma/CMakeLists.txt`. A new source
   file has to be added to `MEFEMMA_TABLE_SOURCES` as well as to a library target - the table is what runs.
+* opting into the engine's optional open world follows the same rule: a scene or module shipped through
+  the table that calls `t2d::OpenWorld` needs those symbols added to `engine.api` with the
+  generated-surface workflow before `codetab api --surface engine.api` will pass. `OpenWorldScene` is
+  that case: the 25 symbols it uses are in the surface at tier B (23 in `t2d/sim`, 2 in `t2d/core`),
+  and both the game's table and the mine's table report 0 symbols outside it.
 
 The launcher also merges mods: `mefemma_game --table mods/x/x.codetab` and any `.codetab` in the `packs`
 directory beside the executable. A mod is data plus a table; it is not a dynamic library and it cannot link
@@ -242,17 +358,58 @@ The point of a second game project is that it can make different decisions from 
 does not inherit the mine game's screens, its content model or its layer rules, and it should not grow them
 back by accident.
 
+The one exception is opt-in and lives in the engine rather than in this shell: `t2d::OpenWorld`
+(`docs/OPEN_WORLD.md`) covers the "a world" row for a game that wants a streamed tile world in relative
+coordinates around a movable origin, and `t2d::ChunkStore` is its optional single-file persistence
+(which reports a damaged chunk to the game and leaves the drop/regenerate/abort policy to it).
+The shell still ships no world of its own; the `openworld` example scene shows the opt-in working, and a
+game that never asks for it pays nothing.
+
 ## 11. Testing and scripted runs
 
 Everything in `mefemma_core` is testable without a window: settings, input, the draw list, the stack and
-the paths. `test_scenes` goes one step further and drives **the start screen and the playground** with a fake
-`GameServices`: the five rows and their wrap-around, Enter opening the not-implemented note, Escape closing
-it, Escape on the menu (and the Quit row) leaving the game, the pointer selecting a row and a click opening
-it, the start screen drawing the sign with a linear filter, and the playground's grid moving when the
-keyboard pans the camera. The shell's own half is exercised by running it:
+the paths. `test_scenes` goes one step further and drives **the start screen (including its internal
+settings menu) and the playground** with a fake `GameServices`: the five rows and their wrap-around, Enter
+on New Game opening the not-implemented note, Escape closing it, Escape on the menu (and the Quit row)
+leaving the game, the pointer selecting a row and a click opening it, the start screen drawing the sign
+with a linear filter, and the playground's grid moving when the keyboard pans the camera.
+
+The first-run prompt has its own cases in the same suite: the default save directory prefilled, typing and
+Backspace/Delete/Home/End/Left/Right through the field (CJK text included), Enter creating the directory,
+writing `redirect.ecfg` with the normalised absolute path and replacing the prompt with the factory's scene,
+an empty answer showing `savepath.error.empty` and staying, a regular file as the target showing
+`savepath.error.failed` and staying, Escape quitting without writing, and the draw list containing the
+title, question, hint, field text and a `...` tail for a long path. `test_first_run` covers the core under
+it: `redirect.ecfg` save/load (including a quote and a backslash), missing/malformed/wrong-typed/empty
+files, atomic replacement, the default paths, `normalize_save_path` and `ensure_save_directory`, the
+UTF-8 `PathInput` field model, and the save directory's `config.ecfg` (path, three-language round trip,
+missing/malformed/wrong-type/unknown/no-language cases, parent creation and atomic replacement).
+
+The internal settings menu has its own cases: Enter on Settings opening it with LANGUAGE selected,
+W/S/Up/Down wrapping between its two rows, LEFT/RIGHT/A/D changing and wrapping the language through all
+three values only while LANGUAGE is focused (the fake counts `set_language()` calls; BACK ignores the
+keys), Enter/Space advancing the language and keeping the menu open, Escape closing without quitting, the
+draw list containing the four `settings.*` labels, the endonym and the sign behind, no title row
+highlighted while it is open, hover/click on both rows, and a click outside not reaching the title rows
+behind.
+
+`test_open_world_scene` drives the open-world scene the same way, against a real `ChunkStore` file in a
+temporary directory: both test chunks generated and drawn through the two atlas uv rectangles, a click
+cycling A/B/empty, an edit saved and reopened while unedited cells regenerate, S and leaving saving, an
+unwritable store reported but harmless, and the camera panning away, recentring and coming back so the
+edited chunk is restored from the store under its **absolute** key. Its far-origin case builds the scene at
+`{kMaxAbsoluteChunk - 4, -(kMaxAbsoluteChunk - 4)}`, edits one tile in each of the two far chunks,
+saves/reopens and recentres there - the whole scene at about 1.1e12 cells from the default origin, with
+every relative cell still tiny. The shell's own half is exercised by running it:
 
     ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 4 --scene playground \
-        --pointer 900,420 --screenshot out.png
+        --save-path /tmp/mefemma-saves --pointer 900,420 --screenshot out.png
+    ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 2 --scene openworld \
+        --save-path /tmp/mefemma-saves --screenshot out.png
+
+The first-run prompt itself is exercised through the real launcher with a redirect path that does not exist
+and the debug input server; Enter then creates that directory and `redirect.ecfg`, and the next run with the
+same `--redirect` starts at the title without a prompt.
 
 The screenshots in `README.md` were produced exactly this way. On a machine with no Vulkan device, the
 renderer tests of Tile2D skip; a game's own logic tests do not need a device at all, which is the reason the

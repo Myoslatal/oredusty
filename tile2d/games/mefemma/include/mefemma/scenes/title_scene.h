@@ -5,10 +5,11 @@
 // coordinates** (1920 x 1080) and mapped onto whatever the window is, so the menu stays inside the paper
 // at every size and aspect ratio.
 //
-// The rows are New Game, Save List, Settings, Mods and Quit. **The first four only say that they are not
-// implemented yet** - this screen is the framework's, and the game behind each row is the designer's.
-// Quit is real because a start screen that cannot leave is not a start screen. The action of a row lives
-// in activate(); replacing the placeholder there is where a game starts.
+// The rows are New Game, Save List, Settings, Mods and Quit. Settings opens a real **internal settings
+// menu** (language + back) drawn over the sign; New Game, Save List and Mods still say that they are not
+// implemented yet - the game behind those rows is the designer's. Quit is real because a start screen that
+// cannot leave is not a start screen. The action of a row lives in activate(); replacing the placeholder
+// there is where a game starts.
 #pragma once
 
 #include <mefemma/scene.h>
@@ -21,6 +22,10 @@ namespace mefemma {
 /// What a row of the start screen does.
 enum class StartAction : t2d::u8 { NewGame, LoadGame, Settings, Mods, Quit, Count };
 inline constexpr usize kStartActionCount = static_cast<usize>(StartAction::Count);
+
+/// What a row of the internal settings menu does.
+enum class SettingsAction : t2d::u8 { Language, Back, Count };
+inline constexpr usize kSettingsActionCount = static_cast<usize>(SettingsAction::Count);
 
 class TitleScene final : public Scene {
 public:
@@ -37,6 +42,16 @@ public:
     [[nodiscard]] StartAction modal_action() const { return modal_action_; }
     static constexpr usize item_count() { return kStartActionCount; }
 
+    // --- the internal settings menu, for a test and for a game that embeds this screen -----------------
+    [[nodiscard]] bool settings_open() const { return settings_open_; }
+    [[nodiscard]] usize settings_selected() const { return settings_selected_; }
+    [[nodiscard]] SettingsAction settings_action() const {
+        return static_cast<SettingsAction>(settings_selected_);
+    }
+    static constexpr usize settings_item_count() { return kSettingsActionCount; }
+    /// The screen rectangle settings row \p index covers at \p viewport: the same layout draw() uses.
+    [[nodiscard]] static t2d::Aabb2 settings_item_rect(t2d::Vec2 viewport, usize index);
+
     /// The screen rectangle row \p index covers at \p viewport: the same layout draw() uses, so a test
     /// or an embedding can hit-test a row without copying the numbers.
     [[nodiscard]] static t2d::Aabb2 item_rect(t2d::Vec2 viewport, usize index);
@@ -44,10 +59,16 @@ public:
 private:
     void move_selection(i32 delta);
     void activate(GameServices& services);
+    void move_settings_selection(i32 delta);
+    void activate_settings(GameServices& services);
+    void change_language(GameServices& services, i32 delta);
+    [[nodiscard]] static t2d::Language next_language(t2d::Language language, i32 delta);
 
     usize selected_ = 0;
     bool modal_open_ = false;
     StartAction modal_action_ = StartAction::NewGame;
+    bool settings_open_ = false;
+    usize settings_selected_ = 0;
     /// Whether the pointer was inside the window on the previous frame: entering it is a pointer event too,
     /// and it selects the row it landed on without fighting the keyboard when the pointer is merely resting.
     bool pointer_was_inside_ = false;

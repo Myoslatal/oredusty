@@ -1,9 +1,11 @@
 #include <mefemma/scenes/title_scene.h>
 
 #include <t2d/core/log.h>
+#include <t2d/text/locale.h>
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <string>
 #include <string_view>
 
@@ -47,9 +49,24 @@ constexpr Vec2 kModalTitleCentre{kPaperCentreX, 462.0f};
 constexpr Vec2 kModalBodyCentre{kPaperCentreX, 566.0f};
 constexpr Vec2 kModalBackCentre{kPaperCentreX, 654.0f};
 
+// The internal settings menu shares the modal's image-space panel and the title rows' width/pitch: it is
+// the same sign, a different page.
+constexpr Aabb2 kSettingsBox{Vec2{456.0f, 400.0f}, Vec2{1396.0f, 704.0f}};
+constexpr Vec2 kSettingsTitleCentre{kPaperCentreX, 440.0f};
+constexpr f32 kSettingsRuleY = 474.0f;
+constexpr f32 kSettingsFirstItemTop = 492.0f;
+constexpr Aabb2 kSettingsItemBoxes[kSettingsActionCount] = {
+    Aabb2{Vec2{kItemLeft, kSettingsFirstItemTop},
+          Vec2{kItemLeft + kItemWidth, kSettingsFirstItemTop + kItemHeight}},
+    Aabb2{Vec2{kItemLeft, kSettingsFirstItemTop + kItemPitch},
+          Vec2{kItemLeft + kItemWidth, kSettingsFirstItemTop + kItemPitch + kItemHeight}},
+};
+constexpr Vec2 kSettingsHintCentre{kPaperCentreX, 664.0f};
+
 constexpr const char* kActionIds[kStartActionCount] = {
     "start.new_game", "start.load_game", "start.settings", "start.mods", "start.quit",
 };
+constexpr const char* kSettingsIds[kSettingsActionCount] = {"settings.language", "settings.back"};
 
 [[nodiscard]] const char* label_of(StartAction action) {
     const usize index = static_cast<usize>(action);
@@ -105,6 +122,11 @@ t2d::Aabb2 TitleScene::item_rect(t2d::Vec2 viewport, usize index) {
     return sign_layout(viewport).box(kItemBoxes[index]);
 }
 
+t2d::Aabb2 TitleScene::settings_item_rect(t2d::Vec2 viewport, usize index) {
+    if (index >= kSettingsActionCount) return {};
+    return sign_layout(viewport).box(kSettingsItemBoxes[index]);
+}
+
 void TitleScene::on_enter(GameServices& services) {
     (void)services;
     T2D_INFO("scene: title (start screen, {} rows)", kStartActionCount);
@@ -122,11 +144,44 @@ void TitleScene::activate(GameServices& services) {
         services.quit();
         return;
     }
-    // The four other rows are the game's, and the game does not exist yet: the screen says so instead of
+    if (action == StartAction::Settings) {
+        // Settings is real now: an internal menu over the same sign, not the placeholder note.
+        settings_open_ = true;
+        settings_selected_ = 0;
+        T2D_INFO("start: settings menu (language, back)");
+        return;
+    }
+    // The three other rows are the game's, and the game does not exist yet: the screen says so instead of
     // silently doing nothing. Replacing this with the real transition is where a game starts.
     modal_open_ = true;
     modal_action_ = action;
     T2D_INFO("start: '{}' is not implemented yet", label_of(action));
+}
+
+void TitleScene::move_settings_selection(i32 delta) {
+    const i32 count = static_cast<i32>(kSettingsActionCount);
+    const i32 next = ((static_cast<i32>(settings_selected_) + delta) % count + count) % count;
+    settings_selected_ = static_cast<usize>(next);
+}
+
+t2d::Language TitleScene::next_language(t2d::Language language, i32 delta) {
+    const i32 count = static_cast<i32>(t2d::kLanguageCount);
+    const i32 next = ((static_cast<i32>(language) + delta) % count + count) % count;
+    return static_cast<t2d::Language>(next);
+}
+
+void TitleScene::change_language(GameServices& services, i32 delta) {
+    const t2d::Language next = next_language(services.language(), delta);
+    services.set_language(next);
+    T2D_INFO("start: language chosen: {}", t2d::language_code(next));
+}
+
+void TitleScene::activate_settings(GameServices& services) {
+    if (settings_action() == SettingsAction::Back) {
+        settings_open_ = false;
+        return;
+    }
+    change_language(services, 1);
 }
 
 void TitleScene::update(GameServices& services, f32 delta_seconds) {
@@ -140,6 +195,46 @@ void TitleScene::update(GameServices& services, f32 delta_seconds) {
     const bool pointer_moved = input.mouse_delta_x() != 0.0f || input.mouse_delta_y() != 0.0f;
     const bool pointer_entered = inside && !pointer_was_inside_;
     pointer_was_inside_ = inside;
+
+    if (settings_open_) {
+        // The menu is a page of the same screen: the pointer selects its rows, the keyboard answers, and
+        // the title rows behind it are inert. The two branches are mutually exclusive by construction.
+        const t2d::Vec2 settings_viewport = services.viewport();
+        const t2d::Vec2 settings_mouse{input.mouse_x(), input.mouse_y()};
+        if (inside && (pointer_moved || pointer_entered)) {
+            for (usize index = 0; index < kSettingsActionCount; ++index) {
+                if (!settings_item_rect(settings_viewport, index).contains(settings_mouse)) continue;
+                settings_selected_ = index;
+                break;
+            }
+        }
+
+        // Keyboard after the pointer, for the same reason as the title rows: a resting pointer must not
+        // undo what the player just selected.
+        if (input.key_pressed(Key::Up) || input.key_pressed(Key::W)) move_settings_selection(-1);
+        if (input.key_pressed(Key::Down) || input.key_pressed(Key::S)) move_settings_selection(1);
+        // Left/Right belong to the row that has a value: BACK has none, so the keys do nothing there.
+        if (settings_action() == SettingsAction::Language) {
+            if (input.key_pressed(Key::Left) || input.key_pressed(Key::A)) change_language(services, -1);
+            if (input.key_pressed(Key::Right) || input.key_pressed(Key::D)) change_language(services, 1);
+        }
+
+        if (input.key_pressed(Key::Enter) || input.key_pressed(Key::Space)) {
+            activate_settings(services);
+            return;
+        }
+        if (inside && input.mouse_pressed(MouseButton::Left)) {
+            for (usize index = 0; index < kSettingsActionCount; ++index) {
+                if (!settings_item_rect(settings_viewport, index).contains(settings_mouse)) continue;
+                settings_selected_ = index;
+                activate_settings(services);
+                return;
+            }
+            // A click outside the panel is not a request: the title rows behind must not react either.
+        }
+        if (input.key_pressed(Key::Escape)) settings_open_ = false;
+        return;
+    }
 
     if (modal_open_) {
         // Any of "get me out of here": the note is not a form, it has nothing to confirm.
@@ -210,7 +305,7 @@ void TitleScene::draw(GameServices& services, DrawList& out) const {
     // --- the five rows -------------------------------------------------------------------------------
     for (usize index = 0; index < kStartActionCount; ++index) {
         const Aabb2 box = sign.box(kItemBoxes[index]);
-        const bool active = index == selected_ && !modal_open_;
+        const bool active = index == selected_ && !modal_open_ && !settings_open_;
         out.rect(box.translated(Vec2{sign.length(4.0f), sign.length(5.0f)}), kShadow);
         out.rect(box, active ? kOrange : kWood);
         out.rect_outline(box, std::max(1.0f, sign.length(3.0f)), active ? kCream : kOrange);
@@ -234,6 +329,65 @@ void TitleScene::draw(GameServices& services, DrawList& out) const {
     const std::string hint(services.text("start.hint"));
     const u16 hint_size = fitted_size(services, hint, scaled_size(22.0f, sign), sign.length(1180.0f));
     centred_text(out, services, hint, sign.point(kHintCentre), hint_size, kInk);
+
+    // --- the internal settings menu, over the sign ----------------------------------------------------
+    if (settings_open_) {
+        out.rect(Aabb2{Vec2{0.0f, 0.0f}, viewport}, kOverlay);
+        const Aabb2 panel = sign.box(kSettingsBox);
+        out.rect(panel.translated(Vec2{sign.length(8.0f), sign.length(10.0f)}), kShadow);
+        out.rect(panel, kWoodDark);
+        out.rect_outline(panel, std::max(1.0f, sign.length(5.0f)), kOrange);
+        out.rect_outline(panel.expanded(-sign.length(16.0f)), std::max(1.0f, sign.length(2.0f)),
+                         rgba(255, 196, 84, 90));
+
+        const std::string heading(services.text("settings.title"));
+        const u16 heading_size =
+            fitted_size(services, heading, scaled_size(46.0f, sign), panel.width() - sign.length(120.0f));
+        centred_text(out, services, heading, sign.point(kSettingsTitleCentre), heading_size, kCream);
+        out.rect(Aabb2{sign.point(Vec2{kPaperCentreX - 300.0f, kSettingsRuleY}),
+                       sign.point(Vec2{kPaperCentreX + 300.0f, kSettingsRuleY + 4.0f})},
+                 kOrange);
+
+        for (usize index = 0; index < kSettingsActionCount; ++index) {
+            const Aabb2 box = sign.box(kSettingsItemBoxes[index]);
+            const bool active = index == settings_selected_;
+            out.rect(box.translated(Vec2{sign.length(4.0f), sign.length(5.0f)}), kShadow);
+            out.rect(box, active ? kOrange : kWood);
+            out.rect_outline(box, std::max(1.0f, sign.length(3.0f)), active ? kCream : kOrange);
+            if (active) {
+                const f32 tab = sign.length(9.0f);
+                const Vec2 tab_centre{box.min.x + sign.length(26.0f), (box.min.y + box.max.y) * 0.5f};
+                out.rect(Aabb2{Vec2{tab_centre.x - tab * 0.5f, tab_centre.y - sign.length(16.0f)},
+                               Vec2{tab_centre.x + tab * 0.5f, tab_centre.y + sign.length(16.0f)}},
+                         kCream);
+            }
+
+            const f32 row_middle_y = (box.min.y + box.max.y) * 0.5f;
+            const std::string label(services.text(kSettingsIds[index]));
+            const u16 label_size = fitted_size(services, label, scaled_size(33.0f, sign),
+                                               box.width() * 0.5f - sign.length(40.0f));
+            const t2d::TextMetrics label_metrics = services.measure_text(label, label_size);
+            out.text(label, Vec2{box.min.x + sign.length(56.0f), row_middle_y - label_metrics.height * 0.5f},
+                     label_size, active ? kInk : kCream);
+
+            if (static_cast<SettingsAction>(index) == SettingsAction::Language) {
+                // The value is the language's own endonym in angle brackets, right aligned in the row.
+                const std::string value = std::format("< {} >", t2d::language_name(services.language()));
+                const u16 value_size = fitted_size(services, value, scaled_size(28.0f, sign),
+                                                   box.width() * 0.5f - sign.length(40.0f));
+                const t2d::TextMetrics value_metrics = services.measure_text(value, value_size);
+                out.text(value, Vec2{box.max.x - sign.length(30.0f) - value_metrics.width,
+                                     row_middle_y - value_metrics.height * 0.5f},
+                         value_size, active ? kInk : kCream);
+            }
+        }
+
+        const std::string settings_hint(services.text("settings.hint"));
+        const u16 settings_hint_size =
+            fitted_size(services, settings_hint, scaled_size(22.0f, sign), panel.width() - sign.length(80.0f));
+        centred_text(out, services, settings_hint, sign.point(kSettingsHintCentre), settings_hint_size, kOrange);
+        return;
+    }
 
     // --- the note the unimplemented rows open ---------------------------------------------------------
     if (!modal_open_) return;

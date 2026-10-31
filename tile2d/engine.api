@@ -8,8 +8,10 @@
 # Anything else the engine's own namespaces contain is refused at load time, with the symbol named.
 # The platform (libc, libstdc++, Vulkan, GLFW) is not part of this list and never checked.
 #
-# Generated from the symbols the game's own table asks the host for (codetab dump), which is the
-# measured floor of the surface: what the game itself needs, a mod needs a subset of.
+# Started from the symbols the game's own table asks the host for (codetab dump) - the measured
+# floor of the surface - and extended only where a shipped game needed a symbol the list had missed:
+# the Mefemma open-world scene (tier B, t2d/sim and two Camera2D calls) and the mine's text-input
+# field and drill turn (the six symbols at the end). A mod needs a subset of what the games use.
 
 engine 1.0
 
@@ -100,3 +102,41 @@ B _ZNK3ore11CommandLine5valueB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE 
 B _ZNK3ore11CommandLine6valuesB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE ore/app   # ore::CommandLine::values[abi:cxx11]
 B _ZNK3t2d10GlyphAtlas4pageEj t2d/render   # t2d::GlyphAtlas::page
 B _ZNK3t2d12TextRenderer7measureESt17basic_string_viewIcSt11char_traitsIcEERKNS_7FontSetERKNS_9TextStyleEf t2d/render   # t2d::TextRenderer::measure
+
+# The Mefemma open-world scene's symbols (games/mefemma/src/scenes/open_world_scene.cpp). They are the
+# measured usage of the scene in the game's own table, not a general promise that all of t2d/sim is
+# published: OpenWorld/WorldChunk/ChunkStore become offered here because a game scene calls them.
+B _ZN3t2d8Camera2D4moveENS_4Vec2E t2d/core   # t2d::Camera2D::move
+B _ZNK3t2d8Camera2D13visible_worldEv t2d/core   # t2d::Camera2D::visible_world
+B _ZN3t2d9OpenWorldC1ERKNS_15OpenWorldConfigE t2d/sim   # t2d::OpenWorld::OpenWorld
+B _ZN3t2d9OpenWorld10set_originERKNS_8ChunkKeyE t2d/sim   # t2d::OpenWorld::set_origin
+B _ZN3t2d9OpenWorld13set_generatorESt8functionIFvRKNS_8ChunkKeyERNS_10WorldChunkEEE t2d/sim   # t2d::OpenWorld::set_generator
+B _ZN3t2d9OpenWorld9set_storeESt8functionIFSt8optionalISt6vectorIhSaIhEEERKNS_8ChunkKeyEEES1_IFbS9_St4spanIKhLm18446744073709551615EEEE t2d/sim   # t2d::OpenWorld::set_store
+B _ZN3t2d9OpenWorld6updateERKNS_8Camera2DE t2d/sim   # t2d::OpenWorld::update
+B _ZN3t2d9OpenWorld5flushEv t2d/sim   # t2d::OpenWorld::flush
+B _ZN3t2d9OpenWorld3setEiit t2d/sim   # t2d::OpenWorld::set
+B _ZN3t2d9OpenWorld8recenterERKNS_8Camera2DE t2d/sim   # t2d::OpenWorld::recenter
+B _ZNK3t2d9OpenWorld11OriginShift14position_deltaEf t2d/sim   # t2d::OpenWorld::OriginShift::position_delta
+B _ZNK3t2d9OpenWorld2atEii t2d/sim   # t2d::OpenWorld::at
+B _ZNK3t2d9OpenWorld9chunks_inERKNS_5Aabb2Ei t2d/sim   # t2d::OpenWorld::chunks_in
+B _ZNK3t2d9OpenWorld9is_loadedERKNS_10ChunkCoordE t2d/sim   # t2d::OpenWorld::is_loaded
+B _ZNK3t2d9OpenWorld6originEv t2d/sim   # t2d::OpenWorld::origin
+B _ZNK3t2d9OpenWorld17dirty_chunk_countEv t2d/sim   # t2d::OpenWorld::dirty_chunk_count
+B _ZNK3t2d9OpenWorld20resident_chunk_countEv t2d/sim   # t2d::OpenWorld::resident_chunk_count
+B _ZN3t2d10WorldChunk5tilesEi t2d/sim   # t2d::WorldChunk::tiles
+B _ZN3t2d10ChunkStore4openERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPS6_ t2d/sim   # t2d::ChunkStore::open
+B _ZN3t2d10ChunkStore5flushEbPNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE t2d/sim   # t2d::ChunkStore::flush
+B _ZN3t2d10ChunkStore6loaderEv t2d/sim   # t2d::ChunkStore::loader
+B _ZN3t2d10ChunkStore5saverEv t2d/sim   # t2d::ChunkStore::saver
+B _ZNK3t2d10ChunkStore11chunk_countEv t2d/sim   # t2d::ChunkStore::chunk_count
+B _ZN3t2d10ChunkStoreC1EOS0_ t2d/sim   # t2d::ChunkStore::ChunkStore(ChunkStore&&)
+B _ZN3t2d10ChunkStoreD1Ev t2d/sim   # t2d::ChunkStore::~ChunkStore
+# The mine table's measured demand that this list had missed (the text-input field and the drill's turn):
+# found while checking BOTH game tables for the open-world scene, and added rather than left as a silent
+# same-version acceptance.
+B _ZN3ore6Window22set_text_input_enabledEb ore/platform   # ore::Window::set_text_input_enabled
+B _ZN3ore6Window26set_text_input_cursor_rectEiiii ore/platform   # ore::Window::set_text_input_cursor_rect
+B _ZN3t2d11utf8_decodeESt17basic_string_viewIcSt11char_traitsIcEEm t2d/text   # t2d::utf8_decode
+B _ZN3t2d11utf8_encodeERNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEj t2d/text   # t2d::utf8_encode
+B _ZN3t2d11utf8_lengthESt17basic_string_viewIcSt11char_traitsIcEE t2d/text   # t2d::utf8_length
+B _ZN3t2d3Rng10next_floatEv t2d/core   # t2d::Rng::next_float

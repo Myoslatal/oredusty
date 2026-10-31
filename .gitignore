@@ -49,6 +49,8 @@ imgui.ini
 !**/docs/**/*.png
 # Content art is content, not a capture: what the game ships, what a pack project keeps beside its
 # .ecfg, and the pictures the tests load.
+!tile2d/games/mefemma/assets/textures/start_screen.png
+!tile2d/games/mefemma/assets/textures/test_tiles.png
 !**/content/art/**/*.png
 !**/packs/**/art/**/*.png
 

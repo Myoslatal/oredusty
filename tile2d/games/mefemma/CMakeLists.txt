@@ -2,16 +2,19 @@
 #
 # mefemma_core is deliberately free of any graphics dependency: settings, input, the draw list, the scene
 # stack and the paths that find the game's files. It is testable in milliseconds and could run on a server.
-# mefemma_app is the half that talks to the GPU: assets, the 2D renderer, the application shell and the two
-# scenes that ship as examples.
+# mefemma_app is the half that talks to the GPU: assets, the 2D renderer, the application shell and the
+# three scenes that ship as examples.
 #
 # The game itself is **not linked into the executable**: it is compiled into a code table that the launcher
 # merges with whatever mods are beside it (docs/TABLES.md).
 
 add_library(mefemma_core STATIC
+    src/config.cpp
     src/data_paths.cpp
     src/draw_list.cpp
     src/input.cpp
+    src/path_input.cpp
+    src/redirect.cpp
     src/scene.cpp
     src/settings.cpp
 )
@@ -36,7 +39,9 @@ add_library(mefemma_app STATIC
     src/app.cpp
     src/assets.cpp
     src/renderer2d.cpp
+    src/scenes/open_world_scene.cpp
     src/scenes/playground_scene.cpp
+    src/scenes/save_path_scene.cpp
     src/scenes/title_scene.cpp
 )
 add_library(mefemma::app ALIAS mefemma_app)
@@ -44,7 +49,7 @@ t2d_apply_settings(mefemma_app)
 target_link_libraries(mefemma_app PUBLIC mefemma_core t2d::render ore::ore)
 
 # ------------------------------------------------------------- the game, as a code table ----------
-# Everything the game is - its logic, its shell and its two example scenes - is compiled into **one table**
+# Everything the game is - its logic, its shell and its scenes - is compiled into **one table**
 # instead of being linked into the executable. The flag that matters is -fsemantic-interposition: it keeps a
 # call inside the game a call through a relocation, which is what lets a mod table merged after it replace a
 # function of the game and have the game's own calls follow.
@@ -59,11 +64,16 @@ set(MEFEMMA_TABLE_SOURCES
     src/app.cpp
     src/assets.cpp
     src/renderer2d.cpp
+    src/scenes/open_world_scene.cpp
     src/scenes/playground_scene.cpp
+    src/scenes/save_path_scene.cpp
     src/scenes/title_scene.cpp
+    src/config.cpp
     src/data_paths.cpp
     src/draw_list.cpp
     src/input.cpp
+    src/path_input.cpp
+    src/redirect.cpp
     src/scene.cpp
     src/settings.cpp
 )

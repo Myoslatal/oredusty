@@ -15,18 +15,18 @@ that direction. What is left is what the game actually uses, and it is all teste
 | Module | What it does | Tested by |
 |---|---|---|
 | `t2d/core` | types, logging, deterministic RNG (xoshiro256**), 2D math, the **2D camera** (pan, zoom about an anchor, fit, clamp, world↔screen, the cell range a viewport touches), byte streams with varints, the `.ecfg` reader, the dynamic loader, **where the running program is** (so a game can find what travels with it), the **object reader and code tables** (see below), CLI | `test_ecfg`, `test_module`, `test_camera2d`, `test_executable`, `test_code_table` |
-| `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring) and the tileset (what a tile id means for physics, where it lives in an atlas) | `test_tilemap` |
+| `t2d/sim` | the tile map (chunked, 1..32 layers, collision with layer masks, RLE serialisation, checksum, ASCII authoring), the tileset (what a tile id means for physics, where it lives in an atlas) and the **open world** — an optional facility for Mefemma: unbounded 32×32 chunks in **relative coordinates** around a movable origin, loading/unloading margins, generation, and a **version-2 file-backed chunk store** (in-file hash index with per-slot CRCs, append-only CRC records, corruption reports and game-chosen policy) keyed by **absolute** chunk keys | `test_tilemap`, `test_open_world`, `test_chunk_store` |
 | `t2d/text` | the font engine: sfnt/TTC containers, cmaps, TrueType `glyf` **and** CID-keyed CFF outlines, analytic anti-aliased rasterising, UTF-8 layout, language tables | `test_font`, `test_cff`, `test_text` |
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/save` | the save archive: a versioned `.t2dsave` container (magic, game name and version, chunks with id/version/size/CRC-32) with encode/decode, file helpers and payload reader/writer; **header only**, so a game compiles it into itself | `test_save` |
-| `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer, the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
+| `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer that draws a bounded `TileMap` (absolute authored cells) or a resident `OpenWorld` (relative space, chunk culling and chunk/tile stats), the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
 | `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save`, `test_research`, `test_research_state`, `test_text_input`, `test_save_library`, `test_save_list` |
-| `games/mefemma` | a **second, independent game project**: its own scene stack, DrawList, 2D renderer, assets, input and settings — the framework a game is written on, with no world model and no content of its own | `test_draw_list`, `test_scene_stack`, `test_settings`, `test_input`, `test_data_paths`, `test_scenes` |
+| `games/mefemma` | a **second, independent game project**: its own scene stack, DrawList, 2D renderer, assets, input and settings — the framework a game is written on, with no world model and no content of its own (its first-run scene asks once for a save directory and records it in `redirect.ecfg`; the Settings menu saves the language in that save directory's `config.ecfg`; the optional engine open world is shown working by its `openworld` scene: two test tiles, two test chunks, streamed, saved, and placeable at an ultra-far absolute chunk; see below) | `test_draw_list`, `test_scene_stack`, `test_settings`, `test_input`, `test_data_paths`, `test_first_run`, `test_scenes`, `test_open_world_scene` |
 
 ## Layout
 
     include/t2d/core      types, log, deterministic RNG, 2D math, the 2D camera, byte streams, .ecfg, CLI
-    include/t2d/sim       tile map (chunked, multi-layer, collision), tileset
+    include/t2d/sim       tile map (chunked, multi-layer, collision), tileset, open world (relative-coordinate streamed chunks)
     include/t2d/text      font engine (TrueType + CFF), rasterising, UTF-8, language tables
     include/t2d/net       ILink, shared-memory link (mmap + lock-free SPSC rings), KCP, UDP, protocol
     include/t2d/save      the save archive: .t2dsave encode/decode, chunk payload writer/reader, CRC-32
@@ -55,12 +55,14 @@ parallel** - the build trees are independent, and each target's tests run with `
 takes about three minutes one at a time finishes in well under one. The job count is split between the
 targets (`VERIFY_JOBS=8 tools/verify.sh` to say how many cores to use); logs land in `build/verify/`.
 
-The whole suite is pure CPU work and finishes in about four seconds (40 suites, measured with `ctest` on
+The whole suite is pure CPU work and finishes in about five seconds (42 suites, measured with `ctest` on
 the `mine-debug` preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
 interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
 without Vulkan, GLFW or either game — the split that lets a dedicated server exist later.
 
     tests/test_tilemap            17 cases / 359 checks  chunked storage, tile layers, masks, collision, serialisation, ASCII
+    tests/test_open_world         36 cases / 736 checks  relative coordinates and a movable origin: active rebasing, absolute chunk keys for generation/store, margins, edits, resident-only queries, and the near-limit far origin
+    tests/test_chunk_store        29 cases / 6200 checks  a single-file chunk store (v2): hash index with per-slot CRCs, corruption isolation, fetch/scan reports, resync, growth/compaction and game-chosen policy
     tests/test_camera2d            7 cases /1986 checks  screen/world mapping, zooming about an anchor, fitting a 512² map, bounding the view
     tests/test_ecfg               29 cases / 180 checks  the configuration format, `__include`, `__not_main`, and the shipped example.ecfg
     tests/test_save               11 cases / 158 checks  the .t2dsave container: chunks, CRC-32, the limits, and two unrelated games sharing it
@@ -73,7 +75,7 @@ without Vulkan, GLFW or either game — the split that lets a dedicated server e
     tests/test_kcp                11 cases / 213 checks  reliability over a lossy link, 1 MiB transfer, wire format
     tests/test_protocol           15 cases /1265 checks  framing, every payload, truncation, the shared-memory rings
     tests/test_sprite_projection   2 cases /  29 checks  the 2D projection, without a GPU
-    tests/test_render_offscreen   11 cases /  76 checks  real rendering with pixel readback, text inside its line box, and a 512² map culled to the view (skips without a device)
+    tests/test_render_offscreen   17 cases / 169 checks  real rendering with pixel readback, text inside its line box, a 512² map culled to the view, and a relative-coordinate open world culled by chunk and by view, including one a million chunks and one at the near-limit absolute origin (skips without a device)
     games/mine/tests/test_mine_menu      12 cases / 274 checks  the start screen as a state machine: the save submenu and its pages, too
     games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
@@ -129,6 +131,118 @@ a layer with `kEmptyTile` gives them all back (`test_tilemap` asserts exactly th
   existing map at an offset, and `to_ascii(layer, ...)` dumps one back out. Unknown characters are
   reported with their position and left empty — silently dropping them once cost a demo level its
   entire ground.
+
+## The open world (an optional facility for Mefemma)
+
+A fixed map has edges; `t2d::OpenWorld` (`t2d/sim/open_world.h`) does not. It is **not the mine's map
+model**: it is an optional engine facility intended for the Mefemma shell, and ordinary maps —
+`TileMap`, the mine's fixed layers — keep their absolute authored cell coordinates and do not use it
+at all. What it adds is a streamed tile plane whose gameplay, query and render coordinates are
+**relative to a movable origin**, so f32 geometry stays small and precise however far the world
+extends.
+
+* **Two coordinate spaces, on purpose.** `ChunkKey` (i64) is the ABSOLUTE chunk identity: generation
+  (`ChunkGenerator`, `chunk_seed`, `chunk_rng`), the byte store callbacks and the resident map use it,
+  so the same absolute chunk always regenerates the same content and keeps the same store key.
+  `ChunkCoord` (i32) and i32 relative cells are what every streaming, query and render call takes;
+  `chunks_in`, `update`, `find_chunk`, `ensure_chunk`, `unload_chunk`, `flush(coord)`, `at`, `set`,
+  `topmost`, the collision queries, `cell_bounds` and `draw_world` are all relative. `absolute_of` /
+  `relative_of` (nullopt outside i32) and `absolute_cell_x/y` convert between the two; the default
+  origin is absolute chunk {0, 0}.
+* **The origin moves; identity does not.** `set_origin(key)` clamps to ±2^35 absolute chunks and
+  returns an `OriginShift` (new − old, in absolute cells); `OriginShift::position_delta(tile_size)`
+  is the offset to add to every relative position (`-shift * tile`) so the camera and entities keep
+  looking at the same absolute place. `recenter(camera)` is the convenience: the new origin is the
+  absolute chunk containing the camera's relative centre. Resident chunks are re-addressed, never
+  reloaded — content and dirty flags survive a rebase — and because generation and the store use
+  absolute keys, a save key does not change either.
+* **Coordinates and storage.** Relative chunk coordinates are floor division by 32 (negative safe), and
+  a relative cell's local coordinate is always 0..31. A `WorldChunk` is 32 × 32 cells on 1..32 layers,
+  and a chunk blob carries no dimensions — just tiles.
+* **Streaming.** `update(view)` (or `update(camera)`) takes a relative view, translates the load and
+  keep rings to absolute keys, evicts chunks whose absolute key left the unload ring, then loads the
+  missing relative chunks nearest the view centre first (Manhattan distance, ties by y then x). The
+  two margins give hysteresis; `max_loaded_chunks` is a soft cap that first gives up clean chunks the
+  load does not need and otherwise counts `budget_refusals`. A view outside the practical relative
+  range — or touching more than 2^20 chunks — is a no-op.
+* **Deterministic generation.** `chunk_seed(seed, key)` is splitmix64-style mixing and
+  `chunk_rng(key)` is the generator's stream, both keyed by the ABSOLUTE chunk, so the same (seed,
+  chunk) produces the same chunk in any load order, on any platform and under any origin. A generator
+  may write through `set()`, `fill()` or the raw `tiles()`; the world clears the dirty flag afterwards,
+  so a generated chunk is never saved.
+* **Edits and the store.** `set(relative_x, relative_y, id)` makes the chunk resident first and marks
+  it dirty. `update()` saves a dirty chunk before evicting it, and a failed save — or a missing
+  saver — keeps it resident: an edit is never dropped. `flush()` clears dirty only on success and
+  returns true iff nothing is dirty. The store callbacks receive the ABSOLUTE key, so an edit survives
+  any rebase; a malformed payload is reported, counted (`restore_failures`) and regenerated.
+* **Chunk bytes.** magic `T2DC`, u8 version 1, varint layer count, then per layer RLE runs (varint run
+  length > 0, u16 tile id) over the row major 32 × 32 grid; a run never crosses a layer. The format did
+  not change with the coordinate model. Bad magic or version, a mismatched layer count, a zero or
+  overlong run, truncation and trailing bytes are refused.
+* **A file-backed store.** `t2d::ChunkStore` (`t2d/sim/chunk_store.h`, format v2) is the engine's own
+  byte store when one file is enough: a CRC-protected double header, a 72-byte-slot open-addressing hash
+  index whose halves each carry a CRC, and append-only self-describing CRC records. A lookup hashes the
+  absolute key, reads one slot and one record — never a scan; a write appends a record, flips one slot half
+  and commits the other header; growth, `compact()` and index recovery share one temp-file rewrite, and
+  unfinished tail records are recovered on open. One damaged chunk cannot take the others down: a poisoned
+  slot never ends a probe or impersonates a key, `fetch()` tells Ok/Missing/Corrupt apart, `scan()` reports
+  the damaged slots/records (resynchronising past a corrupt header), and `compact(policy)` lets the game
+  choose Abort or Drop for each corruption. `ChunkStore::loader()`/`saver()` plug straight into
+  `world.set_store()`; edits survive reopen and untouched generated chunks are never stored. See
+  docs/OPEN_WORLD.md section 7.
+* **Resident-only queries.** `at`, `topmost`, `is_solid`, `is_one_way`, `is_hazard`, `overlaps_solid`
+  and `overlaps_hazard` take relative cells, read loaded chunks only and never start a load: a missing
+  chunk reads empty. Layer masks work exactly as on `TileMap`, and there is no out-of-bounds-solid.
+* **Drawing.** `TilemapRenderer::draw_world(batch, world, tileset, relative_view, mask, tint)` walks
+  only `world.chunks_in(view, 0)`, skips non-resident chunks (holes, counted as `chunks_culled`) and
+  draws each resident chunk's layers bottom to top, only the cells that intersect the view; geometry is
+  `OpenWorld::cell_bounds(relative cell)` and the uv comes from `tile_uv_rect()`, exactly as in
+  `draw_map()`. No absolute coordinate reaches the batch, so a chunk a million chunks from the absolute
+  origin draws exactly like one at the origin. `draw_map()` and its absolute authored cells are
+  unchanged. Call `world.update(camera)` first: drawing never loads.
+* **Memory.** A tile id is 2 bytes, so one 32 × 32 layer is 2 KiB: the default 2048 chunk cap is about
+  4 MiB for a one layer world and 16 MiB for four layers, however far the world extends.
+* **Limits.** The relative space is bounded (±2^30 cells, ±2^25 chunks) so f32 stays meaningful; the
+  origin is clamped to ±2^35 absolute chunks; a view touching more than 2^20 chunks is refused rather
+  than materialised. Single threaded, no global state, no new dependencies.
+* **Mefemma.** The shell still ships **no world model**, but its `openworld` scene
+  (`--scene openworld [--world-file <path>] [--world-origin <x,y>]`) is the opt-in shown working: two
+  test tiles in two test chunks streamed around the camera, a click editing a cell, S/leaving saving
+  through `ChunkStore`, and the camera recentring (`C`) so the original chunk is later reloaded by its
+  **absolute** key. `--world-origin` moves the content to an absolute chunk (up to
+  `{2^35 - 4, -(2^35 - 4)}`); the scene sets the world's origin there before streaming, so the frame is
+  identical and only the HUD's origin line changes. That scene's 25 engine symbols are in `engine.api`
+  (tier B; `t2d/sim` 23, `t2d/core` 2). Checking the
+  mine's table against the same list uncovered six symbols it already needed but the surface had missed
+  (the text-input field, `t2d::utf8_*`, `t2d::Rng::next_float`); they are in tier B too, and now both
+  game tables report 0 symbols outside the surface.
+
+`test_open_world` pins all of it (36 cases / 736 checks): relative coordinates and the i32 extremes,
+origin shift/clamp, a rebase keeping resident content and dirty flags, generation and store keys stable
+across rebases, `recenter`, a far absolute origin keeping relative geometry small, plus every
+streaming/edit/query rule from the first iteration. The near-limit case
+(`near_the_absolute_limit_the_relative_world_streams_edits_and_restores`) puts the origin four chunks
+inside the ±2^35 clamp (about ±1.1e12 cells from the default origin, where absolute f32 cannot name a
+cell): the relative view, geometry, generation identity by absolute key, an edit through a real
+`ChunkStore` and a restore by the far absolute key, and the exact clamp at ±kMaxAbsoluteChunk all still
+hold. `test_render_offscreen` (17 cases / 169 checks)
+adds the far cases (four `draw_world` and one `draw_map` counter regression), including one whose
+absolute origin is a million chunks away and one at the near-limit clamp: both report the near-origin
+stats and pixels. `test_chunk_store` (29 cases / 6200 checks)
+pins the v2 file store: exact bytes and empty payloads, i64 extreme keys, 2048 chunks across index growth,
+space reclaim and idempotent compaction, corrupt payload/record/header handling, one-corrupt-header
+fallback, tail recovery, damaged-index rebuild, a real `OpenWorld` edit → flush → reopen → restore round
+trip, and corruption isolation: a damaged slot half or record never returns wrong bytes and never hides
+other chunks, `fetch()` reports Ok/Missing/Corrupt/NotOpen, `scan()` reports and resynchronises, and the
+game's policy decides Abort or Drop for each damaged chunk (then writes a replacement or lets the world
+regenerate it). `games/mefemma/tests/test_open_world_scene` (10 cases / 130 checks) is the in-game end of
+the same story: it drives the Mefemma scene against a real store file in a temporary directory — both test
+chunks generated and drawn through the two atlas uv rectangles, a click cycling A/B/empty, an edit saved
+and reopened while unedited cells regenerate, S and leaving saving, an unwritable path reported but
+harmless, and a camera that pans away, recentres and comes back so the edited chunk is read back under its
+absolute key. Its near-limit case builds the scene with `content_origin = {kMaxAbsoluteChunk - 4,
+-(kMaxAbsoluteChunk - 4)}`, edits one tile in each of the two far chunks, saves/reopens with the same
+origin, recentres there, and still reads the same absolute edits through the new relative addresses.
 
 ## The camera and big maps
 
@@ -818,19 +932,33 @@ copy of its shell. It has its own screens, its own architecture and its own name
   to leave the room for them ([games/mefemma/docs/FRAMEWORK.md](games/mefemma/docs/FRAMEWORK.md) says where
   each would attach).
 
-It ships the framework, the **start screen the designer drew** (a wooden sign from
-`assets/textures/start_screen.png`) and a camera playground as an example of a scene. The start screen's
-rows are **New Game, Save List, Settings, Mods and Quit**: the first four open a note that says they are not
-implemented yet - that is the one function a game replaces first - and Quit is real. It carries no gameplay
-and no game content: the designer writes those.
+It ships the framework, a **first-run save-location prompt** (asks once for a save folder and records the
+absolute path in `redirect.ecfg` beside the executable), the **start screen the designer drew** (a wooden sign
+from `assets/textures/start_screen.png`), an **internal settings menu** behind its Settings row (a LANGUAGE
+row that switches the interface language - endonyms, all three shipped tables - and a BACK row), a camera
+playground and the open-world test scene. The start screen's rows are **New Game, Save List, Settings, Mods
+and Quit**: New Game, Save List and Mods open a note that says they are not implemented yet; Settings and
+Quit are real. The language choice applies to the running game immediately and is saved in the save
+directory's `config.ecfg`; the next run starts with it, and the precedence is `--lang` >
+`<save dir>/config.ecfg` > the shipped `assets/config/game.ecfg`. F2 saves it too; a missing file falls back
+silently, a corrupt one is logged and ignored, and the shipped assets file is never rewritten.
+The save directory feeds the open-world store at `<save dir>/mefemma_openworld.t2dk`; an explicit
+`--world-file` still wins. It carries no gameplay and no game content: the designer writes those.
 
-    ./build/mefemma/debug/games/mefemma/mefemma_game                              # start screen (zh-Hans)
-    ./build/mefemma/debug/games/mefemma/mefemma_game --lang en                    # the English table
-    ./build/mefemma/debug/games/mefemma/mefemma_game --scene playground           # camera + pointer + HUD
+    # a fresh build tree asks for a save folder first; --save-path answers it for one run
+    ./build/mefemma/debug/games/mefemma/mefemma_game --save-path /tmp/mefemma-saves
+    ./build/mefemma/debug/games/mefemma/mefemma_game --lang en --save-path /tmp/mefemma-saves
+    ./build/mefemma/debug/games/mefemma/mefemma_game --scene playground --save-path /tmp/mefemma-saves
+    ./build/mefemma/debug/games/mefemma/mefemma_game --scene openworld --save-path /tmp/mefemma-saves
     ./build/mefemma/debug/games/mefemma/mefemma_game --headless --frames 4 --size 1280x720 \
-        --scene playground --pointer 900,420 --screenshot out.png          # a scripted screenshot
+        --scene playground --save-path /tmp/mefemma-saves --pointer 900,420 \
+        --screenshot out.png          # a scripted screenshot
+
+![Mefemma's first-run prompt: the default save folder is prefilled, Enter confirms, Esc quits](games/mefemma/docs/images/first_run_zh_hans.png)
 
 ![Mefemma's start screen](games/mefemma/docs/images/start_zh_hans.png)
+
+![Mefemma's internal settings menu: LANGUAGE shows the endonym, BACK returns](games/mefemma/docs/images/settings_zh_hans.png)
 
 ![A row that is not implemented yet](games/mefemma/docs/images/start_new_game_zh_hans.png)
 
@@ -838,8 +966,12 @@ and no game content: the designer writes those.
 
 Like the mine, it arrives as a code table behind a launcher (`mefemma.codetab`, entry
 `mefemma_game_main`), and its table reports **0 symbols outside `engine.api`**. Its core has no graphics
-dependency at all: the settings, the input state, the draw list and the scene stack are tested in
-milliseconds, and a test drives a scene with a fake `GameServices` — no window and no GPU.
+dependency at all: the settings, the input state, the draw list, the scene stack, the save-path field,
+`redirect.ecfg` and the save directory's `config.ecfg` are tested in milliseconds, and a test drives a scene
+with a fake `GameServices` — no window and no GPU. The first-run prompt, the settings menu and the open-world
+scene are the worked examples: `test_scenes` (22 cases / 177 checks) drives all of them, `test_first_run`
+(13 cases / 150 checks) covers the redirect and config files and the path field, and
+`test_open_world_scene` (10 cases / 130 checks) the streamed world against a real `ChunkStore`.
 
 ## Verification status
 
@@ -848,15 +980,15 @@ others record the last run before the split. No result here is estimated.
 
 | Preset | Result |
 |---|---|
-| `mine-debug` | 40/40 tests green (run in this checkout) |
-| `mine-release` | 40/40 tests green (run in this checkout) |
+| `mine-debug` | 42/42 tests green (run in this checkout) |
+| `mine-release` | 42/42 tests green (run in this checkout) |
 | `mine-asan` (Address + UB sanitizers) | not re-run after the build trees were split |
 | `mine-tsan` (ThreadSanitizer) | not re-run after the build trees were split |
-| `no-renderer` | 12/12 tests green (previous run; not re-run after the split) |
-| `mefemma-debug` | 20/20 tests green (run in this checkout) |
-| `mefemma-release` | 20/20 tests green (run in this checkout) |
-| `mefemma-asan` (Address + UB sanitizers) | 20/20 tests green (run in this checkout) |
-| `mefemma-tsan` (ThreadSanitizer) | 20/20 tests green (run in this checkout) |
+| `no-renderer` | 14/14 tests green (run in this checkout) |
+| `mefemma-debug` | 24/24 tests green (run in this checkout) |
+| `mefemma-release` | 24/24 tests green (run in this checkout) |
+| `mefemma-asan` (Address + UB sanitizers) | 24/24 tests green (run in this checkout) |
+| `mefemma-tsan` (ThreadSanitizer) | 24/24 tests green (run in this checkout) |
 
 The two packages are run, not assumed: `mine-0.1.0-Release.zip` and the debug build of the same package
 both start from a directory that has nothing but what the zip carries — `tables: 1 module(s) ... 0 error(s)`,

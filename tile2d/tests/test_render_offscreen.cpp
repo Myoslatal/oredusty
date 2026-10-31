@@ -7,6 +7,7 @@
 #include <t2d/render/sprite_batch.h>
 #include <t2d/render/text_renderer.h>
 #include <t2d/render/tilemap_renderer.h>
+#include <t2d/sim/open_world.h>
 #include <t2d/sim/tileset.h>
 
 #include <ore/ore.h>
@@ -370,6 +371,69 @@ namespace {
 
 } // namespace
 
+namespace {
+
+/// Renders one frame through the batch and returns the whole readback, so a test can ask about more
+/// than the middle pixel. The camera is separate from draw_world()'s culling view on purpose: a
+/// camera larger than the view is how "the renderer drew a chunk outside the view" becomes visible.
+template <class Draw>
+[[nodiscard]] ore::Image render_offscreen(Fixture& fixture, SpriteBatch& batch, const Vec2& camera_center,
+                                          const Vec2& camera_size, ore::rhi::Texture& atlas,
+                                          ore::rhi::Sampler& sampler, Draw&& draw) {
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ore::RenderFrame& frame = fixture.renderer->begin_frame(1.0f / 60.0f);
+    fixture.renderer->begin_pass(clear, 1.0f);
+    batch.begin(frame, camera_center, camera_size, atlas, sampler.handle());
+    draw(batch);
+    batch.end();
+    fixture.renderer->end_pass();
+    fixture.renderer->end_frame();
+    fixture.renderer->wait_idle();
+    return fixture.context->read_render_target(fixture.renderer->target());
+}
+
+[[nodiscard]] ore::Color pixel_at(const ore::Image& image, u32 x, u32 y) {
+    return ore::Color::from_packed(image.pixel(x, y));
+}
+
+[[nodiscard]] bool is_green(const ore::Color& color) {
+    return color.g > 150 && color.r < 90 && color.b < 90;
+}
+[[nodiscard]] bool is_blue(const ore::Color& color) {
+    return color.b > 150 && color.r < 90 && color.g < 90;
+}
+[[nodiscard]] bool is_clear(const ore::Color& color) { return color.r + color.g + color.b == 0; }
+
+/// The open world the draw_world tests share: 8 px cells, 32 cells a chunk (256 px), two layers.
+[[nodiscard]] OpenWorldConfig open_world_config() {
+    OpenWorldConfig config;
+    config.tile_size = 8.0f;
+    config.layers = 2;
+    config.seed = 0x5EEDu;
+    config.load_margin_chunks = 1;
+    config.unload_margin_chunks = 2;
+    config.max_loaded_chunks = 0;
+    return config;
+}
+
+/// Ground layer blue (tile 2) everywhere, one green (tile 1) cell on the structure layer at local
+/// (1, 1) of chunk (0, 0), and chunk (1, 0) green on the ground. Both ids are the atlas colours
+/// test_tileset() names, so a read-back pixel says which tile was drawn.
+void generate_open_world(const ChunkKey& key, WorldChunk& chunk) {
+    for (i32 layer = 0; layer < chunk.layers(); ++layer) {
+        for (TileId& cell : chunk.tiles(layer)) cell = layer == 0 ? TileId{2} : kEmptyTile;
+    }
+    if (key == (ChunkKey{0, 0})) {
+        chunk.tiles(1)[static_cast<usize>(WorldChunk::kSize + 1)] = 1;   // green over the blue ground
+    }
+    if (key == (ChunkKey{1, 0})) {
+        for (TileId& cell : chunk.tiles(0)) cell = 1;   // entirely green
+    }
+}
+
+} // namespace
+
 T2D_TEST(the_higher_map_layer_is_drawn_over_the_lower_one) {
     Fixture fixture = make_fixture(64);
     if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
@@ -681,6 +745,333 @@ T2D_TEST(a_frame_with_many_batches_keeps_every_batch_on_its_own_texture) {
     T2D_CHECK_MSG(reds > 0, "no band came out red: every batch sampled another one's texture");
     T2D_CHECK_MSG(blues > 0, "no band came out blue: every batch sampled another one's texture");
     T2D_CHECK(reds > 100 && blues > 100);
+}
+
+// ----------------------------------------------------------------------------------------- open world --
+
+T2D_TEST(draw_world_lights_resident_chunks_and_respects_layers) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 2048);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    OpenWorld world(open_world_config());
+    world.set_generator(generate_open_world);
+    const Aabb2 view = Aabb2{Vec2{0.0f, 0.0f}, Vec2{128.0f, 128.0f}};
+    T2D_CHECK_EQ(world.update(view), 9u);   // the view chunk plus the load margin ring
+
+    // The camera shows the same 128 px the view covers, so a pixel coordinate is a world coordinate.
+    TilemapRenderer renderer;
+    const ore::Image shot = render_offscreen(fixture, *batch, Vec2{64.0f, 64.0f}, Vec2{128.0f, 128.0f}, *tiles,
+                                             *sampler, [&](SpriteBatch& target) {
+                                                 renderer.draw_world(target, world, test_tileset(), view);
+                                             });
+    T2D_REQUIRE(!shot.empty());
+
+    // Nine chunks are resident, but only one is inside the culling view: the other eight are not even
+    // considered, because chunks_in() is the renderer's culling range.
+    T2D_CHECK_EQ(world.resident_chunk_count(), 9u);
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_culled, 0u);
+    T2D_CHECK_EQ(renderer.stats().map_layers, 2u);
+    // 16 x 16 cells of the resident chunk intersect the 128 px view, on two layers; every ground cell
+    // is blue and exactly one structure cell is green.
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 512u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 257u);
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 255u);
+    T2D_CHECK_EQ(batch->quads(), renderer.stats().tiles_drawn);
+
+    // The ground layer is blue; the structure tile above (1, 1) is green and wins the pixel.
+    const ore::Color ground = pixel_at(shot, 4, 4);       // world (4, 4): cell (0, 0), layer 0 only
+    const ore::Color structure = pixel_at(shot, 12, 12);  // world (12, 12): cell (1, 1), layer 1 over 0
+    const ore::Color beside = pixel_at(shot, 20, 4);      // world (20, 4): cell (2, 0), layer 0 only
+    T2D_CHECK_MSG(is_blue(ground), "the ground cell came out ({}, {}, {})", ground.r, ground.g, ground.b);
+    T2D_CHECK_MSG(is_green(structure), "the structure cell came out ({}, {}, {})", structure.r, structure.g,
+                  structure.b);
+    T2D_CHECK_MSG(is_blue(beside), "the cell beside it came out ({}, {}, {})", beside.r, beside.g, beside.b);
+
+    // A mask that names only the ground layer draws the blue tile where the layered draw put green.
+    renderer.reset_stats();
+    const ore::Image ground_only =
+        render_offscreen(fixture, *batch, Vec2{64.0f, 64.0f}, Vec2{128.0f, 128.0f}, *tiles, *sampler,
+                         [&](SpriteBatch& target) {
+                             renderer.draw_world(target, world, test_tileset(), view, TileMap::layer_mask(0));
+                         });
+    T2D_REQUIRE(!ground_only.empty());
+    T2D_CHECK_EQ(renderer.stats().map_layers, 1u);
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 256u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 256u);
+    T2D_CHECK_EQ(batch->quads(), 256u);
+    const ore::Color ground_under = pixel_at(ground_only, 12, 12);
+    T2D_CHECK_MSG(is_blue(ground_under), "the masked structure cell came out ({}, {}, {})", ground_under.r,
+                  ground_under.g, ground_under.b);
+}
+
+T2D_TEST(draw_world_draws_only_cells_that_intersect_the_view) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 2048);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    OpenWorld world(open_world_config());
+    world.set_generator(generate_open_world);
+    // The view is the top left quarter of what the camera shows: the rest of the screen is inside a
+    // resident chunk but outside the view, so a renderer that forgot to cull cells would light it.
+    const Aabb2 view = Aabb2{Vec2{0.0f, 0.0f}, Vec2{64.0f, 64.0f}};
+    T2D_CHECK_EQ(world.update(view), 9u);
+    T2D_CHECK_EQ(world.resident_chunk_count(), 9u);
+
+    TilemapRenderer renderer;
+    const ore::Image shot = render_offscreen(fixture, *batch, Vec2{64.0f, 64.0f}, Vec2{128.0f, 128.0f}, *tiles,
+                                             *sampler, [&](SpriteBatch& target) {
+                                                 renderer.draw_world(target, world, test_tileset(), view);
+                                             });
+    T2D_REQUIRE(!shot.empty());
+
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_culled, 0u);
+    // The 8 x 8 cells of the view, on two layers: 64 blue ground tiles and the one green structure
+    // tile that happens to be inside the view.
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 128u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 65u);
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 63u);
+
+    T2D_CHECK(is_blue(pixel_at(shot, 4, 4)));
+    T2D_CHECK(is_green(pixel_at(shot, 12, 12)));
+    // World (70, 4) and (4, 70) are cells of the resident chunk (0, 0) but outside the view: they are
+    // clear even though the chunk is loaded and the quads would have been visible on this screen.
+    T2D_CHECK_MSG(is_clear(pixel_at(shot, 70, 4)), "a cell right of the view was lit: ({}, {}, {})",
+                  pixel_at(shot, 70, 4).r, pixel_at(shot, 70, 4).g, pixel_at(shot, 70, 4).b);
+    T2D_CHECK_MSG(is_clear(pixel_at(shot, 4, 70)), "a cell below the view was lit: ({}, {}, {})",
+                  pixel_at(shot, 4, 70).r, pixel_at(shot, 4, 70).g, pixel_at(shot, 4, 70).b);
+    T2D_CHECK(is_clear(pixel_at(shot, 100, 100)));
+}
+
+T2D_TEST(draw_world_counts_a_visible_chunk_that_is_not_resident) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 2048);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    OpenWorld world(open_world_config());
+    world.set_generator(generate_open_world);
+    const Aabb2 view = Aabb2{Vec2{0.0f, 0.0f}, Vec2{512.0f, 512.0f}};
+    // Only one of the four chunks the view touches is resident: the other three are holes.
+    world.ensure_chunk(ChunkCoord{0, 0});
+    T2D_CHECK_EQ(world.resident_chunk_count(), 1u);
+    T2D_CHECK_EQ(world.chunks_in(view, 0).size(), 4u);
+
+    TilemapRenderer renderer;
+    // 4 world units per pixel: chunk (0, 0) is the top left 64 x 64 pixels of the 128 px screen, and
+    // the three missing chunks cover the rest.
+    const ore::Image shot = render_offscreen(fixture, *batch, Vec2{256.0f, 256.0f}, Vec2{512.0f, 512.0f},
+                                             *tiles, *sampler, [&](SpriteBatch& target) {
+                                                 renderer.draw_world(target, world, test_tileset(), view);
+                                             });
+    T2D_REQUIRE(!shot.empty());
+
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 4u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_culled, 3u);
+    T2D_CHECK_EQ(renderer.stats().map_layers, 2u);
+    // The one resident chunk is entirely inside the view: 32 x 32 cells on two layers, every ground
+    // cell blue and the single structure cell green.
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 2048u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 1025u);
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 1023u);
+    T2D_CHECK_EQ(batch->quads(), renderer.stats().tiles_drawn);
+
+    T2D_CHECK_MSG(is_green(pixel_at(shot, 3, 3)), "the structure cell came out ({}, {}, {})",
+                  pixel_at(shot, 3, 3).r, pixel_at(shot, 3, 3).g, pixel_at(shot, 3, 3).b);
+    T2D_CHECK_MSG(is_blue(pixel_at(shot, 32, 32)), "the resident ground came out ({}, {}, {})",
+                  pixel_at(shot, 32, 32).r, pixel_at(shot, 32, 32).g, pixel_at(shot, 32, 32).b);
+    // The three culled chunks are holes, not garbage: their screen regions stay clear.
+    T2D_CHECK_MSG(is_clear(pixel_at(shot, 96, 32)), "the missing chunk was drawn: ({}, {}, {})",
+                  pixel_at(shot, 96, 32).r, pixel_at(shot, 96, 32).g, pixel_at(shot, 96, 32).b);
+    T2D_CHECK(is_clear(pixel_at(shot, 32, 96)));
+    T2D_CHECK(is_clear(pixel_at(shot, 96, 96)));
+}
+
+T2D_TEST(draw_map_leaves_the_chunk_counters_clear) {
+    Fixture fixture = make_fixture(64);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 256);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    // First a world draw, so the chunk counters hold non-zero values, then a map draw on the same
+    // renderer: the map path has to clear them, not leave the world's numbers behind.
+    OpenWorldConfig config = open_world_config();
+    config.layers = 1;
+    OpenWorld world(config);
+    world.set_generator([](const ChunkKey&, WorldChunk& chunk) {
+        for (TileId& cell : chunk.tiles(0)) cell = 1;   // green
+    });
+    const Aabb2 view = Aabb2{Vec2{0.0f, 0.0f}, Vec2{32.0f, 32.0f}};
+    world.ensure_chunk(ChunkCoord{0, 0});
+
+    TilemapRenderer renderer;
+    const ore::Image world_shot =
+        render_offscreen(fixture, *batch, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, *tiles, *sampler,
+                         [&](SpriteBatch& target) { renderer.draw_world(target, world, test_tileset(), view); });
+    T2D_REQUIRE(!world_shot.empty());
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 1u);
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 16u);   // 4 x 4 cells at 8 px, one layer
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 16u);
+    T2D_CHECK(is_green(pixel_at(world_shot, 12, 12)));
+
+    TileMap map(4, 4, 8.0f, false, 1);
+    map.set(0, 1, 1, 1);   // green in cell (1, 1), the only map tile inside the same 32 px view
+    const ore::Image map_shot =
+        render_offscreen(fixture, *batch, Vec2{32.0f, 32.0f}, Vec2{64.0f, 64.0f}, *tiles, *sampler,
+                         [&](SpriteBatch& target) {
+                             renderer.draw_map(target, map, test_tileset(), view);
+                         });
+    T2D_REQUIRE(!map_shot.empty());
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 0u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 0u);
+    T2D_CHECK_EQ(renderer.stats().chunks_culled, 0u);
+    T2D_CHECK_EQ(renderer.stats().map_layers, 1u);
+    // The tile counters accumulate across draw calls until reset_stats(), exactly as before.
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 32u);   // 16 from the world draw + 16 from the map
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 17u);        // 16 + the one map tile
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 15u);
+    T2D_CHECK(is_green(pixel_at(map_shot, 12, 12)));
+    T2D_CHECK(is_clear(pixel_at(map_shot, 48, 48)));        // outside the 32 px view
+}
+
+T2D_TEST(draw_world_renders_far_from_the_absolute_origin) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 2048);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    // The same scene as the first draw_world case, but the absolute chunk named by relative (0, 0) is
+    // a million chunks away. Nothing about the draw may depend on that distance.
+    const ChunkKey far_origin{1000000, -1000000};
+    OpenWorld world(open_world_config());
+    world.set_generator([](const ChunkKey& key, WorldChunk& chunk) {
+        for (i32 layer = 0; layer < chunk.layers(); ++layer) {
+            for (TileId& cell : chunk.tiles(layer)) cell = layer == 0 ? TileId{2} : kEmptyTile;
+        }
+        if (key == (ChunkKey{1000000, -1000000})) {
+            chunk.tiles(1)[static_cast<usize>(WorldChunk::kSize + 1)] = 1;   // green over blue
+        }
+        if (key == (ChunkKey{1000001, -1000000})) {
+            for (TileId& cell : chunk.tiles(0)) cell = 1;   // entirely green
+        }
+    });
+    T2D_CHECK_EQ(world.set_origin(far_origin).x, 1000000 * WorldChunk::kSize);
+    const Aabb2 view = Aabb2{Vec2{0.0f, 0.0f}, Vec2{128.0f, 128.0f}};
+    T2D_CHECK_EQ(world.update(view), 9u);
+
+    TilemapRenderer renderer;
+    const ore::Image shot = render_offscreen(fixture, *batch, Vec2{64.0f, 64.0f}, Vec2{128.0f, 128.0f}, *tiles,
+                                             *sampler, [&](SpriteBatch& target) {
+                                                 renderer.draw_world(target, world, test_tileset(), view);
+                                             });
+    T2D_REQUIRE(!shot.empty());
+
+    // The renderer walks relative chunks, so the stats are exactly the near-origin ones.
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_culled, 0u);
+    T2D_CHECK_EQ(renderer.stats().map_layers, 2u);
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 512u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 257u);
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 255u);
+    T2D_CHECK_EQ(batch->quads(), renderer.stats().tiles_drawn);
+
+    // The coloured cells land where they do near the origin, and the geometry handed to the batch is
+    // relative space: cell (0, 0) is still at 0..8 px, never at the absolute origin's 16,000,000 px.
+    T2D_CHECK(is_blue(pixel_at(shot, 4, 4)));
+    T2D_CHECK(is_green(pixel_at(shot, 12, 12)));
+    T2D_CHECK(world.absolute_of(ChunkCoord{0, 0}) == far_origin);
+    T2D_CHECK_EQ(world.cell_bounds(0, 0), (Aabb2{Vec2{0.0f, 0.0f}, Vec2{8.0f, 8.0f}}));
+    T2D_CHECK_EQ(world.chunk_bounds(ChunkCoord{0, 0}), (Aabb2{Vec2{0.0f, 0.0f}, Vec2{256.0f, 256.0f}}));
+}
+
+T2D_TEST(draw_world_renders_at_a_near_limit_absolute_origin) {
+    Fixture fixture = make_fixture(128);
+    if (!fixture.valid()) T2D_SKIP("no Vulkan device available");
+    Scope<SpriteBatch> batch = make_batch(fixture, 2048);
+    T2D_REQUIRE(batch != nullptr);
+    Scope<ore::rhi::Texture> tiles = fixture.context->create_texture(make_test_atlas(), true, "test.tiles");
+    T2D_REQUIRE(tiles != nullptr);
+    Scope<ore::rhi::Sampler> sampler = make_sampler(fixture);
+    T2D_REQUIRE(sampler != nullptr);
+
+    // The same scene as the far case above, moved to the edge of the absolute clamp (+/-2^35 chunks): at
+    // that distance an absolute f32 coordinate cannot even name a cell, so the draw may only use the
+    // relative space.
+    const ChunkKey far_origin{OpenWorld::kMaxAbsoluteChunk - 4, -(OpenWorld::kMaxAbsoluteChunk - 4)};
+    OpenWorld world(open_world_config());
+    world.set_generator([far_origin](const ChunkKey& key, WorldChunk& chunk) {
+        for (i32 layer = 0; layer < chunk.layers(); ++layer) {
+            for (TileId& cell : chunk.tiles(layer)) cell = layer == 0 ? TileId{2} : kEmptyTile;
+        }
+        if (key == far_origin) {
+            chunk.tiles(1)[static_cast<usize>(WorldChunk::kSize + 1)] = 1;   // green over blue
+        }
+        if (key == (ChunkKey{far_origin.x + 1, far_origin.y})) {
+            for (TileId& cell : chunk.tiles(0)) cell = 1;   // entirely green
+        }
+    });
+    const OpenWorld::OriginShift shift = world.set_origin(far_origin);
+    T2D_CHECK_EQ(shift.x, far_origin.x * WorldChunk::kSize);
+    T2D_CHECK_EQ(shift.y, far_origin.y * WorldChunk::kSize);
+    T2D_CHECK(world.origin() == far_origin);
+
+    const Aabb2 view = Aabb2{Vec2{0.0f, 0.0f}, Vec2{128.0f, 128.0f}};
+    T2D_CHECK_EQ(world.update(view), 9u);
+
+    TilemapRenderer renderer;
+    const ore::Image shot = render_offscreen(fixture, *batch, Vec2{64.0f, 64.0f}, Vec2{128.0f, 128.0f}, *tiles,
+                                             *sampler, [&](SpriteBatch& target) {
+                                                 renderer.draw_world(target, world, test_tileset(), view);
+                                             });
+    T2D_REQUIRE(!shot.empty());
+
+    // The renderer walks relative chunks, so the stats are exactly the near-origin ones.
+    T2D_CHECK_EQ(renderer.stats().chunks_considered, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_drawn, 1u);
+    T2D_CHECK_EQ(renderer.stats().chunks_culled, 0u);
+    T2D_CHECK_EQ(renderer.stats().map_layers, 2u);
+    T2D_CHECK_EQ(renderer.stats().tiles_considered, 512u);
+    T2D_CHECK_EQ(renderer.stats().tiles_drawn, 257u);
+    T2D_CHECK_EQ(renderer.stats().tiles_culled, 255u);
+    T2D_CHECK_EQ(batch->quads(), renderer.stats().tiles_drawn);
+
+    // The coloured cells land where they do near the origin; the geometry handed to the batch is relative
+    // space (cell (0, 0) at 0..8 px), never a coordinate near 2^40.
+    T2D_CHECK(is_blue(pixel_at(shot, 4, 4)));
+    T2D_CHECK(is_green(pixel_at(shot, 12, 12)));
+    T2D_CHECK(world.absolute_of(ChunkCoord{0, 0}) == far_origin);
+    T2D_CHECK_EQ(world.absolute_cell_x(0), far_origin.x * WorldChunk::kSize);
+    T2D_CHECK_EQ(world.cell_bounds(0, 0), (Aabb2{Vec2{0.0f, 0.0f}, Vec2{8.0f, 8.0f}}));
+    T2D_CHECK_EQ(world.chunk_bounds(ChunkCoord{0, 0}), (Aabb2{Vec2{0.0f, 0.0f}, Vec2{256.0f, 256.0f}}));
 }
 
 T2D_TEST_MAIN
