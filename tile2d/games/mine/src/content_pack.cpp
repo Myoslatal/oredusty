@@ -69,9 +69,8 @@ PackFileResult load_pack_files(ContentPack& pack, ContentRegistry& registry, Con
         const std::vector<ContentEntry> declared = content_declarations(document, &unknown_tables);
         for (ResolvedImage& image : resolve_content_images(document, file)) {
             if (!image.ok) {
-                const std::string message = std::format("{}: {} '{}': {}", label,
-                                                        content_kind_name(image.kind), image.content,
-                                                        image.error);
+                const std::string message = std::format(
+                    "{}: {} '{}': {}", label, content_kind_name(image.kind), image.content, image.error);
                 report.errors.push_back(message);
                 if (pack.error.empty()) pack.error = message;
                 ++result.images_failed;
@@ -130,7 +129,8 @@ PackFileResult load_pack_files(ContentPack& pack, ContentRegistry& registry, Con
         std::vector<ContentEntry> added;
         const ContentRegistrationReport registered = register_declared_content(registry, declared, &added);
         result.registered += registered.registered;
-        for (const ContentEntry& entry : added) pack.registered.push_back(entry);
+        for (const ContentEntry& entry : added)
+            pack.registered.push_back(entry);
         for (const ContentEntry& clash : registered.collisions) {
             const std::string message = std::format("{}: {} '{}' is already registered and was not replaced",
                                                     label, content_kind_name(clash.kind), clash.name);
@@ -178,7 +178,7 @@ std::vector<std::string> ContentPack::content_files(const std::string& directory
         }
         if (!it->is_regular_file(entry_code)) continue;
         if (path.extension() != ".ecfg") continue;
-        if (name == kPackHeaderName) continue;   // the header says who the pack is; it is not content
+        if (name == kPackHeaderName) continue; // the header says who the pack is; it is not content
         files.push_back(path.string());
     }
     // Sorted, so the load order does not depend on what the filesystem happens to return first.
@@ -212,7 +212,7 @@ std::vector<std::string> ContentPack::find_packs(const std::string& directory,
         }
         return found;
     }
-    if (is_mod_package(root)) return found;   // a mod package is the mod host's business
+    if (is_mod_package(root)) return found; // a mod package is the mod host's business
 
     // The packs directly inside come first: a directory that holds packs is a **workspace**, not a pack
     // itself, and that is what makes "drop your pack folder into packs/" the whole installation story.
@@ -225,7 +225,8 @@ std::vector<std::string> ContentPack::find_packs(const std::string& directory,
     }
     std::sort(children.begin(), children.end());
     if (!children.empty()) {
-        for (const fs::path& child : children) found.push_back(child.string());
+        for (const fs::path& child : children)
+            found.push_back(child.string());
         // A loose *.ecfg file at the top of a workspace is reported: a pack is a directory now, and a
         // file that is silently not loaded is content that silently disappeared.
         for (const fs::directory_entry& entry : fs::directory_iterator(root, code)) {
@@ -282,8 +283,9 @@ std::optional<ContentPack> ContentPack::load(const std::string& directory, std::
             pack.declared = true;
             for (const t2d::EcfgValue& entry : header->root().children()) {
                 if (!is_pack_key(entry.key())) {
-                    return fail(std::format("{}: '{}' is not a pack key ({} takes id, name, version, requires)",
-                                            header_path.string(), entry.key(), kPackHeaderName));
+                    return fail(
+                        std::format("{}: '{}' is not a pack key ({} takes id, name, version, requires)",
+                                    header_path.string(), entry.key(), kPackHeaderName));
                 }
             }
             if (const t2d::EcfgValue* id = header->find("id"); id != nullptr) {
@@ -328,8 +330,9 @@ std::optional<ContentPack> ContentPack::load(const std::string& directory, std::
         // The header is a file of its own now: the "pack::" table that used to sit at the top of a
         // single file pack is told where it went, rather than being reported as an unknown content kind.
         if (document->find("pack") != nullptr) {
-            return fail(std::format("{}: the pack header is '{}' now, not a 'pack::' table inside a content file",
-                                    file, kPackHeaderName));
+            return fail(
+                std::format("{}: the pack header is '{}' now, not a 'pack::' table inside a content file",
+                            file, kPackHeaderName));
         }
         read_files.push_back(file);
         pack.documents.push_back(std::move(*document));
@@ -361,6 +364,7 @@ void ContentPipeline::unload() {
 const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     unload();
     report_ = ContentPipelineReport{};
+    report_.definitions.set_runtime_context(runtime_);
     registry.clear();
 
     // --- the game's own content -------------------------------------------------------------------
@@ -431,13 +435,12 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     {
         std::vector<ContentPack> unique;
         for (ContentPack& pack : parsed) {
-            const auto same = std::find_if(unique.begin(), unique.end(), [&](const ContentPack& other) {
-                return other.id == pack.id;
-            });
+            const auto same = std::find_if(unique.begin(), unique.end(),
+                                           [&](const ContentPack& other) { return other.id == pack.id; });
             if (same != unique.end()) {
                 // The message names the pack that owns the id, which is not always the first one parsed.
-                const std::string message = std::format("pack '{}' is defined twice ('{}' and '{}')",
-                                                        pack.id, same->directory, pack.directory);
+                const std::string message = std::format("pack '{}' is defined twice ('{}' and '{}')", pack.id,
+                                                        same->directory, pack.directory);
                 report_.errors.push_back(message);
                 ContentSource source;
                 source.kind = SourceKind::Pack;
@@ -458,7 +461,8 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     const RequirementOrder order = order_by_requirements(
         parsed.size(), [&](usize index) { return parsed[index].id; },
         [&](usize index) { return parsed[index].requirements; });
-    for (const std::string& error : order.errors) report_.errors.push_back(std::format("pack {}", error));
+    for (const std::string& error : order.errors)
+        report_.errors.push_back(std::format("pack {}", error));
     for (const usize index : order.dropped) {
         ContentPack failed = parsed[index];
         failed.ok = false;
@@ -494,20 +498,22 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
     }
 
     // --- mod packages -----------------------------------------------------------------------------
-    const ModLoadReport& mods = mods_.load(mod_directories_, registry);
+    const ModLoadReport& mods = mods_.load(mod_directories_, registry, *runtime_);
     report_.mods = mods_.count();
     report_.native_mods = mods.native_modules;
     report_.mod_content = mods.content_registered;
-    for (const std::string& error : mods.errors) report_.errors.push_back(error);
-    for (const std::string& warning : mods.warnings) report_.warnings.push_back(warning);
+    for (const std::string& error : mods.errors)
+        report_.errors.push_back(error);
+    for (const std::string& warning : mods.warnings)
+        report_.warnings.push_back(warning);
     for (const LoadedMod& mod : mods.mods) {
         ContentSource source;
         source.kind = SourceKind::Mod;
         source.path = mod.manifest.directory;
         // A package whose manifest never parsed has no id: the folder it lives in is what it is called
         // until it has one, which is also what the designer sees in their own file browser.
-        source.id = mod.manifest.id.empty() ? fs::path(mod.manifest.directory).filename().string()
-                                            : mod.manifest.id;
+        source.id =
+            mod.manifest.id.empty() ? fs::path(mod.manifest.directory).filename().string() : mod.manifest.id;
         source.name = mod.manifest.name.empty() ? source.id : mod.manifest.name;
         source.version = mod.manifest.version;
         source.requirements = mod.manifest.requirements;
@@ -531,11 +537,15 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
         // The definitions the mod's content files declared: the same two engine fields as everywhere
         // else, so a layer can be built out of what a mod added exactly like out of the game's own
         // content.
-        for (const types::TileDefinition& definition : mod.definitions) report_.definitions.add(definition);
-        for (const types::ItemDefinition& definition : mod.items) report_.definitions.add(definition);
-        for (const types::DropDefinition& definition : mod.drops) report_.definitions.add(definition);
+        for (const types::TileDefinition& definition : mod.definitions)
+            report_.definitions.add(definition);
+        for (const types::ItemDefinition& definition : mod.items)
+            report_.definitions.add(definition);
+        for (const types::DropDefinition& definition : mod.drops)
+            report_.definitions.add(definition);
         // And the layers it describes: a mod adds a story layer the way the game's own content does.
-        for (const LayerRule& rule : mod.layers) report_.layers.add(rule);
+        for (const LayerRule& rule : mod.layers)
+            report_.layers.add(rule);
         report_.sources.push_back(std::move(source));
     }
 
@@ -547,8 +557,10 @@ const ContentPipelineReport& ContentPipeline::load(ContentRegistry& registry) {
              report_.pack_content, report_.pack_images, report_.mods, report_.mod_content,
              report_.total_content, report_.definitions.size(), report_.definitions.item_count(),
              report_.layers.size(), report_.errors.size());
-    for (const std::string& error : report_.errors) T2D_WARN("content: {}", error);
-    for (const std::string& warning : report_.warnings) T2D_WARN("content: {}", warning);
+    for (const std::string& error : report_.errors)
+        T2D_WARN("content: {}", error);
+    for (const std::string& warning : report_.warnings)
+        T2D_WARN("content: {}", warning);
     return report_;
 }
 

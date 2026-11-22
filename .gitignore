@@ -53,6 +53,7 @@ imgui.ini
 !tile2d/games/mefemma/assets/textures/test_tiles.png
 !**/content/art/**/*.png
 !**/packs/**/art/**/*.png
+!**/tests/data/**/art/**/*.png
 
 # Scratch space used while developing
 .recon/

@@ -1,21 +1,19 @@
 #include <mine/pointer_drag.h>
 
 #include <mine/types/drop.h>
-#include <mine/types/warehouse.h>
 
 namespace mine {
 
 namespace {
 
-/// The warehouse at \p cell, the topmost tile layer first: what a drop let go there lands on. Topmost
-/// because that is the one a viewer sees - a plot on a higher tile layer is drawn over the ones below it.
-[[nodiscard]] types::Warehouse* warehouse_at(MineLayer& layer, GridPos cell) {
+/// The thing at \p cell that takes dragged drops, the topmost tile layer first: what a drop let go
+/// there lands on. Topmost because that is the one a viewer sees - a plot on a higher tile layer is drawn
+/// over the ones below it. A plot that is still going up takes no drop: the pointer looks further down
+/// the tile layers, and lets the drop go on the ground when there is nothing under it.
+[[nodiscard]] types::Tile* drag_target_at(MineLayer& layer, GridPos cell) {
     for (i32 tile_layer = layer.layer_count() - 1; tile_layer >= 0; --tile_layer) {
-        auto* warehouse = dynamic_cast<types::Warehouse*>(layer.plot_at(tile_layer, cell));
-        // A warehouse that is still going up takes no dragged drop: the pointer looks further down the
-        // tile layers, and lets the drop go on the ground when there is nothing under it
-        // (types/scene_tile.h, docs/GAME_DESIGN.md section 1.37).
-        if (warehouse != nullptr && !warehouse->under_construction()) return warehouse;
+        types::Tile* plot = layer.plot_at(tile_layer, cell);
+        if (plot != nullptr && plot->has_drag() && !plot->under_construction()) return plot;
     }
     return nullptr;
 }
@@ -102,17 +100,17 @@ ReleaseResult PointerDrag::end() {
     last_release_.kind = released->kind();
     last_release_.id = released->id();
 
-    types::Warehouse* warehouse = warehouse_at(*layer, cell);
-    if (warehouse == nullptr) {
+    types::Tile* receiver = drag_target_at(*layer, cell);
+    if (receiver == nullptr) {
         // Let go on the ground: one item let go next to a pile of its item joins it (section 1.43). After
         // this \p released may be dead, so nothing below touches it on this path.
         release_into_a_pile(*layer, *released);
         last_release_.result = ReleaseResult::Left;
         return last_release_.result;
     }
-    if (!warehouse->draginto().receive(*released)) {
+    if (!receiver->drag_receive(released->kind(), released->id(), 1)) {
         // No room: the drop stays where it was let go - or joins a pile of its item right next to it - and
-        // the caller is told why (types/drag_into.h).
+        // the caller is told why (types/container.h).
         release_into_a_pile(*layer, *released);
         last_release_.result = ReleaseResult::Refused;
         return last_release_.result;

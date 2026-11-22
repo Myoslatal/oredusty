@@ -1,5 +1,9 @@
 # 内容逻辑层：`mine::types`
 
+> **历史说明（M2.42）**：本文描述重写前的 `Tile/SceneTile/EntityTile/Warehouse/Drill` 类模型；
+> 其中的类名、继承树和 `container()` 等访问方式已不存在。当前模型是“对象只存数据 + 组件类型函数表 +
+> regist/override”，见 [RUNTIME.md](RUNTIME.md)。本文保留用于对照当时的工程推导和需求，不再作为 API 文档。
+
 内容有两半。**定义**是数据：设计者写在 `.ecfg` 表里（`item::`、`structure::`、`machine::` …），
 注册表按注册顺序发号（`docs/MODS.md`、`mine/registry.h`）。**逻辑**是 C++，住在 `mine::types`：
 一个东西进入矿场之后"是什么、做什么"，由这里的类型说了算。

@@ -2,6 +2,7 @@
 // puts the game's own content, the packs and the mods into one registry in a defined order.
 #include <mine/build_sidebar.h>
 #include <mine/building_unlocks.h>
+#include <mine/runtime/content/content_ids.h>
 #include <mine/types/tile_definition.h>
 #include <mine/content_pack.h>
 #include <mine/content_loader.h>
@@ -13,6 +14,8 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -472,9 +475,10 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_MSG(report.clean(), "{}", report.first_error());
     T2D_CHECK_EQ(report.base_packs, 1u);
     // One picture per content entry, in the order the pack's files are read - which is sorted, so
-    // drills.ecfg comes first, then floors, items, ores and warehouses. A drill has **two**
-    // pictures (docs/GAME_DESIGN.md section 1.38), and they come out next to each other, base then top.
-    T2D_REQUIRE(report.images.size() == 6u);
+    // drills.ecfg comes first, then floors, items, ores, task_blocks and warehouses. A drill has
+    // **two** pictures (docs/GAME_DESIGN.md section 1.38), and they come out next to each other, base
+    // then top.
+    T2D_REQUIRE(report.images.size() == 7u);
     T2D_CHECK(report.images[0].ok);
     T2D_CHECK_EQ(report.images[0].kind, ContentKind::Drill);
     T2D_CHECK_EQ(report.images[0].content, std::string("stone"));
@@ -512,9 +516,9 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     // **building** now: 20 stone, ten seconds, `storage`, and locked in a new save.
     T2D_CHECK_EQ(registry.count(ContentKind::Warehouse), 1u);
     T2D_CHECK(registry.find(ContentKind::Warehouse, "stone") != kNoContent);
-    T2D_CHECK_EQ(report.images[5].kind, ContentKind::Warehouse);
-    T2D_CHECK_EQ(report.images[5].content, std::string("stone"));
-    T2D_CHECK(report.images[5].resolved.find("capacity_stone_warehouse.png") != std::string::npos);
+    T2D_CHECK_EQ(report.images[6].kind, ContentKind::Warehouse);
+    T2D_CHECK_EQ(report.images[6].content, std::string("stone"));
+    T2D_CHECK(report.images[6].resolved.find("capacity_stone_warehouse.png") != std::string::npos);
     T2D_REQUIRE(report.definitions.find_tile(ContentKind::Warehouse, "stone") != nullptr);
     const types::TileDefinition& store = *report.definitions.find_tile(ContentKind::Warehouse, "stone");
     T2D_CHECK_EQ(store.capacity, 100u);
@@ -537,7 +541,79 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_EQ(drill.building.materials[0].name, std::string("stone"));
     T2D_CHECK_EQ(drill.building.materials[0].count, 10);
     T2D_CHECK_EQ(drill.building.seconds, 5.0f);   // five seconds to build, so it goes up behind a sweep
-    T2D_CHECK_EQ(report.definitions.size(), 4u);   // four plots: the floor, the ore, the warehouse, the drill
+    // The task block the designer asked for (§1.51): a **structure** whose entry selects the built-in
+    // "task_block" tile type, 2x1, carrying a task data block and a container that receives items. It
+    // declares no building:: on purpose - "先制作方块，任务系统之后实现" - so it is not a building unlock
+    // and never appears in the sidebar.
+    T2D_CHECK_EQ(registry.count(ContentKind::Structure), 1u);
+    T2D_CHECK_EQ(report.images[5].kind, ContentKind::Structure);
+    T2D_CHECK_EQ(report.images[5].content, std::string("task_block"));
+    T2D_CHECK(report.images[5].resolved.find("task_block.png") != std::string::npos);
+    const types::TileDefinition* task_block =
+        report.definitions.find_tile(ContentKind::Structure, "task_block");
+    T2D_REQUIRE(task_block != nullptr);
+    T2D_CHECK_EQ(task_block->image, std::string("art/task_block.png"));
+    T2D_CHECK_EQ(task_block->tile_type, std::string("task_block"));
+    T2D_CHECK_EQ(task_block->capacity, 100u);
+    T2D_CHECK_EQ(task_block->width, 2);
+    T2D_CHECK_EQ(task_block->height, 1);
+    T2D_CHECK(task_block->building.empty());
+    // The chain the designer declared: two deliver steps, in this order, for ten and then twenty-five
+    // stone (docs/GAME_DESIGN.md section 1.52).
+    T2D_REQUIRE(task_block->tasks.size() == 2u);
+    T2D_CHECK_EQ(task_block->tasks[0].name, std::string("first_delivery"));
+    T2D_CHECK(task_block->tasks[0].type == types::TaskType::Deliver);
+    T2D_CHECK_EQ(task_block->tasks[0].item, std::string("stone"));
+    T2D_CHECK_EQ(task_block->tasks[0].count, 10u);
+    T2D_CHECK_EQ(task_block->tasks[1].name, std::string("second_delivery"));
+    T2D_CHECK(task_block->tasks[1].type == types::TaskType::Deliver);
+    T2D_CHECK_EQ(task_block->tasks[1].item, std::string("stone"));
+    T2D_CHECK_EQ(task_block->tasks[1].count, 25u);
+    const ContentId task_block_id = registry.find(ContentKind::Structure, "task_block");
+    T2D_CHECK_NE(task_block_id, kNoContent);
+    const ContentId stone_item = registry.find(ContentKind::Item, "stone");
+    T2D_REQUIRE(stone_item != kNoContent);
+    // Built the way a layer builds it: make_tile with no size takes the definition's footprint.
+    const std::unique_ptr<types::Tile> task_plot =
+        types::make_tile(report.definitions, *task_block, registry, task_block_id, 2, GridPos{0, 0});
+    T2D_REQUIRE(task_plot != nullptr);
+    T2D_CHECK_EQ(task_plot->width(), 2);
+    T2D_CHECK_EQ(task_plot->height(), 1);
+    T2D_CHECK_EQ(task_plot->cell_count(), 2);
+    T2D_CHECK(task_plot->has_component(runtime::content::kTaskComponent));
+    T2D_CHECK(task_plot->has_container());
+    T2D_CHECK(task_plot->has_click());
+    T2D_CHECK(task_plot->has_drag());
+    T2D_CHECK_EQ(task_plot->get_preview(0.0f).images.size(), 1u);
+    // The chain, as the plot answers for it: two steps, no progress yet, both naming the stone item.
+    T2D_CHECK(task_plot->has_task());
+    const types::Task task = task_plot->task();
+    T2D_CHECK(task.valid());
+    T2D_CHECK_EQ(task.count(), 2u);
+    T2D_CHECK_EQ(task.current(), 0u);
+    T2D_CHECK_FALSE(task.complete());
+    const std::optional<types::TaskStepView> first_step = task.step(0);
+    T2D_REQUIRE(first_step.has_value());
+    T2D_CHECK(first_step->type == types::TaskType::Deliver);
+    T2D_CHECK(first_step->kind == ContentKind::Item);
+    T2D_CHECK_EQ(first_step->id, stone_item);
+    T2D_CHECK_EQ(first_step->count, 10u);
+    const std::optional<types::TaskStepView> second_step = task.step(1);
+    T2D_REQUIRE(second_step.has_value());
+    T2D_CHECK_EQ(second_step->id, stone_item);
+    T2D_CHECK_EQ(second_step->count, 25u);
+    types::Container container = task_plot->container();
+    T2D_CHECK_EQ(container.capacity(), 100u);
+    T2D_CHECK_EQ(container.add(ContentKind::Item, stone_item, 5), 5u);
+    // A drop dragged in is received whole or not at all, through the drag half. Eight of ten is not a
+    // delivered step, so the items stay put and the chain does not move.
+    T2D_CHECK(task_plot->drag_accepts(ContentKind::Item, stone_item, 3));
+    T2D_CHECK(task_plot->drag_receive(ContentKind::Item, stone_item, 3));
+    T2D_CHECK_EQ(task_plot->container().total(), 8u);
+    T2D_CHECK_EQ(task_plot->container().count_of(ContentKind::Item, stone_item), 8u);
+    T2D_CHECK_EQ(task_plot->task().current(), 0u);
+
+    T2D_CHECK_EQ(report.definitions.size(), 5u);   // five plots: the floor, the ore, the drill, the task block, the warehouse
     // What the sidebar draws for it comes from the plot itself (docs/GAME_DESIGN.md section 1.39), and a
     // drill's preview is **both** of its pictures: the base, then the top over it. This is the
     // end-to-end evidence for the designer's "钻头的预览图要带上top": the game's own pack, the definition
@@ -549,6 +625,11 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     // not a category at all while its only building is locked.
     T2D_REQUIRE(unlocks.size() == 2u);
     T2D_CHECK(unlocks.unlocked(ContentKind::Drill, registry.find(ContentKind::Drill, "stone")));
+    // The task block is **not a building**: it has no row in the unlock table - only the drill and the
+    // warehouse do - so no save state could ever put it on offer (docs/GAME_DESIGN.md sections 1.44,
+    // 1.51). It is placed by the layer data, not built by the player.
+    T2D_CHECK_FALSE(unlocks.unlocked(ContentKind::Structure, task_block_id));
+    T2D_CHECK_FALSE(unlocks.set_unlocked(ContentKind::Structure, task_block_id, true));
     const ContentId warehouse_id = registry.find(ContentKind::Warehouse, "stone");
     T2D_CHECK_FALSE(unlocks.unlocked(ContentKind::Warehouse, warehouse_id));
     BuildSidebar sidebar;
@@ -583,6 +664,13 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_REQUIRE(store_entry.preview.images.size() == 1u);
     T2D_CHECK(store_entry.preview.images[0].part.empty());
 
+    // No category offers the task block, whatever the save has unlocked: the sidebar only lists content
+    // whose definition is a building, and this one has none (docs/GAME_DESIGN.md section 1.51).
+    for (const types::BuildingCategory category : sidebar.categories()) {
+        sidebar.select_category(category);
+        for (const BuildEntry& entry : sidebar.entries()) T2D_CHECK(entry.name != "task_block");
+    }
+
     T2D_CHECK(unlocks.set_unlocked(ContentKind::Warehouse, warehouse_id, false));
     sidebar.rebuild(registry, report.definitions, unlocks);
     T2D_REQUIRE(sidebar.categories().size() == 1u);
@@ -599,12 +687,20 @@ T2D_TEST(the_games_own_content_is_a_pack_that_ships_its_own_art) {
     T2D_CHECK_EQ(first.width, 100u);
     T2D_CHECK_EQ(first.height, 100u);
     T2D_CHECK_EQ(first.tile_layers, 3);   // floor, ore in the ground, buildings on top of both
-    T2D_REQUIRE(first.blocks.size() == 1u);   // the warehouse the layer places in the middle
+    T2D_REQUIRE(first.blocks.size() == 2u);   // the warehouse in the middle and the task block beside it
     T2D_CHECK_EQ(first.blocks[0].at.x, 50);
     T2D_CHECK_EQ(first.blocks[0].at.y, 50);
     T2D_CHECK_EQ(first.blocks[0].layer, 2);
     T2D_REQUIRE(first.blocks[0].holds.size() == 1u);
     T2D_CHECK_EQ(first.blocks[0].holds[0].count, 10);
+    // The 2x1 task block the layer places at (52,50), right of the warehouse (docs/GAME_DESIGN.md
+    // section 1.51): it is a structure, it starts empty, and it is **not** a building.
+    T2D_CHECK_EQ(first.blocks[1].kind, ContentKind::Structure);
+    T2D_CHECK_EQ(first.blocks[1].content, std::string("task_block"));
+    T2D_CHECK_EQ(first.blocks[1].at.x, 52);
+    T2D_CHECK_EQ(first.blocks[1].at.y, 50);
+    T2D_CHECK_EQ(first.blocks[1].layer, 2);
+    T2D_CHECK(first.blocks[1].holds.empty());
     T2D_REQUIRE(first.floor.rules.size() == 1u);
     T2D_CHECK_EQ(first.floor.rules[0].kind, FloorRule::Kind::FullFlash);
     T2D_CHECK_EQ(first.floor.rules[0].floor, std::string("dirt"));

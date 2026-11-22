@@ -1,7 +1,10 @@
 #include <mine/world.h>
 
+#include <mine/runtime/content/content_ids.h>
+
 #include <t2d/core/log.h>
 
+#include <cmath>
 #include <format>
 
 namespace mine {
@@ -33,9 +36,9 @@ namespace {
 /// tile layer below it, or nullptr. Ore is on a layer under the drill because a plot occupies cells and
 /// one cell holds one plot per tile layer - which is what tile layers are for (docs/GAME_DESIGN.md
 /// sections 1.12, 1.26).
-[[nodiscard]] const types::SceneTile* ore_under(const MineLayer& layer, i32 rig_layer, GridPos cell) {
+[[nodiscard]] const types::Tile* ore_under(const MineLayer& layer, i32 rig_layer, GridPos cell) {
     for (i32 tile_layer = rig_layer - 1; tile_layer >= 0; --tile_layer) {
-        const types::SceneTile* plot = layer.plot_at(tile_layer, cell);
+        const types::Tile* plot = layer.plot_at(tile_layer, cell);
         if (plot != nullptr && plot->is_ore()) return plot;
     }
     return nullptr;
@@ -45,6 +48,47 @@ namespace {
 [[nodiscard]] std::string describe(const PlacedContent& where, const t2d::TileRect& cells) {
     return std::format("{} '{}' at {},{} {}x{} on tile layer {}", content_kind_name(where.kind), where.name,
                        cells.x, cells.y, cells.width, cells.height, where.layer);
+}
+
+/// The cells a placement covers: the size it names itself when it names one, and the footprint its
+/// content definition declares otherwise. place() and can_place() both go through here, so what a caller
+/// is told before placing and what placing then does cannot disagree (world.h, types/tile_definition.h).
+struct Footprint {
+    i32 width = 1;
+    i32 height = 1;
+};
+
+[[nodiscard]] Footprint footprint_of(const PlacedContent& where, const types::TileDefinition* definition) {
+    Footprint footprint;
+    footprint.width = where.width > 0 ? where.width : (definition != nullptr ? definition->width : 1);
+    footprint.height = where.height > 0 ? where.height : (definition != nullptr ? definition->height : 1);
+    return footprint;
+}
+
+/// A drill took its turn: the Drill table accounts for the span and says how many drops it threw. The
+/// angle comes from the drill's own dice (updated once per drop by the table), so two layers built from
+/// the same data throw into the same places and a drill's turns never move the layer's own stream.
+void mine_drill(MineLayer& layer, types::Tile& drill, f32 elapsed_seconds) {
+    const usize produced = drill.drill_tick(elapsed_seconds);
+    if (produced == 0) return;
+    const runtime::content::DrillJob job = drill.job();
+    if (job.drop_id == runtime::content::kNoContentId) return;
+    constexpr f32 kTau = 6.283185307179586f;
+    constexpr u64 kUnit = 1ull << 24u;
+    // The table advanced the drill's stream once per drop while it counted them; the final state is the
+    // one to continue from. Each drop gets its own angle, exactly as if it had been thrown alone.
+    u64 rng = drill.drill_rng();
+    for (usize index = 0; index < produced; ++index) {
+        rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+        const f32 angle = static_cast<f32>((rng >> 40u) & (kUnit - 1u)) / static_cast<f32>(kUnit) * kTau;
+        const t2d::Vec2 where{
+            t2d::clamp(static_cast<f32>(drill.anchor().x) + 0.5f + std::cos(angle), 0.0f,
+                       static_cast<f32>(layer.width())),
+            t2d::clamp(static_cast<f32>(drill.anchor().y) + 0.5f + std::sin(angle), 0.0f,
+                       static_cast<f32>(layer.height())),
+        };
+        (void)layer.drop(ContentKind::Item, job.drop_id, where);
+    }
 }
 
 } // namespace
@@ -137,7 +181,7 @@ usize lay_out_drops(MineLayer& layer, const ContentRegistry& registry,
     return placed;
 }
 
-void MineLayer::configure_drill(types::Drill& drill, const ContentRegistry& registry,
+void MineLayer::configure_drill(types::Tile& drill, const ContentRegistry& registry,
                                 const ContentDefinitions& definitions, LayerBuildReport* report) {
     const auto refuse = [&](std::string message) {
         if (report != nullptr) report->refuse(std::move(message));
@@ -149,7 +193,7 @@ void MineLayer::configure_drill(types::Drill& drill, const ContentRegistry& regi
                            index_, what));
         return;
     }
-    const types::SceneTile* ore = ore_under(*this, drill.layer(), drill.anchor());
+    const types::Tile* ore = ore_under(*this, drill.layer(), drill.anchor());
     if (ore == nullptr) {
         refuse(std::format("layer {}: {} has no ore under it (a drill mines what is on a tile layer below "
                            "the one it stands on)",
@@ -183,16 +227,15 @@ void MineLayer::configure_drill(types::Drill& drill, const ContentRegistry& regi
                            index_, ore_name, what, definition->drop, definition->drop));
         return;
     }
-    types::DrillJob job;
-    job.ore_kind = ore->kind();
+    runtime::content::DrillJob job{};
+    job.ore_kind = static_cast<u32>(ore->kind());
     job.ore_id = ore->id();
-    job.ore_name = ore_name;
     job.drop_id = drop;
-    job.drop_name = definition->drop;
+    job.hardness = definition->hardness;
     // The rule the designer asked for: the ore's hardness over the drill's power, in seconds per drop
     // (docs/GAME_DESIGN.md section 1.26).
     job.period_seconds = definition->hardness / drill.dig_power();
-    drill.set_job(std::move(job));
+    drill.set_job(job);
     T2D_INFO("world: the drill '{}' at {} mines ore '{}' (hardness {:.2f} / power {:.2f} = {:.2f}s per drop "
              "of '{}')",
              drill.name(registry), at, ore_name, definition->hardness, drill.dig_power(),
@@ -251,9 +294,9 @@ MineLayer::MineLayer(i32 index, LayerShape shape, u64 seed)
     shape_.tile_layers = cells_.layer_count();
 }
 
-types::SceneTile* MineLayer::place(const ContentRegistry& registry, const ContentDefinitions& definitions,
-                                   const PlacedContent& where, LayerBuildReport* report) {
-    const auto refuse = [&](std::string message) -> types::SceneTile* {
+types::Tile* MineLayer::place(const ContentRegistry& registry, const ContentDefinitions& definitions,
+                              const PlacedContent& where, LayerBuildReport* report) {
+    const auto refuse = [&](std::string message) -> types::Tile* {
         if (report != nullptr) report->refuse(std::move(message));
         return nullptr;
     };
@@ -261,7 +304,18 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
         return refuse(std::format("layer {}: a {} is not something that occupies cells", index_,
                                   content_kind_name(where.kind)));
     }
-    const t2d::TileRect cells = types::footprint(where.anchor, where.width, where.height);
+    // A plot is built out of its definition. Content with none - a name a mod registered through the C
+    // ABI, with no file behind it - is a plot with no picture and nothing to turn around, not a plot
+    // that cannot be placed.
+    types::TileDefinition fallback;
+    fallback.kind = where.kind;
+    fallback.name = where.name;
+    const types::TileDefinition* definition = definitions.find_tile(where.kind, where.name);
+    if (definition == nullptr) definition = &fallback;
+    // The footprint the placement asked for, or the one its entry declares when it did not say: what
+    // every check, the grid write and the report below are about (world.h, types/tile_definition.h).
+    const Footprint footprint = footprint_of(where, definition);
+    const t2d::TileRect cells = types::footprint(where.anchor, footprint.width, footprint.height);
     if (where.layer < 0 || where.layer >= layer_count()) {
         return refuse(std::format("layer {}: {} names tile layer {}, and this layer has {}", index_,
                                   describe(where, cells), where.layer, layer_count()));
@@ -276,16 +330,8 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
         return refuse(std::format("layer {}: no {} named '{}' is registered", index_,
                                   content_kind_name(where.kind), where.name));
     }
-    // A plot is built out of its definition. Content with none - a name a mod registered through the C
-    // ABI, with no file behind it - is a plot with no picture and nothing to turn around, not a plot
-    // that cannot be placed.
-    types::TileDefinition fallback;
-    fallback.kind = where.kind;
-    fallback.name = where.name;
-    const types::TileDefinition* definition = definitions.find_tile(where.kind, where.name);
-    if (definition == nullptr) definition = &fallback;
-    std::unique_ptr<types::SceneTile> plot =
-        types::make_tile(*definition, id, where.layer, where.anchor, cells.width, cells.height);
+    std::unique_ptr<types::Tile> plot = types::make_tile(definitions, *definition, registry, id, where.layer,
+                                                        where.anchor, cells.width, cells.height);
     if (plot == nullptr) {
         return refuse(std::format("layer {}: {} cannot be built into a plot", index_, describe(where, cells)));
     }
@@ -293,8 +339,8 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
     // Overlap is a question about one tile layer: a machine and the floor under it are on two layers,
     // and both are wanted. The check goes through the chunk index, so it costs what is near the plot
     // rather than what the layer holds.
-    const types::SceneTile* clash = nullptr;
-    for_each_plot_in(cells, [&](const types::SceneTile& other) {
+    const types::Tile* clash = nullptr;
+    for_each_plot_in(cells, [&](const types::Tile& other) {
         if (clash != nullptr || other.layer() != plot->layer()) return;
         if (other.overlaps(*plot)) clash = &other;
     });
@@ -308,7 +354,7 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
     // plot whose content may not be turned around never touches the generator.
     plot->randomise_mirror(rng_);
     const bool mirrored = plot->mirrored();
-    const bool ticking = dynamic_cast<types::EntityTile*>(plot.get()) != nullptr;
+    const bool ticking = plot->is_ticking();
     if (mirrored) ++mirrored_;
 
     // The cells: every cell of the footprint points at the content, so the grid alone answers "what is
@@ -319,20 +365,22 @@ types::SceneTile* MineLayer::place(const ContentRegistry& registry, const Conten
         }
     }
     const usize serial = plots_.size();
-    if (ticking) ticking_.push_back(static_cast<types::EntityTile*>(plot.get()));
+    if (ticking) ticking_.push_back(plot.get());
     // A plot is placed *into* a layer, and what it does while it runs happens in that layer: a drill
     // making a drop is the first thing that needs to know which one (types/tile.h, types/drill.h).
     plot->owner_ = this;
     plots_.push_back(std::move(plot));
     index_plot(serial);
+    // A plot with a task chain is kept in its own list: its windows and holds are measured by the tick
+    // pass against the layer's clock, though it does not count as a plot that ran
+    // (docs/GAME_DESIGN.md section 1.54).
+    if (plots_[serial]->has_task()) task_plots_.push_back(plots_[serial].get());
 
     // A drill is told what it stands on here, while the layer is built: this is the one moment the
     // registry (names to ids) and the definitions (the designer's numbers) are both in hand, and a drill
     // with nothing to mine is then a **reported** refusal instead of a machine that does nothing forever
     // (docs/GAME_DESIGN.md section 1.26).
-    if (auto* drill = dynamic_cast<types::Drill*>(plots_[serial].get()); drill != nullptr) {
-        configure_drill(*drill, registry, definitions, report);
-    }
+    if (plots_[serial]->is_drill()) configure_drill(*plots_[serial], registry, definitions, report);
 
     if (report != nullptr) {
         ++report->placed;
@@ -349,17 +397,17 @@ namespace {
 /// names are resolved **here**, against the registry in force: a name that is not in it is a refusal in the
 /// report and the rest of the placement stands (docs/GAME_DESIGN.md section 1.33). A plot asked to hold
 /// something that has no container is refused too - the data and the content disagree about what it is.
-void fill_container(types::SceneTile& plot, const PlacedContent& where, const ContentRegistry& registry,
+void fill_container(types::Tile& plot, const PlacedContent& where, const ContentRegistry& registry,
                     LayerBuildReport* report) {
     const std::string at = std::format("{} '{}' at {},{}", content_kind_name(where.kind), where.name,
                                        where.anchor.x, where.anchor.y);
-    types::Container* container = plot.container();
-    if (container == nullptr) {
+    if (!plot.has_container()) {
         if (report != nullptr) {
             report->refuse(std::format("{} was placed holding something, and it has no container sub-object", at));
         }
         return;
     }
+    types::Container container = plot.container();
     for (const ContentStack& stack : where.holds) {
         const ContentId id = registry.find(ContentKind::Item, stack.name);
         if (id == kNoContent) {
@@ -369,7 +417,10 @@ void fill_container(types::SceneTile& plot, const PlacedContent& where, const Co
             continue;
         }
         const usize wanted = static_cast<usize>(stack.count);
-        const usize added = container->add(ContentKind::Item, id, wanted);
+        const usize added = container.add(ContentKind::Item, id, wanted);
+        // What a placement starts with came in at the layer's clock, and a rate window counts every way
+        // its item got into the container - not only a drag (docs/GAME_DESIGN.md section 1.53).
+        if (added > 0) plot.note_delivery(ContentKind::Item, id, added);
         if (added < wanted && report != nullptr) {
             // The content and the data disagree about how much fits: a container's capacity comes from the
             // definition, and a placement that asks for more is refused rather than silently trimmed.
@@ -388,7 +439,8 @@ i32 MineLayer::first_free_layer(GridPos cell) const {
     return shape_.tile_layers;
 }
 
-bool MineLayer::can_place(const PlacedContent& where, std::string* why) const {
+bool MineLayer::can_place(const ContentDefinitions& definitions, const PlacedContent& where,
+                          std::string* why) const {
     const auto no = [&](std::string message) {
         if (why != nullptr) *why = std::move(message);
         return false;
@@ -396,8 +448,11 @@ bool MineLayer::can_place(const PlacedContent& where, std::string* why) const {
     if (where.layer < 0 || where.layer >= shape_.tile_layers) {
         return no(std::format("tile layer {}, and this layer has {}", where.layer, shape_.tile_layers));
     }
-    for (i32 y = 0; y < where.height; ++y) {
-        for (i32 x = 0; x < where.width; ++x) {
+    // The same footprint place() will use: a placement that says no size takes its entry's, so a 2x1
+    // asks about both of its cells here and not just the one it is anchored at.
+    const Footprint footprint = footprint_of(where, definitions.find_tile(where.kind, where.name));
+    for (i32 y = 0; y < footprint.height; ++y) {
+        for (i32 x = 0; x < footprint.width; ++x) {
             const GridPos cell{where.anchor.x + x, where.anchor.y + y};
             if (cell.x < 0 || cell.y < 0 || cell.x >= static_cast<i32>(shape_.width) ||
                 cell.y >= static_cast<i32>(shape_.height)) {
@@ -416,7 +471,7 @@ bool MineLayer::can_place(const PlacedContent& where, std::string* why) const {
     if (where.kind == ContentKind::Drill) {
         bool on_ore = false;
         for (i32 layer = 0; layer < where.layer && !on_ore; ++layer) {
-            const types::SceneTile* under = plot_at(layer, where.anchor);
+            const types::Tile* under = plot_at(layer, where.anchor);
             on_ore = under != nullptr && under->kind() == ContentKind::Ore;
         }
         if (!on_ore) {
@@ -435,14 +490,18 @@ void MineLayer::build(const LayerSpec& spec, const ContentRegistry& registry,
         // its own refusal, so the reason a report gives is the one it always gave.
         if (where.kind == ContentKind::Drill) {
             std::string why;
-            if (!can_place(where, &why)) {
+            if (!can_place(definitions, where, &why)) {
                 if (report != nullptr) report->refuse(std::format("drill '{}': {}", where.name, why));
                 continue;
             }
         }
-        types::SceneTile* plot = place(registry, definitions, where, report);
-        if (plot == nullptr || where.holds.empty()) continue;
-        fill_container(*plot, where, registry, report);
+        types::Tile* plot = place(registry, definitions, where, report);
+        if (plot == nullptr) continue;
+        if (!where.holds.empty()) fill_container(*plot, where, registry, report);
+        // A placement's starting stock is **delivered** too: a task block that starts with the items its
+        // first task asks for has already made that progress, not progress that appears on the next
+        // click (docs/GAME_DESIGN.md section 1.52).
+        (void)plot->run_tasks();
     }
 }
 
@@ -458,17 +517,36 @@ void MineLayer::index_plot(usize serial) {
 
 usize MineLayer::refresh() {
     usize ran = 0;
-    for (const std::unique_ptr<types::SceneTile>& plot : plots_) {
+    for (const std::unique_ptr<types::Tile>& plot : plots_) {
         if (plot->refresh()) ++ran;
     }
     return ran;
 }
 
 usize MineLayer::tick(f32 delta_seconds) {
+    // The layer's clock first: a task window is measured in seconds that passed, whether or not any
+    // plot took a turn this frame (docs/GAME_DESIGN.md section 1.53). A negative span is a caller's
+    // mistake; the clock never runs backwards.
+    clock_ += delta_seconds > 0.0f ? delta_seconds : 0.0f;
     usize ran = 0;
-    for (types::EntityTile* plot : ticking_) {
-        if (plot->advance(delta_seconds)) ++ran;
+    for (types::Tile* plot : ticking_) {
+        const std::optional<f32> accounted = plot->advance(delta_seconds);
+        if (!accounted.has_value()) continue;
+        ++ran;
+        // A drill's turn is its content: the Ticker says a turn came, the Drill table turns the whole
+        // span into drops, and the layer puts them on the ground. A drill with no job produces none.
+        if (plot->is_drill()) mine_drill(*this, *plot, *accounted);
     }
+    // Task chains get the frame's time even though they are not "running": a rate window is measured
+    // in seconds and a hold is how long its condition kept holding. They are deliberately **not**
+    // counted in what this returns - a task block is scenery, not a plot that took a turn
+    // (docs/GAME_DESIGN.md section 1.54). A plot still going up is not something the player has yet.
+    for (types::Tile* plot : task_plots_) {
+        if (plot->under_construction()) continue;
+        plot->task_tick(delta_seconds);
+        (void)plot->run_tasks();
+    }
+
     // The entities are walked and each one decides for itself: a cadence belongs to the thing that owns
     // it, and an entity that says "not me" costs one branch rather than a list the layer would have to
     // keep in step with what it said (types/entity.h). The count is taken before the walk, so an entity
@@ -590,26 +668,26 @@ void MineLayer::sweep_destroyed() {
     std::erase_if(entities_, [](const std::unique_ptr<types::Entity>& entity) { return !entity->alive(); });
 }
 
-const types::SceneTile* MineLayer::plot_at(i32 layer, GridPos cell) const {
+const types::Tile* MineLayer::plot_at(i32 layer, GridPos cell) const {
     if (!inside(cell)) return nullptr;
-    const types::SceneTile* found = nullptr;
-    for_each_plot_in(t2d::TileRect{cell.x, cell.y, 1, 1}, [&](const types::SceneTile& plot) {
+    const types::Tile* found = nullptr;
+    for_each_plot_in(t2d::TileRect{cell.x, cell.y, 1, 1}, [&](const types::Tile& plot) {
         if (found != nullptr || plot.layer() != layer) return;
         found = &plot;
     });
     return found;
 }
 
-types::SceneTile* MineLayer::plot_at(i32 layer, GridPos cell) {
+types::Tile* MineLayer::plot_at(i32 layer, GridPos cell) {
     // The same walk as the const one, and the same reason for it: a plot is found through the chunk
     // index, so a 3x3 answers for all nine of its cells. The plots are held by pointer, so handing one
     // back as mutable changes nothing about the layer itself.
-    return const_cast<types::SceneTile*>(std::as_const(*this).plot_at(layer, cell));
+    return const_cast<types::Tile*>(std::as_const(*this).plot_at(layer, cell));
 }
 
-const types::SceneTile* MineLayer::top_plot_at(GridPos cell) const {
+const types::Tile* MineLayer::top_plot_at(GridPos cell) const {
     for (i32 layer = layer_count() - 1; layer >= 0; --layer) {
-        if (const types::SceneTile* plot = plot_at(layer, cell); plot != nullptr) return plot;
+        if (const types::Tile* plot = plot_at(layer, cell); plot != nullptr) return plot;
     }
     return nullptr;
 }
@@ -625,7 +703,7 @@ bool MineLayer::blocks(i32 layer_mask, GridPos cell) const {
 
 void MineLayer::recount_mirrored() {
     mirrored_ = 0;
-    for (const std::unique_ptr<types::SceneTile>& plot : plots_) {
+    for (const std::unique_ptr<types::Tile>& plot : plots_) {
         if (plot->mirrored()) ++mirrored_;
     }
 }
@@ -654,19 +732,25 @@ std::string MineLayer::dump_text(const ContentRegistry& registry) const {
                                 : std::string(" not updated by the layer"));
     }
     for (usize serial = 0; serial < plots_.size(); ++serial) {
-        const types::SceneTile& plot = *plots_[serial];
+        const types::Tile& plot = *plots_[serial];
         text += std::format("  [{}] {} #{} '{}' at {},{} {}x{} on tile layer {}{}{}{}\n", serial,
                             content_kind_name(plot.kind()), plot.id(), plot.name(registry), plot.anchor().x,
                             plot.anchor().y, plot.width(), plot.height(), plot.layer(),
-                            dynamic_cast<const types::EntityTile*>(&plot) != nullptr ? " ticking" : "",
-                            plot.mirrored() ? " mirrored" : "", plot.dirty() ? " dirty" : "");
+                            plot.is_ticking() ? " ticking" : "", plot.mirrored() ? " mirrored" : "",
+                            plot.dirty() ? " dirty" : "");
         // A drill is the one plot whose *job* is part of what it is: what it mines, how long a drop
         // takes, and how many it has thrown - which is what a bug report about production needs.
-        if (const auto* drill = dynamic_cast<const types::Drill*>(&plot); drill != nullptr) {
-            if (drill->ready()) {
+        if (plot.is_drill()) {
+            const runtime::content::DrillJob job = plot.job();
+            if (plot.ready()) {
+                const ContentEntry* ore =
+                    registry.find(static_cast<ContentKind>(job.ore_kind), job.ore_id);
+                const ContentEntry* drop = registry.find(ContentKind::Item, job.drop_id);
                 text += std::format("        mines ore '{}' every {:.3f}s -> drop '{}', {} thrown\n",
-                                    drill->job().ore_name, drill->job().period_seconds, drill->job().drop_name,
-                                    drill->produced());
+                                    ore != nullptr ? ore->name : std::format("#{}", job.ore_id),
+                                    job.period_seconds,
+                                    drop != nullptr ? drop->name : std::format("#{}", job.drop_id),
+                                    plot.produced());
             } else {
                 text += std::format("        idle: no ore under it, or nothing that says how hard it is\n");
             }

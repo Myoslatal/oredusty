@@ -1,8 +1,12 @@
 #include <mine/game_save.h>
 
-#include <mine/types/drill.h>
-#include <mine/types/entity_tile.h>
+#include <mine/runtime/content/builtin.h>
+#include <mine/runtime/component.h>
+#include <mine/runtime/object_data.h>
 
+#include <t2d/core/log.h>
+
+#include <cmath>
 #include <format>
 #include <utility>
 
@@ -22,6 +26,8 @@ constexpr t2d::u32 kMaxPlots = 1u << 20;
 constexpr t2d::u32 kMaxEntities = 1u << 20;
 constexpr t2d::u32 kMaxBuilds = 1u << 16;
 constexpr t2d::u32 kMaxSlots = 1u << 16;
+constexpr t2d::u32 kMaxComponentRecords = 1u << 20;
+constexpr t2d::u32 kMaxComponentBytes = 1u << 20;
 
 /// One container slot as the PLOT chunk wrote it: content as the save's ids, plus the count.
 struct SavedSlot {
@@ -64,6 +70,15 @@ struct SavedBuild {
     t2d::u32 plot = 0;
     t2d::f32 elapsed = 0.0f;
     t2d::f32 seconds = 0.0f;
+};
+
+/// One custom-component state record, as the CMPT chunk writes it.
+struct SavedComponent {
+    t2d::u32 plot = 0;
+    t2d::u64 type_id = 0;
+    t2d::u32 version = 0;
+    t2d::u32 size = 0;
+    std::vector<t2d::u8> bytes;
 };
 
 /// The chunk a loader must have, or null with the reason in \p report. A chunk at another version is
@@ -136,7 +151,7 @@ t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& sess
     Writer plots;
     plots.write_u32(layer != nullptr ? static_cast<t2d::u32>(layer->plots().size()) : 0u);
     if (layer != nullptr) {
-        for (const std::unique_ptr<types::SceneTile>& plot : layer->plots()) {
+        for (const std::unique_ptr<types::Tile>& plot : layer->plots()) {
             plots.write_u8(static_cast<t2d::u8>(plot->kind()));
             plots.write_u32(plot->id());
             plots.write_i32(plot->layer());
@@ -146,20 +161,21 @@ t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& sess
             plots.write_i32(plot->height());
             plots.write_bool(plot->mirrored());
             plots.write_bool(plot->under_construction());
-            const auto* ticking = dynamic_cast<const types::EntityTile*>(plot.get());
-            plots.write_bool(ticking != nullptr);
-            if (ticking != nullptr) {
-                plots.write_f32(ticking->period_seconds());
-                plots.write_f32(ticking->since_last_update());
+            const bool ticking = plot->is_ticking();
+            plots.write_bool(ticking);
+            if (ticking) {
+                plots.write_f32(plot->period_seconds());
+                plots.write_f32(plot->since_last_update());
             }
-            const auto* drill = dynamic_cast<const types::Drill*>(plot.get());
-            plots.write_bool(drill != nullptr);
-            if (drill != nullptr) plots.write_u32(static_cast<t2d::u32>(drill->produced()));
-            const types::Container* container = plot->container();
-            plots.write_bool(container != nullptr);
-            if (container != nullptr) {
-                plots.write_u32(static_cast<t2d::u32>(container->slots().size()));
-                for (const types::ContainerSlot& slot : container->slots()) {
+            const bool drill = plot->is_drill();
+            plots.write_bool(drill);
+            if (drill) plots.write_u32(static_cast<t2d::u32>(plot->produced()));
+            const types::Container container = plot->container();
+            const std::vector<types::ContainerSlot> slots = container.slots();
+            plots.write_bool(plot->has_container());
+            if (plot->has_container()) {
+                plots.write_u32(static_cast<t2d::u32>(slots.size()));
+                for (const types::ContainerSlot& slot : slots) {
                     plots.write_u8(static_cast<t2d::u8>(slot.kind));
                     plots.write_u32(slot.id);
                     plots.write_u32(static_cast<t2d::u32>(slot.count));
@@ -168,6 +184,114 @@ t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& sess
         }
     }
     file.chunks.push_back(t2d::save::Chunk{game_save_chunk::kPlots, kChunkVersion, plots.finish()});
+
+    // TASK: how far each task block's chain has got, and the live state its rate steps measure - the held
+    // seconds and the current window's deliveries (docs/GAME_DESIGN.md sections 1.52-1.55). Optional: a
+    // save with no task block writes no chunk, and a save written before tasks existed has none.
+    if (layer != nullptr) {
+        Writer task_states;
+        t2d::u32 task_plots = 0;
+        for (const std::unique_ptr<types::Tile>& plot : layer->plots()) {
+            if (plot->has_task()) ++task_plots;
+        }
+        if (task_plots > 0) {
+            // The window is written as **remaining** seconds, not the time each delivery happened: a
+            // load's layer clock starts at 0, so a remaining life stays exactly as long as it was
+            // without the save having to carry a clock at all (docs/SAVE.md).
+            const t2d::f32 now = layer->clock_seconds();
+            task_states.write_u32(task_plots);
+            for (t2d::usize index = 0; index < layer->plots().size(); ++index) {
+                const types::Tile& plot = *layer->plots()[index];
+                if (!plot.has_task()) continue;
+                task_states.write_u32(static_cast<t2d::u32>(index));
+                const types::Task task = plot.task();
+                const t2d::u32 current = static_cast<t2d::u32>(task.current());
+                task_states.write_u32(current);
+                // The built-in task data is read here the same way PLOT reads the other built-in
+                // component fields: TASK is the task component's other half (docs/SAVE.md).
+                const auto* task_data = static_cast<const runtime::content::TaskData*>(
+                    plot.object()->instance(runtime::content::kTaskComponent));
+                t2d::f32 window = 0.0f;
+                if (const std::optional<types::TaskStepView> step = task.step(current);
+                    step.has_value() && step->type == types::TaskType::Rate) {
+                    window = step->window;
+                }
+                const t2d::f32 held = task_data != nullptr ? task_data->held : 0.0f;
+                // Only a rate step's window is worth keeping; a deliver step's progress is the
+                // container, which PLOT already holds.
+                t2d::u32 entries = 0;
+                if (task_data != nullptr && window > 0.0f) {
+                    for (t2d::u32 slot = 0; slot < task_data->entries; ++slot) {
+                        if (window - (now - task_data->recent[slot].at) > 0.0f) ++entries;
+                    }
+                }
+                task_states.write_f32(held);
+                task_states.write_u32(entries);
+                for (t2d::u32 slot = 0; task_data != nullptr && slot < task_data->entries; ++slot) {
+                    const t2d::f32 remaining = window - (now - task_data->recent[slot].at);
+                    if (remaining <= 0.0f) continue; // already slid out of the window
+                    task_states.write_f32(remaining);
+                    task_states.write_u32(task_data->recent[slot].amount);
+                }
+            }
+            file.chunks.push_back(
+                t2d::save::Chunk{game_save_chunk::kTasks, kTasksChunkVersion, task_states.finish()});
+        }
+    }
+
+    // CMPT: custom component state, keyed by the plot's place in PLOT. The built-in fields already in
+    // PLOT are never written here; a component without a save callback, or with nothing to say, is
+    // skipped. The chunk is omitted entirely when there is no state at all, so old saves and saves of
+    // pure built-in content stay byte-for-byte what they were.
+    std::vector<SavedComponent> component_records;
+    if (layer != nullptr) {
+        const std::vector<std::unique_ptr<types::Tile>>& plots_in_layer = layer->plots();
+        for (t2d::usize plot_index = 0; plot_index < plots_in_layer.size(); ++plot_index) {
+            const types::Tile& plot = *plots_in_layer[plot_index];
+            const runtime::ObjectData* object = plot.object();
+            if (object == nullptr) continue;
+            for (const runtime::Archetype::ComponentLayout& layout : object->archetype().components()) {
+                const runtime::ComponentType* type = layout.type;
+                if (type == nullptr || runtime::content::is_builtin_component(type->type_id())) continue;
+                if (!type->has_save()) continue;
+                const void* data = plot.instance(type->type_id());
+                if (data == nullptr) continue;
+                const void* shared = plot.shared(type->type_id());
+                const t2d::u32 size = type->save_instance(shared, data, nullptr, 0);
+                if (size == 0) continue;
+                if (size > kMaxComponentBytes) {
+                    T2D_WARN("save: plot {} component {} needs {} bytes, over the save limit; skipped",
+                             plot_index, type->type_id(), size);
+                    continue;
+                }
+                SavedComponent record;
+                record.plot = static_cast<t2d::u32>(plot_index);
+                record.type_id = type->type_id();
+                record.version = type->version();
+                record.size = size;
+                record.bytes.resize(size);
+                if (type->save_instance(shared, data, record.bytes.data(), size) != size) {
+                    T2D_WARN("save: plot {} component {} refused to write its state; skipped", plot_index,
+                             type->type_id());
+                    continue;
+                }
+                component_records.push_back(std::move(record));
+            }
+        }
+    }
+    if (!component_records.empty()) {
+        Writer components;
+        components.write_u32(static_cast<t2d::u32>(component_records.size()));
+        for (const SavedComponent& record : component_records) {
+            components.write_u32(record.plot);
+            components.write_u64(record.type_id);
+            components.write_u32(record.version);
+            components.write_u32(record.size);
+            components.write_bytes(ConstSpan<const t2d::u8>(record.bytes.data(), record.bytes.size()));
+        }
+        file.chunks.push_back(
+            t2d::save::Chunk{game_save_chunk::kComponents, kChunkVersion, components.finish()});
+    }
 
     // ENTT: the drops lying on the layer. Two passes, because a payload says how many records follow it.
     std::vector<const types::Drop*> drops;
@@ -196,7 +320,7 @@ t2d::save::File make_game_save(const MineWorld& world, const SessionConfig& sess
     if (layer != nullptr) {
         for (const BuildAnimation::Build& build : builds.builds()) {
             if (build.plot == nullptr) continue;
-            const std::vector<std::unique_ptr<types::SceneTile>>& placed = layer->plots();
+            const std::vector<std::unique_ptr<types::Tile>>& placed = layer->plots();
             for (t2d::usize index = 0; index < placed.size(); ++index) {
                 if (placed[index].get() == build.plot) {
                     records.push_back(SavedBuild{static_cast<t2d::u32>(index), build.elapsed, build.seconds});
@@ -445,7 +569,7 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
         where.height = saved.height;
         // Placed through the layer, not built by hand: the placement rules (footprint on the map, the
         // tile layer, a drill that has ore under it) are the same on load as they were the first time.
-        types::SceneTile* plot = layer->place(registry, definitions, where, &build_report);
+        types::Tile* plot = layer->place(registry, definitions, where, &build_report);
         if (plot == nullptr) {
             const std::string why = build_report.errors.empty() ? std::string("the layer refused it")
                                                                 : build_report.errors.back();
@@ -455,11 +579,11 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
         plot->set_mirrored(saved.mirrored);
         plot->set_under_construction(saved.under_construction);
         if (saved.has_container) {
-            types::Container* container = plot->container();
-            if (container == nullptr) {
+            if (!plot->has_container()) {
                 return refuse(std::format("plot '{}' held things, and this build gives it no container",
                                           where.name));
             }
+            types::Container container = plot->container();
             for (const SavedSlot& slot : saved.slots) {
                 const auto slot_kind = static_cast<ContentKind>(slot.kind);
                 const ContentId slot_id = remap.to_current(slot_kind, slot.id);
@@ -467,32 +591,30 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
                     return refuse(std::format("a slot of plot '{}' names content the save cannot translate",
                                               where.name));
                 }
-                if (container->add(slot_kind, slot_id, slot.count) != slot.count) {
+                if (container.add(slot_kind, slot_id, slot.count) != slot.count) {
                     return refuse(std::format("plot '{}' cannot hold the items it was saved with",
                                               where.name));
                 }
             }
         }
-        auto* ticking = dynamic_cast<types::EntityTile*>(plot);
         if (saved.ticking) {
-            if (ticking == nullptr) {
+            if (!plot->is_ticking()) {
                 return refuse(std::format("plot '{}' was ticking, and this build made it scenery",
                                           where.name));
             }
-            ticking->set_period_seconds(saved.period);
-            ticking->set_since_last_update(saved.since_last_update);
-        } else if (ticking != nullptr) {
+            plot->set_period_seconds(saved.period);
+            plot->set_since_last_update(saved.since_last_update);
+        } else if (plot->is_ticking()) {
             return refuse(std::format("plot '{}' was not ticking, and this build made it an entity plot",
                                       where.name));
         }
-        auto* drill = dynamic_cast<types::Drill*>(plot);
         if (saved.drill) {
-            if (drill == nullptr) {
+            if (!plot->is_drill()) {
                 return refuse(std::format("plot '{}' was mining, and this build made it something else",
                                           where.name));
             }
-            drill->set_produced(saved.produced);
-        } else if (drill != nullptr) {
+            plot->set_produced(saved.produced);
+        } else if (plot->is_drill()) {
             return refuse(std::format("plot '{}' was not mining, and this build made it a drill",
                                       where.name));
         }
@@ -501,6 +623,215 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
     // The mirrored flag is a running count: the plots were placed one by one above, so it is recounted
     // here rather than trusted to have been kept.
     layer->recount_mirrored();
+
+    // --- TASK: how far each task block's chain had got ---------------------------------------------
+    // Optional: an old save (or one with no task block) has none, and every plot starts at 0
+    // (docs/GAME_DESIGN.md section 1.52). A chunk that is there must name task plots, one record each; a
+    // count past the chain this build gives the content is clamped, with a warning - the designer changed
+    // the tasks, which is not a reason to lose the whole mine.
+    if (const t2d::save::Chunk* task_chunk = file.find(game_save_chunk::kTasks); task_chunk != nullptr) {
+        // Version 1 is the old shape (plot index + completed count); version 2 adds the live rate state
+        // - held seconds and the window's deliveries as remaining seconds plus amount. Both are read;
+        // a save written against version 1 comes back with no hold and an empty window, which is what
+        // it meant then (docs/SAVE.md, docs/GAME_DESIGN.md section 1.55).
+        if (task_chunk->version != 1 && task_chunk->version != kTasksChunkVersion) {
+            return refuse(std::format("the TASK chunk is at version {}, and this build reads versions 1 and {}",
+                                      task_chunk->version, kTasksChunkVersion));
+        }
+        const bool live_state = task_chunk->version >= 2;
+        Reader reader(task_chunk->payload);
+        t2d::u32 count = 0;
+        if (!reader.read_u32(count)) {
+            return refuse(std::format("the TASK chunk cannot be read: {}", reader.error()));
+        }
+        if (count > kMaxPlots) return refuse("the TASK chunk claims more records than a save may have");
+        std::vector<bool> seen(layer->plots().size(), false);
+        for (t2d::u32 index = 0; index < count; ++index) {
+            t2d::u32 plot_index = 0;
+            t2d::u32 completed = 0;
+            if (!reader.read_u32(plot_index) || !reader.read_u32(completed)) {
+                return refuse(std::format("a TASK record cannot be read: {}", reader.error()));
+            }
+            t2d::f32 held = 0.0f;
+            t2d::u32 entries = 0;
+            if (live_state && (!reader.read_f32(held) || !reader.read_u32(entries))) {
+                return refuse(std::format("a TASK record cannot be read: {}", reader.error()));
+            }
+            if (static_cast<t2d::usize>(plot_index) >= layer->plots().size()) {
+                return refuse(std::format("the TASK chunk names plot {}, and the save has {} plots", plot_index,
+                                          layer->plots().size()));
+            }
+            if (seen[plot_index]) {
+                return refuse(std::format("the TASK chunk names plot {} twice", plot_index));
+            }
+            seen[plot_index] = true;
+            types::Tile* plot = layer->plots()[plot_index].get();
+            if (!plot->has_task()) {
+                return refuse(
+                    std::format("the TASK chunk names plot {}, and that plot has no tasks", plot_index));
+            }
+            if (live_state) {
+                if (!std::isfinite(held) || held < 0.0f) {
+                    return refuse(std::format("the TASK record for plot {} says {} second(s) of hold, and a "
+                                              "hold is a finite time that cannot be negative",
+                                              plot_index, held));
+                }
+                if (entries > runtime::content::kMaxTaskWindowEntries) {
+                    return refuse(std::format("the TASK record for plot {} holds {} deliveries, and a window "
+                                              "holds at most {}",
+                                              plot_index, entries,
+                                              runtime::content::kMaxTaskWindowEntries));
+                }
+            }
+            // The window's records are read now and placed on the clock below, once the step they
+            // belong to is known: a saved entry says how much life it had left, and that life does not
+            // depend on the layer clock the save was written at.
+            std::vector<std::pair<t2d::f32, t2d::u32>> window_entries;
+            window_entries.reserve(entries);
+            for (t2d::u32 slot = 0; slot < entries; ++slot) {
+                t2d::f32 remaining = 0.0f;
+                t2d::u32 amount = 0;
+                if (!reader.read_f32(remaining) || !reader.read_u32(amount)) {
+                    return refuse(std::format("a TASK window record cannot be read: {}", reader.error()));
+                }
+                if (!std::isfinite(remaining) || remaining <= 0.0f) {
+                    return refuse(std::format("the TASK window of plot {} says {} second(s) remain, and a "
+                                              "delivery has to have a finite time left",
+                                              plot_index, remaining));
+                }
+                if (amount == 0) {
+                    return refuse(
+                        std::format("the TASK window of plot {} records a delivery of 0 items", plot_index));
+                }
+                window_entries.emplace_back(remaining, amount);
+            }
+            const t2d::usize total = plot->task().count();
+            if (static_cast<t2d::usize>(completed) > total) {
+                if (report != nullptr) {
+                    report->warnings.push_back(std::format(
+                        "plot '{}' at {},{} says {} task(s) are done, and this build gives it {}; the count "
+                        "is clamped",
+                        plot->name(registry), plot->anchor().x, plot->anchor().y, completed, total));
+                }
+                completed = static_cast<t2d::u32>(total);
+            }
+            if (!plot->set_task_completed(completed)) {
+                return refuse(std::format("plot {} has no task component to restore", plot_index));
+            }
+            // The live state after the clamped count: a save that had just reached the hold's end must
+            // settle into the completed step below, consuming its items as it would have in play.
+            auto* task_data = static_cast<runtime::content::TaskData*>(
+                plot->object()->instance(runtime::content::kTaskComponent));
+            if (task_data == nullptr) {
+                return refuse(std::format("plot {} has no task component to restore", plot_index));
+            }
+            // The window drops an entry once it is a whole window old (at <= now - window). On a clock
+            // that starts at 0, a delivery that had "remaining" seconds left therefore sits at
+            // remaining - window: from now 0 it survives exactly that long. (Putting it at -remaining
+            // would place it a whole window too early and lose it on the first ticks.)
+            t2d::f32 window_seconds = 0.0f;
+            if (const std::optional<types::TaskStepView> step = plot->task().step(plot->task().current());
+                step.has_value()) {
+                window_seconds = step->window;
+            }
+            if (entries > 0 && window_seconds <= 0.0f) {
+                return refuse(std::format("the TASK record for plot {} has a delivery window, and its "
+                                          "current step is not a rate step",
+                                          plot_index));
+            }
+            task_data->held = held;
+            task_data->entries = entries;
+            for (t2d::u32 slot = 0; slot < entries; ++slot) {
+                task_data->recent[slot] =
+                    runtime::content::TaskDelivery{window_entries[slot].first - window_seconds,
+                                                   window_entries[slot].second};
+            }
+        }
+        if (!reader.empty()) return refuse("the TASK chunk has bytes after its last record");
+    }
+
+    // With the containers and the counts back, settle each task plot once: whatever the container holds
+    // toward the current step is delivered now, so a load and a live play agree about the box.
+    for (const std::unique_ptr<types::Tile>& plot : layer->plots()) {
+        if (plot->has_task()) (void)plot->run_tasks();
+    }
+
+    // --- CMPT: custom component state, if this save has any -----------------------------------------
+    // Applied only after every plot exists. A missing chunk is the old format (or pure built-in content)
+    // and is fine. A record naming a built-in component is refused: PLOT owns those fields.
+    if (const t2d::save::Chunk* component_chunk = file.find(game_save_chunk::kComponents);
+        component_chunk != nullptr) {
+        if (component_chunk->version != kChunkVersion) {
+            return refuse(std::format("the CMPT chunk is at version {}, and this build reads version {}",
+                                      component_chunk->version, kChunkVersion));
+        }
+        Reader reader(component_chunk->payload);
+        t2d::u32 count = 0;
+        if (!reader.read_u32(count)) {
+            return refuse(std::format("the CMPT chunk cannot be read: {}", reader.error()));
+        }
+        if (count > kMaxComponentRecords) {
+            return refuse("the CMPT chunk claims more component records than a save may have");
+        }
+        std::vector<std::pair<t2d::u32, t2d::u64>> seen;
+        seen.reserve(count);
+        for (t2d::u32 index = 0; index < count; ++index) {
+            t2d::u32 plot_index = 0;
+            t2d::u64 type_id = 0;
+            t2d::u32 version = 0;
+            t2d::u32 size = 0;
+            if (!reader.read_u32(plot_index) || !reader.read_u64(type_id) || !reader.read_u32(version) ||
+                !reader.read_u32(size)) {
+                return refuse(std::format("a CMPT record cannot be read: {}", reader.error()));
+            }
+            if (plot_index >= layer->plots().size()) {
+                return refuse(std::format("the CMPT chunk names plot {}, and the save has {} plots",
+                                          plot_index, layer->plots().size()));
+            }
+            if (size == 0 || size > kMaxComponentBytes) {
+                return refuse("a CMPT record has an unusable state size");
+            }
+            types::Tile* plot = layer->plots()[plot_index].get();
+            const runtime::ObjectData* object = plot->object();
+            const runtime::ComponentType* type =
+                object != nullptr ? object->archetype().type(type_id) : nullptr;
+            if (type == nullptr) {
+                return refuse(std::format("plot {} carries component type {}, which this build does not have",
+                                          plot_index, type_id));
+            }
+            if (runtime::content::is_builtin_component(type_id)) {
+                return refuse(std::format("the CMPT chunk names built-in component {}; PLOT owns that state",
+                                          type_id));
+            }
+            if (type->version() != version) {
+                return refuse(std::format("component type {} is version {}, and the save says {}", type_id,
+                                          type->version(), version));
+            }
+            if (!type->has_load()) {
+                return refuse(std::format("component type {} has no load callback in this build", type_id));
+            }
+            for (const auto& [saved_plot, saved_type] : seen) {
+                if (saved_plot == plot_index && saved_type == type_id) {
+                    return refuse(std::format("the CMPT chunk names plot {} component {} twice", plot_index,
+                                              type_id));
+                }
+            }
+            seen.emplace_back(plot_index, type_id);
+            std::vector<t2d::u8> bytes;
+            if (!reader.read_bytes(size, bytes)) {
+                return refuse(std::format("a CMPT state record cannot be read: {}", reader.error()));
+            }
+            void* data = const_cast<void*>(plot->instance(type_id));
+            if (data == nullptr) {
+                return refuse(std::format("plot {} has no data for component {}", plot_index, type_id));
+            }
+            if (type->load_instance(plot->shared(type_id), data, bytes.data(), size) != size) {
+                return refuse(
+                    std::format("plot {} component {} refused its saved state", plot_index, type_id));
+            }
+        }
+        if (!reader.empty()) return refuse("the CMPT chunk has bytes after its last record");
+    }
 
     // --- UNLK: which buildings the save had unlocked -----------------------------------------------
     BuildingUnlocks unlocks;
@@ -553,7 +884,7 @@ std::optional<GameSaveData> load_game_save(const t2d::save::File& file, const Co
             return refuse(std::format("the BUIL chunk names plot {} twice", saved.plot));
         }
         has_build[saved.plot] = true;
-        types::SceneTile* plot = layer->plots()[saved.plot].get();
+        types::Tile* plot = layer->plots()[saved.plot].get();
         if (!plot->under_construction()) {
             return refuse(std::format("the BUIL chunk names plot {}, and that plot is not under construction",
                                       saved.plot));

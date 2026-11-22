@@ -23,16 +23,26 @@
 
 #include <t2d/core/ecfg.h>
 
+#include <deque>
 #include <format>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace mine {
 
+namespace runtime {
+class RuntimeContext;
+}
+
+namespace types {
+class TileRuntimeLibrary;
+}
+
 struct ContentLoadReport {
-    usize registered = 0;   ///< names that entered the registry now
+    usize registered = 0;      ///< names that entered the registry now
     usize already_present = 0; ///< names that were already registered (loading the same file twice)
     /// Tables whose name is not a content kind: reported instead of ignored, so a typo in the data
     /// file is visible.
@@ -49,6 +59,13 @@ struct ContentLoadReport {
 /// name up once per placement, so the lookup is a scan over a vector rather than an index.
 class ContentDefinitions {
 public:
+    ContentDefinitions() = default;
+    ContentDefinitions(const ContentDefinitions&) = delete;
+    ContentDefinitions& operator=(const ContentDefinitions&) = delete;
+    ContentDefinitions(ContentDefinitions&&) noexcept = default;
+    ContentDefinitions& operator=(ContentDefinitions&&) noexcept = default;
+    ~ContentDefinitions() = default;
+
     void add(types::TileDefinition definition);
     /// Item definitions are kept the same way and for the same reason (types/item_definition.h):
     /// everything that shows an item - an inventory slot, a recipe, a demand - shows its picture.
@@ -75,26 +92,41 @@ public:
     /// How many drop definitions the load read, for the same reason.
     [[nodiscard]] usize drop_count() const { return drops_.size(); }
 
+    /// The registries mods register into and content is built against. One per game, owned by the
+    /// content pipeline; a ContentDefinitions created alone (a test) gets its own on first use.
+    void set_runtime_context(std::shared_ptr<runtime::RuntimeContext> context);
+    [[nodiscard]] const std::shared_ptr<runtime::RuntimeContext>& runtime_context() const {
+        return runtime_context_;
+    }
+
+    /// The runtime definitions and archetypes built from this load. Built once, and kept alive by every
+    /// Tile made from it: replacing the content definitions while an old layer exists does not free the
+    /// archetypes that layer's objects point at. Rebuilt when a definition is added after the first call.
+    [[nodiscard]] std::shared_ptr<const types::TileRuntimeLibrary>
+    runtime(const ContentRegistry& registry) const;
+
 private:
-    std::vector<types::TileDefinition> tiles_;
+    std::deque<types::TileDefinition> tiles_;
     std::vector<types::ItemDefinition> items_;
     std::vector<types::DropDefinition> drops_;
+    mutable std::shared_ptr<const types::TileRuntimeLibrary> runtime_;
+    mutable std::shared_ptr<runtime::RuntimeContext> runtime_context_;
 };
 
 /// Every piece of content \p document declares, in file order (ids are kNoContent: nothing is
 /// registered). register_content_from_ecfg() is this walk plus registration; a loader that fills the
 /// registry from several sources needs the list *before* it registers anything, so a name another
 /// source already took can be reported instead of silently merged.
-[[nodiscard]] std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
-                                                             std::vector<std::string>* unknown_tables = nullptr);
+[[nodiscard]] std::vector<ContentEntry>
+content_declarations(const t2d::EcfgDocument& document, std::vector<std::string>* unknown_tables = nullptr);
 
 /// One content entry's picture. The engine does not read the designer's fields - with one exception:
 /// it has to be able to draw what the designer describes, so "image" is read, and its path is kept
 /// exactly as written. Resolving that path against whatever the content came from is the caller's job.
 struct ContentImage {
     ContentKind kind = ContentKind::Item;
-    std::string name;   ///< the content entry it belongs to
-    std::string path;   ///< the image field as written ("art/wall.png")
+    std::string name; ///< the content entry it belongs to
+    std::string path; ///< the image field as written ("art/wall.png")
     /// Which picture of that entry it is. Empty is the entry's own "image"; "top" is the second one a
     /// drill has - the part that turns on its base (docs/GAME_DESIGN.md section 1.38).
     std::string part;
@@ -106,13 +138,13 @@ struct ContentImage {
 /// One picture a content file ships, and what the engine made of it.
 struct ResolvedImage {
     ContentKind kind = ContentKind::Item;
-    std::string content;   ///< the content entry it belongs to
-    std::string part;      ///< which of its pictures this is; empty is its own (content_loader.h)
-    std::string source;    ///< the file that declared it
-    std::string path;      ///< as written in the file ("art/wall.png")
-    std::string resolved;  ///< absolute path, empty when it could not be resolved
+    std::string content;  ///< the content entry it belongs to
+    std::string part;     ///< which of its pictures this is; empty is its own (content_loader.h)
+    std::string source;   ///< the file that declared it
+    std::string path;     ///< as written in the file ("art/wall.png")
+    std::string resolved; ///< absolute path, empty when it could not be resolved
     bool ok = false;
-    std::string error;     ///< why not, when ok is false
+    std::string error; ///< why not, when ok is false
 };
 
 /// Resolves every "image" \p document declares, against the directory of \p source_path - the file that
@@ -135,26 +167,27 @@ struct ContentRegistrationReport {
 
 /// Registers \p declared into \p registry, refusing (and listing) names that are already taken.
 /// \p registered_out, when given, collects what this call actually added.
-[[nodiscard]] ContentRegistrationReport register_declared_content(ContentRegistry& registry,
-                                                                  t2d::ConstSpan<const ContentEntry> declared,
-                                                                  std::vector<ContentEntry>* registered_out = nullptr);
+[[nodiscard]] ContentRegistrationReport
+register_declared_content(ContentRegistry& registry, t2d::ConstSpan<const ContentEntry> declared,
+                          std::vector<ContentEntry>* registered_out = nullptr);
 
 /// The result of ordering a set of things that require each other.
 struct RequirementOrder {
-    std::vector<usize> order;         ///< indices, everything a thing requires comes before it
-    std::vector<usize> dropped;       ///< indices that cannot load: a missing requirement, or a cycle
-    std::vector<std::string> errors;  ///< why, in the caller's own words ("'a' requires 'b', ...")
+    std::vector<usize> order;        ///< indices, everything a thing requires comes before it
+    std::vector<usize> dropped;      ///< indices that cannot load: a missing requirement, or a cycle
+    std::vector<std::string> errors; ///< why, in the caller's own words ("'a' requires 'b', ...")
 };
 
 /// Orders \p count things so that what a thing requires comes first. \p id_of names one, \p requires_of
 /// lists what it needs. A requirement nobody provides drops the thing that wanted it; anything left
 /// over is a cycle. Both are reported rather than guessed at: a load order that is not what the data
 /// asked for is worse than no load order.
-template <class IdOf, class RequiresOf>
+template<class IdOf, class RequiresOf>
 [[nodiscard]] RequirementOrder order_by_requirements(usize count, IdOf&& id_of, RequiresOf&& requires_of) {
     RequirementOrder result;
     std::map<std::string, usize> by_id;
-    for (usize index = 0; index < count; ++index) by_id.emplace(id_of(index), index);
+    for (usize index = 0; index < count; ++index)
+        by_id.emplace(id_of(index), index);
 
     std::vector<bool> placed(count, false);
     std::vector<bool> dropped(count, false);
@@ -162,7 +195,8 @@ template <class IdOf, class RequiresOf>
     for (usize index = 0; index < count; ++index) {
         for (const std::string& need : requires_of(index)) {
             if (by_id.find(need) != by_id.end()) continue;
-            result.errors.push_back(std::format("'{}' requires '{}', which is not loaded", id_of(index), need));
+            result.errors.push_back(
+                std::format("'{}' requires '{}', which is not loaded", id_of(index), need));
             dropped[index] = true;
             ++dropped_count;
             break;

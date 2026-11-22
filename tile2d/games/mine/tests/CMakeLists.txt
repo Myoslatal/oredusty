@@ -6,6 +6,16 @@ target_link_libraries(test_mine_menu PRIVATE mine_core)
 t2d_add_test(test_registry test_registry.cpp)
 target_link_libraries(test_registry PRIVATE mine_core)
 
+# The runtime core: C descriptors, component types, archetype layout, object data, regist-time
+# interface overrides, and the minimal tile-type registry. Pure CPU and no game content.
+t2d_add_test(test_component_runtime test_component_runtime.cpp)
+target_link_libraries(test_component_runtime PRIVATE mine_core)
+
+# The built-in content runtime: the eight component tables and the five built-in tile types. Still
+# independent of the old Tile/Tile classes and the app.
+t2d_add_test(test_content_runtime test_content_runtime.cpp)
+target_link_libraries(test_content_runtime PRIVATE mine_core)
+
 # .ecfg content file -> registry -> save table -> loading it back.
 t2d_add_test(test_content_loader test_content_loader.cpp)
 target_link_libraries(test_content_loader PRIVATE mine_core)
@@ -57,6 +67,47 @@ file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/mods/example_data" DESTINATION "${MINE_TE
 file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/mods/example_native/mod.ecfg"
      DESTINATION "${MINE_TEST_MODS_DIR}/example_native")
 
+# The runtime-type fixture lives apart from the packages above: it registers components and tile types
+# through the version 2 surface, so it must not change the counts the existing package tests assert.
+set(MINE_TEST_RUNTIME_MODS_DIR "${CMAKE_CURRENT_BINARY_DIR}/mods_runtime")
+
+add_library(example_runtime MODULE mods/example_runtime/native.cpp)
+t2d_apply_settings(example_runtime)
+target_link_libraries(example_runtime PRIVATE mine_mod_sdk)
+set_target_properties(example_runtime PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${MINE_TEST_RUNTIME_MODS_DIR}/example_runtime"
+    OUTPUT_NAME "example_runtime")
+file(MAKE_DIRECTORY "${MINE_TEST_RUNTIME_MODS_DIR}/example_runtime/content")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/mods/example_runtime/mod.ecfg"
+               "${MINE_TEST_RUNTIME_MODS_DIR}/example_runtime/mod.ecfg" COPYONLY)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/mods/example_runtime/content/marker.ecfg"
+               "${MINE_TEST_RUNTIME_MODS_DIR}/example_runtime/content/marker.ecfg" COPYONLY)
+
+# Deliberately wrong registrations, for the API's own checks. Each still exports the same module id; the
+# test writes a manifest that points at one of them.
+foreach(runtime_variant bad_abi duplicate missing_previous bad_version)
+    string(TOUPPER "${runtime_variant}" runtime_variant_upper)
+    add_library(example_runtime_${runtime_variant} MODULE mods/example_runtime/native.cpp)
+    t2d_apply_settings(example_runtime_${runtime_variant})
+    target_link_libraries(example_runtime_${runtime_variant} PRIVATE mine_mod_sdk)
+    target_compile_definitions(example_runtime_${runtime_variant} PRIVATE
+        EXAMPLE_RUNTIME_${runtime_variant_upper}=1)
+    set_target_properties(example_runtime_${runtime_variant} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/runtime_variants"
+        OUTPUT_NAME "example_runtime_${runtime_variant}")
+endforeach()
+
+t2d_add_test(test_mod_runtime test_mod_runtime.cpp)
+target_link_libraries(test_mod_runtime PRIVATE mine_core)
+target_compile_definitions(test_mod_runtime PRIVATE
+    T2D_TEST_RUNTIME_MODS_DIR="${MINE_TEST_RUNTIME_MODS_DIR}"
+    T2D_TEST_RUNTIME_BAD_ABI="$<TARGET_FILE:example_runtime_bad_abi>"
+    T2D_TEST_RUNTIME_DUPLICATE="$<TARGET_FILE:example_runtime_duplicate>"
+    T2D_TEST_RUNTIME_MISSING_PREVIOUS="$<TARGET_FILE:example_runtime_missing_previous>"
+    T2D_TEST_RUNTIME_BAD_VERSION="$<TARGET_FILE:example_runtime_bad_version>")
+add_dependencies(test_mod_runtime example_runtime example_runtime_bad_abi
+    example_runtime_duplicate example_runtime_missing_previous example_runtime_bad_version)
+
 t2d_add_test(test_mod_package test_mod_package.cpp)
 target_link_libraries(test_mod_package PRIVATE mine_core)
 target_compile_definitions(test_mod_package PRIVATE
@@ -104,6 +155,11 @@ target_link_libraries(test_drops PRIVATE mine_core)
 # drop it throws out.
 t2d_add_test(test_drills test_drills.cpp)
 target_link_libraries(test_drills PRIVATE mine_core)
+
+# Tasks: the chain a task block carries, delivering through its container, and the settled state a save
+# brings back (docs/GAME_DESIGN.md section 1.52).
+t2d_add_test(test_tasks test_tasks.cpp)
+target_link_libraries(test_tasks PRIVATE mine_core)
 
 # Warehouses: the scene plot that holds things - its container, the draginto that fills it, the click
 # that shows it, and the drag that puts a drop in.

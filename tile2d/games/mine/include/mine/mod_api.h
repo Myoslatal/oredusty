@@ -5,12 +5,15 @@
 // crosses this line**: no std::string, no exceptions, no C++ objects with a layout this header does
 // not spell out. The header itself is C++ because a mod is C++, but the ABI it declares is C.
 //
-// Growing the API: append new function pointers at the end of MineModApi and bump kModApiVersion only
-// when an existing field changes meaning. struct_size is what lets a mod built against an older header
-// run against a newer host - it must never read past the size it was given.
+// Growing the API: append new function pointers at the end of MineModApi; kModApiVersion is bumped when
+// a release adds a surface a module must opt into (this release appended the runtime type registration
+// fields and bumped to 2). struct_size is what lets a host tell how much of the struct a module knows
+// about; it must never read past the size it was given.
 #pragma once
 
-#include <mine/registry.h>   // ContentKind / ContentId, so a mod names them instead of guessing numbers
+#include <mine/registry.h> // ContentKind / ContentId, so a mod names them instead of guessing numbers
+
+#include <mine/runtime/mod_component_api.h>
 
 #include <t2d/core/types.h>
 
@@ -21,7 +24,10 @@ using t2d::u32;
 
 /// Bumped when a field of MineModApi or MineModDesc changes shape or meaning. A module that was built
 /// against another version is refused with a message instead of being called through a wrong layout.
-inline constexpr u32 kModApiVersion = 1;
+/// Version 2 appended the runtime registration surface: custom components and tile types, their
+/// lookups, and registration-time interface overrides. The prefix is unchanged; a module built for
+/// version 1 is refused by abi_version before any new field is read.
+inline constexpr u32 kModApiVersion = 2;
 
 /// What the game hands to a native module.
 ///
@@ -46,6 +52,21 @@ struct MineModApi {
     const char* (*mod_value)(void* self, const char* key);
     /// The same as an integer, with a fallback for "missing or not a number".
     i64 (*mod_int)(void* self, const char* key, i64 fallback);
+
+    // --- version 2: runtime types and registration-time overrides ---------------------------------
+    /// Looks a component type up by name. 0 when this runtime has no such component.
+    MineFindComponentFn find_component;
+    /// Looks a tile type up by name. 0 when this runtime has no such tile type.
+    MineFindTileTypeFn find_tile_type;
+    /// Registers a component type. 0 on success. Duplicate ids or names, a bad descriptor size, a
+    /// foreign ABI hash and an invalid interface table are refused and reported.
+    MineRegisterComponentFn register_component;
+    /// Registers a tile type whose component ids are already registered. 0 on success.
+    MineRegisterTileTypeFn register_tile_type;
+    /// Replaces the active table of an original component interface. 0 on success; the replacement's
+    /// previous table is written to \p previous for call chaining. Only valid while the module's
+    /// on_load() is running: the host restores the registration tables before unloading it.
+    MineOverrideInterfaceFn override_component_interface;
 };
 
 /// What a native module exports.
@@ -69,9 +90,9 @@ struct MineModDesc {
 };
 
 #if defined(_WIN32)
-#  define MINE_MOD_EXPORT extern "C" __declspec(dllexport)
+#define MINE_MOD_EXPORT extern "C" __declspec(dllexport)
 #else
-#  define MINE_MOD_EXPORT extern "C" __attribute__((visibility("default")))
+#define MINE_MOD_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
 
 /// The single symbol the host looks for. It returns a pointer to a static MineModDesc.

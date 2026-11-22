@@ -73,8 +73,12 @@ struct PlacedContent {
     std::string name;
     i32 layer = 0;
     GridPos anchor{};
-    i32 width = 1;
-    i32 height = 1;
+    /// How many cells this placement covers. 0 (the default) means "the footprint the content
+    /// definition declares" (types/tile_definition.h); a value above zero is this placement saying its
+    /// own size, which is what a **save** writes - it records the footprint a plot actually had, not the
+    /// one this build's data would give it now.
+    i32 width = 0;
+    i32 height = 0;
     /// What the plot is created **holding**: the starting slots of a container sub-object, in file order.
     /// Empty for a plot that starts empty, which is every placement that does not say otherwise.
     std::vector<ContentStack> holds{};
@@ -186,13 +190,17 @@ public:
     [[nodiscard]] bool inside(GridPos cell) const { return cells_.inside(cell); }
     /// The seed this layer's own dice were seeded with: the world's seed mixed with the index.
     [[nodiscard]] u64 seed() const { return seed_; }
+    /// The layer's own clock, in seconds: what tick() has been handed since the layer was built, with
+    /// negative spans clamped away. Task windows are measured against it (docs/GAME_DESIGN.md section
+    /// 1.53); it is time passing, not a plot taking a turn, so it does not change what tick() returns.
+    [[nodiscard]] f32 clock_seconds() const { return clock_; }
 
     // --- building ---------------------------------------------------------------------------------
     /// Places the content \p where names: builds the plot its kind calls for (types/tile_definition.h),
     /// rolls its mirroring with this layer's dice, writes it into every cell of its footprint, and
     /// indexes it. Returns the plot, or nullptr and a reason in \p report - nothing is half placed, and
     /// a refusal leaves the layer exactly as it was.
-    [[nodiscard]] types::SceneTile* place(const ContentRegistry& registry, const ContentDefinitions& definitions,
+    [[nodiscard]] types::Tile* place(const ContentRegistry& registry, const ContentDefinitions& definitions,
                                           const PlacedContent& where, LayerBuildReport* report = nullptr);
 
     /// Places everything \p spec describes. This is what entering a layer does.
@@ -200,8 +208,10 @@ public:
     /// **before** placing anything (docs/GAME_DESIGN.md section 1.34). The conditions are the map's, not
     /// the plot's: the cell has to be on the map, the tile layer has to exist, the cells have to be free
     /// on that tile layer, and content that has to stand on something has to find it there - a drill has
-    /// to sit on ore (types/drill.h).
-    [[nodiscard]] bool can_place(const PlacedContent& where, std::string* why = nullptr) const;
+    /// to sit on ore (types/drill.h). \p definitions supplies the footprint a placement that does not
+    /// name a size covers: the same rule place() uses, so asking and placing cannot disagree.
+    [[nodiscard]] bool can_place(const ContentDefinitions& definitions, const PlacedContent& where,
+                                 std::string* why = nullptr) const;
 
     /// The first tile layer of \p cell that has nothing on it: where a building goes when the player picks
     /// one and clicks (docs/GAME_DESIGN.md section 1.36). A building stands **above** what is already there -
@@ -214,7 +224,7 @@ public:
 
     // --- the two passes ---------------------------------------------------------------------------
     /// Walks every plot and brings the dirty ones up to date; returns how many actually ran. A plot
-    /// nobody touched costs one branch (types/scene_tile.h).
+    /// nobody touched costs one branch (types/tile.h).
     usize refresh();
     /// Hands the frame's seconds to everything that runs - the plots on a cadence, and the entities -
     /// and returns how many took their turn. Plots that do not run are not in the list at all, which is
@@ -228,12 +238,12 @@ public:
     /// The plot covering \p cell on \p layer, or nullptr when there is none. A plot is found through
     /// the chunk index, so a 3x3 answers for all nine of its cells and the caller never has to know
     /// where its anchor is.
-    [[nodiscard]] const types::SceneTile* plot_at(i32 layer, GridPos cell) const;
+    [[nodiscard]] const types::Tile* plot_at(i32 layer, GridPos cell) const;
     /// The same lookup, for the things that **act** on a plot: a drop let go on a warehouse goes into it
     /// (pointer_drag.h), a click opens its panel (app.cpp). Everything that only reads keeps the const one.
-    [[nodiscard]] types::SceneTile* plot_at(i32 layer, GridPos cell);
+    [[nodiscard]] types::Tile* plot_at(i32 layer, GridPos cell);
     /// The topmost plot at \p cell, whatever tile layer it is on: what the pointer is over.
-    [[nodiscard]] const types::SceneTile* top_plot_at(GridPos cell) const;
+    [[nodiscard]] const types::Tile* top_plot_at(GridPos cell) const;
     /// Whether \p cell is occupied on any tile layer in \p layer_mask. This is the collision question
     /// the game asks - routing, placing, demands - and which layers block is the designer's
     /// (docs/GAME_DESIGN.md section 2), so the mask is a parameter rather than a rule in here. A cell
@@ -241,7 +251,7 @@ public:
     [[nodiscard]] bool blocks(i32 layer_mask, GridPos cell) const;
 
     /// Visits every plot whose footprint touches \p cells, each one exactly once: a plot that straddles
-    /// two chunks is not visited twice. The visitor takes a \c const \c types::SceneTile&.
+    /// two chunks is not visited twice. The visitor takes a \c const \c types::Tile&.
     template <typename Visitor>
     void for_each_plot_in(const t2d::TileRect& cells, Visitor&& visit) const {
         if (cells.empty() || plots_.empty()) return;
@@ -258,7 +268,7 @@ public:
                 if (found == chunks_.end()) continue;
                 for (const u32 serial : found->second) {
                     if (visited_[serial] == visit_stamp_) continue;
-                    const types::SceneTile& plot = *plots_[serial];
+                    const types::Tile& plot = *plots_[serial];
                     const t2d::TileRect& covered = plot.cells();
                     if (!(covered.x < cells.right() && cells.x < covered.right() && covered.y < cells.bottom() &&
                           cells.y < covered.bottom())) {
@@ -323,7 +333,7 @@ public:
     [[nodiscard]] usize cell_count() const { return cells_.cell_count(); }
     [[nodiscard]] usize cell_bytes() const { return cells_.bytes(); }
     /// Every plot, in the order it was placed.
-    [[nodiscard]] const std::vector<std::unique_ptr<types::SceneTile>>& plots() const { return plots_; }
+    [[nodiscard]] const std::vector<std::unique_ptr<types::Tile>>& plots() const { return plots_; }
     [[nodiscard]] const ContentGrid& cells() const { return cells_; }
 
     /// Every entity, in spawn order. Dead ones are gone from here at the end of the tick that killed
@@ -363,7 +373,7 @@ private:
     /// ore is and what it drops, and the period that comes out of it (hardness / power). A drill with
     /// nothing to mine is refused into \p report rather than left to do nothing forever
     /// (docs/GAME_DESIGN.md section 1.26).
-    void configure_drill(types::Drill& drill, const ContentRegistry& registry,
+    void configure_drill(types::Tile& drill, const ContentRegistry& registry,
                          const ContentDefinitions& definitions, LayerBuildReport* report);
     /// Frees the storage of what was destroyed during a pass, once nothing can be walking it.
     void sweep_destroyed();
@@ -381,10 +391,18 @@ private:
     ContentGrid cells_{};
     /// Every plot, owned here. A plot never moves once it is placed, so the pointers the chunk index
     /// and the callers hold stay valid.
-    std::vector<std::unique_ptr<types::SceneTile>> plots_;
+    std::vector<std::unique_ptr<types::Tile>> plots_;
     /// The plots that run, decided when they were created: the tick pass walks this and nothing else.
-    std::vector<types::EntityTile*> ticking_;
+    std::vector<types::Tile*> ticking_;
+    /// The plots that carry a task chain. They do not "run" (nothing about a task block ticks in the
+    /// pass-count sense), but their rate windows and holds are measured in seconds, so the tick pass
+    /// gives them the frame's time without counting them in what it returns (docs/GAME_DESIGN.md
+    /// section 1.54).
+    std::vector<types::Tile*> task_plots_;
     usize mirrored_ = 0;
+    /// Seconds the tick pass has been handed since the layer was built (clock_seconds). A measurement,
+    /// not a pass count: a layer whose plots do not run still sees time pass for task windows.
+    f32 clock_ = 0.0f;
     /// Chunk -> the plots whose footprint touches it. The spatial index that keeps a query, a draw and
     /// a placement check proportional to what is on screen rather than to the size of the map.
     std::unordered_map<u64, std::vector<u32>> chunks_;

@@ -1,0 +1,26 @@
+# 截图用内容包：rate（速率）任务的方块（docs/GAME_DESIGN.md §1.53）。
+#
+# 用 machine:: 声明而不是 structure::，是为了不和游戏本体的 structure:: task_block:: 同名冲突；
+# tile_type 仍选同一个内置 task_block 类型（Task + Container + Click + Drag + Preview + Building）。
+# 它只用于截图与无头冒烟，不进游戏本体内容。
+#
+# tasks:: feed 是一个 rate 任务：stone 至少 3 件/秒、窗口 5 秒，窗口内累计要到 ceil(3*5)=15 件；
+# 再加 hold:2 —— 这个条件还要**连续保持 2 秒**才完成（条件不成立立刻归零）。完成时正好消费 15 件，
+# 多出来的留在容器里。demo 的三层分别演示：10 件（条件不成立）、15 件（条件成立、约 2 秒后自动完成）、
+# 20 件（条件成立、用于“持续中”的截图）。
+
+machine::
+    task_block::
+        image:"art/task_block.png"
+        tile_type:"task_block"
+        capacity:100
+        size::
+            width:2
+            height:1
+        tasks::
+            feed::
+                type:"rate"
+                item:"stone"
+                rate:3
+                window:5
+                hold:2

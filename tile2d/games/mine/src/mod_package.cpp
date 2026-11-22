@@ -1,6 +1,7 @@
 #include <mine/mod_package.h>
 
 #include <mine/content_loader.h>
+#include <mine/runtime/runtime_context.h>
 #include <mine/types/tile_definition.h>
 
 #include <t2d/core/log.h>
@@ -18,8 +19,8 @@ namespace fs = std::filesystem;
 
 /// The keys a manifest may use. Anything else is refused: a typo in a manifest is a mod that silently
 /// does not do what its author meant.
-constexpr const char* kManifestKeys[] = {"id",    "name",     "version", "description",
-                                         "api",   "requires", "content", "native",
+constexpr const char* kManifestKeys[] = {"id", "name", "version", "description", "api", "requires", "content",
+                                         "native",
                                          // "data" is the mod's own namespace: the host parses it and
                                          // hands it back through mod_value()/mod_int(), and does not
                                          // care what is inside.
@@ -99,6 +100,34 @@ i64 mod_int(void* self, const char* key, i64 fallback) {
     return host != nullptr ? host->api_mod_int(self, key, fallback) : fallback;
 }
 
+u64 mod_find_component(void* self, const char* name) {
+    ModHost* host = host_of(self);
+    return host != nullptr ? host->api_find_component(self, name) : 0;
+}
+
+u64 mod_find_tile_type(void* self, const char* name) {
+    ModHost* host = host_of(self);
+    return host != nullptr ? host->api_find_tile_type(self, name) : 0;
+}
+
+int mod_register_component(void* self, const MineComponentDesc* desc) {
+    ModHost* host = host_of(self);
+    return host != nullptr ? host->api_register_component(self, desc) : 1;
+}
+
+int mod_register_tile_type(void* self, const MineTileTypeDesc* desc) {
+    ModHost* host = host_of(self);
+    return host != nullptr ? host->api_register_tile_type(self, desc) : 1;
+}
+
+int mod_override_component_interface(void* self, u64 type_id, u32 interface_id, u32 expected_version,
+                                     const void* replacement, const void** previous) {
+    ModHost* host = host_of(self);
+    return host != nullptr ? host->api_override_component_interface(self, type_id, interface_id,
+                                                                    expected_version, replacement, previous)
+                           : 1;
+}
+
 } // namespace
 
 // --- the manifest ---------------------------------------------------------------------------------
@@ -160,7 +189,8 @@ std::optional<ModManifest> ModManifest::from_document(const t2d::EcfgDocument& d
     if (const t2d::EcfgValue* listed = root.find("requires"); listed != nullptr) {
         manifest.requirements = read_string_list(*listed);
         if (manifest.requirements.empty() && !listed->is_array() && !listed->is_string()) {
-            return fail(std::format("{}: requires must be a name or a list of names", document.source_name()));
+            return fail(
+                std::format("{}: requires must be a name or a list of names", document.source_name()));
         }
     }
     if (const t2d::EcfgValue* data = root.find("data"); data != nullptr) {
@@ -212,9 +242,16 @@ ModHost::ModHost() {
     api_.content_name = &mod_content_name;
     api_.mod_value = &mod_value;
     api_.mod_int = &mod_int;
+    api_.find_component = &mod_find_component;
+    api_.find_tile_type = &mod_find_tile_type;
+    api_.register_component = &mod_register_component;
+    api_.register_tile_type = &mod_register_tile_type;
+    api_.override_component_interface = &mod_override_component_interface;
 }
 
-ModHost::~ModHost() { unload(); }
+ModHost::~ModHost() {
+    unload();
+}
 
 usize ModHost::count() const {
     usize running = 0;
@@ -232,10 +269,24 @@ usize ModHost::native_count() const {
     return count;
 }
 
+runtime::RuntimeContext& ModHost::runtime() {
+    if (runtime_context_ != nullptr) return *runtime_context_;
+    if (owned_runtime_ == nullptr) owned_runtime_ = std::make_shared<runtime::RuntimeContext>();
+    return *owned_runtime_;
+}
+
 const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, ContentRegistry& registry) {
+    return load(directories, registry, runtime());
+}
+
+const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, ContentRegistry& registry,
+                                   runtime::RuntimeContext& context) {
     unload();
+    runtime_context_ = &context;
     registry_ = &registry;
     report_ = ModLoadReport{};
+    components_this_load_.clear();
+    tile_types_this_load_.clear();
 
     // --- find the packages ------------------------------------------------------------------------
     struct Found {
@@ -264,7 +315,7 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
         }
         std::vector<fs::path> manifests;
         if (fs::is_regular_file(root / "mod.ecfg", code)) {
-            manifests.push_back(root / "mod.ecfg");   // the directory *is* a package
+            manifests.push_back(root / "mod.ecfg"); // the directory *is* a package
         } else {
             for (const fs::directory_entry& entry : fs::directory_iterator(root, code)) {
                 if (entry.is_directory(code) && fs::exists(entry.path() / "mod.ecfg", code)) {
@@ -276,7 +327,8 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
         std::sort(manifests.begin(), manifests.end());
         for (const fs::path& manifest_path : manifests) {
             t2d::EcfgError parse_error;
-            std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::load(manifest_path.string(), &parse_error);
+            std::optional<t2d::EcfgDocument> document =
+                t2d::EcfgDocument::load(manifest_path.string(), &parse_error);
             const std::string package_dir = manifest_path.parent_path().string();
             // A manifest that asks to be skipped is not a manifest: the directory is not a mod package.
             if (!document.has_value() && t2d::ecfg_skipped(parse_error)) continue;
@@ -340,12 +392,12 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
             order.push_back(index);
             progress = true;
         }
-        if (!progress) break;   // everything left is waiting for something that is waiting for it
+        if (!progress) break; // everything left is waiting for something that is waiting for it
     }
     for (usize index = 0; index < found.size(); ++index) {
         if (placed[index] || dropped[index]) continue;
-        report_.errors.push_back(std::format("mod '{}': its requirements form a cycle, not loaded",
-                                             found[index].manifest.id));
+        report_.errors.push_back(
+            std::format("mod '{}': its requirements form a cycle, not loaded", found[index].manifest.id));
         LoadedMod failed;
         failed.manifest = found[index].manifest;
         failed.ok = false;
@@ -393,12 +445,17 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
             report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
             continue;
         }
+        // The code runs before this package's data is registered: on_load() is the one moment a module
+        // may add component/tile types and override interfaces, and content definitions may name a type
+        // it registers here. A module that refuses stops its own data too.
+        if (!load_native(slot, manifest)) continue;
         for (usize file_index = 0; file_index < documents.size(); ++file_index) {
             const t2d::EcfgDocument& document = documents[file_index];
             std::vector<std::string> unknown_tables;
             const std::vector<ContentEntry> declared = content_declarations(document, &unknown_tables);
             std::vector<ContentEntry> added;
-            const ContentRegistrationReport registered = register_declared_content(registry, declared, &added);
+            const ContentRegistrationReport registered =
+                register_declared_content(registry, declared, &added);
             for (const ContentEntry& entry : added) {
                 slot.loaded.registered.push_back(ModContentEntry{entry.kind, entry.id, entry.name});
             }
@@ -413,7 +470,8 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
                 if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
             for (const std::string& table : unknown_tables) {
-                report_.warnings.push_back(std::format("mod '{}': '{}' is not a content kind", manifest.id, table));
+                report_.warnings.push_back(
+                    std::format("mod '{}': '{}' is not a content kind", manifest.id, table));
             }
             // The pictures the file ships, resolved against the file's own directory. A missing one is
             // reported like any other broken reference: a content entry that cannot be drawn must not
@@ -473,88 +531,32 @@ const ModLoadReport& ModHost::load(const std::vector<std::string>& directories, 
                 if (slot.loaded.error.empty()) slot.loaded.error = message;
             }
         }
-
-        // Then the code, if there is any.
-        if (manifest.native.empty()) continue;
-        const fs::path library = fs::path(manifest.directory) / manifest.native;
-        std::error_code code;
-        if (!fs::exists(library, code)) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("native library '{}' is missing", library.string());
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        std::string load_error;
-        std::optional<t2d::Module> module = t2d::Module::load(library.string(), &load_error);
-        if (!module.has_value() || !module->valid()) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("'{}' could not be loaded: {}", library.string(), load_error);
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        const auto entry = module->function<const MineModDesc*()>(kModEntrySymbol);
-        if (entry == nullptr) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("'{}' does not export {}", library.string(), kModEntrySymbol);
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        const MineModDesc* desc = entry();
-        if (desc == nullptr) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("{}() returned nothing", kModEntrySymbol);
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        if (desc->abi_version != kModApiVersion) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("built against mod API {}, this build is {} (rebuild the mod)",
-                                            desc->abi_version, kModApiVersion);
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        if (desc->struct_size < sizeof(MineModDesc)) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("its descriptor is {} bytes, this build's is {} (rebuild the mod)",
-                                            desc->struct_size, sizeof(MineModDesc));
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        if (desc->id == nullptr || manifest.id != desc->id) {
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("the library calls itself '{}', the manifest says '{}'",
-                                            desc->id != nullptr ? desc->id : "(nothing)", manifest.id);
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-
-        slot.module = std::move(module);
-        slot.desc = desc;
-        const ModContext context{this, slots_.size() - 1};
-        const int result = desc->on_load != nullptr ? desc->on_load(&api_, const_cast<ModContext*>(&context)) : 0;
-        if (result != 0) {
-            // The module's own on_load refused to run: close it again, and keep nothing of it.
-            slot.desc = nullptr;
-            slot.module.reset();
-            slot.loaded.ok = false;
-            slot.loaded.error = std::format("on_load() returned {}", result);
-            report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
-            continue;
-        }
-        slot.loaded.native_loaded = true;
-        ++report_.native_modules;
     }
 
     report_.mods.reserve(slots_.size());
-    for (const Slot& slot : slots_) report_.mods.push_back(slot.loaded);
+    for (const Slot& slot : slots_)
+        report_.mods.push_back(slot.loaded);
     T2D_INFO("mods: {} of {} loaded ({} native), {} content registered, {} error(s)", count(),
              report_.mods.size(), report_.native_modules, report_.content_registered, report_.errors.size());
-    for (const std::string& error : report_.errors) T2D_WARN("mods: {}", error);
-    for (const std::string& warning : report_.warnings) T2D_WARN("mods: {}", warning);
+    for (const std::string& error : report_.errors)
+        T2D_WARN("mods: {}", error);
+    for (const std::string& warning : report_.warnings)
+        T2D_WARN("mods: {}", warning);
     return report_;
 }
 
 void ModHost::unload() {
+    // Restore the tables before the code that installed them goes away: an object that already exists
+    // reads its interface through the ComponentType on every call, so after this it is on the game's
+    // table again. Restoring first also means a module's on_unload sees the game's behaviour.
+    if (runtime_context_ != nullptr) {
+        for (auto it = overrides_.rbegin(); it != overrides_.rend(); ++it) {
+            runtime_context_->restore_interface(static_cast<runtime::ComponentTypeId>(it->type_id),
+                                                static_cast<runtime::InterfaceId>(it->interface_id));
+        }
+    }
+    overrides_.clear();
+    in_on_load_ = false;
     // Reverse order, and every module is told before its library goes away: a module that still has
     // something to release gets the chance, and nothing runs after its code is gone.
     for (usize index = slots_.size(); index > 0; --index) {
@@ -568,6 +570,66 @@ void ModHost::unload() {
     }
     slots_.clear();
     registry_ = nullptr;
+    runtime_context_ = nullptr;
+}
+
+bool ModHost::load_native(Slot& slot, const ModManifest& manifest) {
+    if (manifest.native.empty()) return true;
+    const fs::path library = fs::path(manifest.directory) / manifest.native;
+    std::error_code code;
+    const auto fail = [&](std::string message) {
+        slot.loaded.ok = false;
+        slot.loaded.error = std::move(message);
+        report_.errors.push_back(std::format("mod '{}': {}", manifest.id, slot.loaded.error));
+        return false;
+    };
+    if (!fs::exists(library, code)) {
+        return fail(std::format("native library '{}' is missing", library.string()));
+    }
+    std::string load_error;
+    std::optional<t2d::Module> module = t2d::Module::load(library.string(), &load_error);
+    if (!module.has_value() || !module->valid()) {
+        return fail(std::format("'{}' could not be loaded: {}", library.string(), load_error));
+    }
+    const auto entry = module->function<const MineModDesc*()>(kModEntrySymbol);
+    if (entry == nullptr) {
+        return fail(std::format("'{}' does not export {}", library.string(), kModEntrySymbol));
+    }
+    const MineModDesc* desc = entry();
+    if (desc == nullptr) return fail(std::format("{}() returned nothing", kModEntrySymbol));
+    if (desc->abi_version != kModApiVersion) {
+        return fail(std::format("built against mod API {}, this build is {} (rebuild the mod)",
+                                desc->abi_version, kModApiVersion));
+    }
+    if (desc->struct_size < sizeof(MineModDesc)) {
+        return fail(std::format("its descriptor is {} bytes, this build's is {} (rebuild the mod)",
+                                desc->struct_size, sizeof(MineModDesc)));
+    }
+    if (desc->id == nullptr || manifest.id != desc->id) {
+        return fail(std::format("the library calls itself '{}', the manifest says '{}'",
+                                desc->id != nullptr ? desc->id : "(nothing)", manifest.id));
+    }
+
+    slot.module = std::move(module);
+    slot.desc = desc;
+    const usize slot_index = static_cast<usize>(&slot - slots_.data());
+    const ModContext module_context{this, slot_index};
+    in_on_load_ = true;
+    const int result =
+        desc->on_load != nullptr ? desc->on_load(&api_, const_cast<ModContext*>(&module_context)) : 0;
+    in_on_load_ = false;
+    if (result != 0) {
+        // The module's own on_load refused to run: undo what it registered against the live objects and
+        // close it again. Custom types stay registered (a reload refreshes them in place), but no object
+        // is left on a table in code that is about to be unmapped.
+        restore_slot_overrides(slot_index);
+        slot.desc = nullptr;
+        slot.module.reset();
+        return fail(std::format("on_load() returned {}", result));
+    }
+    slot.loaded.native_loaded = true;
+    ++report_.native_modules;
+    return true;
 }
 
 ModHost::Slot* ModHost::slot_from(void* self) {
@@ -579,11 +641,20 @@ ModHost::Slot* ModHost::slot_from(void* self) {
 
 const char* ModHost::render_value(const t2d::EcfgValue& value) {
     switch (value.type()) {
-        case t2d::EcfgType::String: scratch_ = std::string(value.as_string()); break;
-        case t2d::EcfgType::Int: scratch_ = std::format("{}", value.as_int()); break;
-        case t2d::EcfgType::Float: scratch_ = std::format("{}", value.as_float()); break;
-        case t2d::EcfgType::Bool: scratch_ = value.as_bool() ? "true" : "false"; break;
-        default: return nullptr;   // a table or an array has no text form
+    case t2d::EcfgType::String:
+        scratch_ = std::string(value.as_string());
+        break;
+    case t2d::EcfgType::Int:
+        scratch_ = std::format("{}", value.as_int());
+        break;
+    case t2d::EcfgType::Float:
+        scratch_ = std::format("{}", value.as_float());
+        break;
+    case t2d::EcfgType::Bool:
+        scratch_ = value.as_bool() ? "true" : "false";
+        break;
+    default:
+        return nullptr; // a table or an array has no text form
     }
     return scratch_.c_str();
 }
@@ -592,17 +663,20 @@ void ModHost::api_log(void* self, u32 level, const char* message) {
     const Slot* slot = slot_from(self);
     const std::string text = std::format("mod '{}': {}", slot != nullptr ? slot->loaded.manifest.id : "?",
                                          message != nullptr ? message : "");
-    if (level >= 2) T2D_ERROR("{}", text);
-    else if (level == 1) T2D_WARN("{}", text);
-    else T2D_INFO("{}", text);
+    if (level >= 2)
+        T2D_ERROR("{}", text);
+    else if (level == 1)
+        T2D_WARN("{}", text);
+    else
+        T2D_INFO("{}", text);
 }
 
 ContentId ModHost::api_register_content(void* self, u32 kind, const char* name) {
     Slot* slot = slot_from(self);
     if (slot == nullptr || registry_ == nullptr) return kNoContent;
     if (kind >= kContentKindCount) {
-        report_.errors.push_back(std::format("mod '{}': content kind {} does not exist",
-                                             slot->loaded.manifest.id, kind));
+        report_.errors.push_back(
+            std::format("mod '{}': content kind {} does not exist", slot->loaded.manifest.id, kind));
         return kNoContent;
     }
     if (name == nullptr || name[0] == '\0') {
@@ -613,7 +687,8 @@ ContentId ModHost::api_register_content(void* self, u32 kind, const char* name) 
     const auto content_kind = static_cast<ContentKind>(kind);
     if (registry_->find(content_kind, name) != kNoContent) {
         report_.errors.push_back(std::format("mod '{}': {} '{}' is already registered and was not replaced",
-                                             slot->loaded.manifest.id, content_kind_name(content_kind), name));
+                                             slot->loaded.manifest.id, content_kind_name(content_kind),
+                                             name));
         return kNoContent;
     }
     const ContentId id = registry_->register_content(content_kind, name);
@@ -660,8 +735,10 @@ i64 ModHost::api_mod_int(void* self, const char* key, i64 fallback) {
     if (slot == nullptr) return fallback;
     const t2d::EcfgValue* value = mod_value_of(*slot, key);
     if (value == nullptr) return fallback;
-    if (value->type() == t2d::EcfgType::Int || value->type() == t2d::EcfgType::Bool) return value->as_int(fallback);
-    if (value->type() == t2d::EcfgType::Float) return static_cast<i64>(value->as_float(static_cast<t2d::f64>(fallback)));
+    if (value->type() == t2d::EcfgType::Int || value->type() == t2d::EcfgType::Bool)
+        return value->as_int(fallback);
+    if (value->type() == t2d::EcfgType::Float)
+        return static_cast<i64>(value->as_float(static_cast<t2d::f64>(fallback)));
     if (value->type() == t2d::EcfgType::String) {
         // from_chars rather than stoll, and not for speed: this code travels in a **code table**, and
         // a table has no frame descriptions, so a throw inside one never finds its handler - it ends
@@ -671,12 +748,124 @@ i64 ModHost::api_mod_int(void* self, const char* key, i64 fallback) {
         i64 number = 0;
         const char* first = text.data();
         const char* last = first + text.size();
-        if (const auto parsed = std::from_chars(first, last, number); parsed.ec == std::errc{} && parsed.ptr == last) {
+        if (const auto parsed = std::from_chars(first, last, number);
+            parsed.ec == std::errc{} && parsed.ptr == last) {
             return number;
         }
         return fallback;
     }
     return fallback;
+}
+
+u64 ModHost::api_find_component(void* self, const char* name) {
+    if (name == nullptr || runtime_context_ == nullptr) return 0;
+    const runtime::ComponentType* type = runtime_context_->components().find_by_name(name);
+    return type != nullptr ? type->type_id() : 0;
+}
+
+u64 ModHost::api_find_tile_type(void* self, const char* name) {
+    if (name == nullptr || runtime_context_ == nullptr) return 0;
+    const runtime::TileType* type = runtime_context_->tile_types().find_by_name(name);
+    return type != nullptr ? type->type_id() : 0;
+}
+
+void ModHost::record_error(Slot& slot, std::string message) {
+    report_.errors.push_back(std::format("mod '{}': {}", slot.loaded.manifest.id, message));
+    if (slot.loaded.error.empty()) slot.loaded.error = std::move(message);
+}
+
+ModHost::Slot* ModHost::loaded_slot(void* self, const char* what) {
+    Slot* slot = slot_from(self);
+    if (slot == nullptr) return nullptr;
+    if (!in_on_load_) {
+        record_error(*slot, std::format("{} is only allowed from on_load()", what));
+        return nullptr;
+    }
+    return slot;
+}
+
+int ModHost::api_register_component(void* self, const MineComponentDesc* desc) {
+    Slot* slot = loaded_slot(self, "register_component");
+    if (slot == nullptr) return 1;
+    if (desc == nullptr) {
+        record_error(*slot, "register_component got a null descriptor");
+        return 1;
+    }
+    if (runtime_context_ == nullptr) {
+        record_error(*slot, "register_component: this host has no runtime context");
+        return 1;
+    }
+    if (components_this_load_.contains(desc->type_id)) {
+        record_error(*slot, std::format("component type {} was registered twice in one load", desc->type_id));
+        return 1;
+    }
+    std::string error;
+    if (!runtime_context_->register_mod_component(*desc, slot->loaded.manifest.id, &error)) {
+        record_error(*slot, std::format("register_component: {}", error));
+        return 1;
+    }
+    components_this_load_.insert(desc->type_id);
+    return 0;
+}
+
+int ModHost::api_register_tile_type(void* self, const MineTileTypeDesc* desc) {
+    Slot* slot = loaded_slot(self, "register_tile_type");
+    if (slot == nullptr) return 1;
+    if (desc == nullptr) {
+        record_error(*slot, "register_tile_type got a null descriptor");
+        return 1;
+    }
+    if (runtime_context_ == nullptr) {
+        record_error(*slot, "register_tile_type: this host has no runtime context");
+        return 1;
+    }
+    if (tile_types_this_load_.contains(desc->type_id)) {
+        record_error(*slot, std::format("tile type {} was registered twice in one load", desc->type_id));
+        return 1;
+    }
+    std::string error;
+    if (!runtime_context_->register_mod_tile_type(*desc, slot->loaded.manifest.id, &error)) {
+        record_error(*slot, std::format("register_tile_type: {}", error));
+        return 1;
+    }
+    tile_types_this_load_.insert(desc->type_id);
+    return 0;
+}
+
+int ModHost::api_override_component_interface(void* self, u64 type_id, u32 interface_id, u32 expected_version,
+                                              const void* replacement, const void** previous) {
+    Slot* slot = loaded_slot(self, "override_component_interface");
+    if (slot == nullptr) {
+        if (previous != nullptr) *previous = nullptr;
+        return 1;
+    }
+    if (runtime_context_ == nullptr) {
+        record_error(*slot, "override_component_interface: this host has no runtime context");
+        if (previous != nullptr) *previous = nullptr;
+        return 1;
+    }
+    std::string error;
+    if (!runtime_context_->override_interface(type_id, interface_id, expected_version, replacement, previous,
+                                              &error)) {
+        record_error(*slot, std::format("override_component_interface: {}", error));
+        return 1;
+    }
+    overrides_.push_back(Override{type_id, interface_id, static_cast<usize>(slot - slots_.data())});
+    return 0;
+}
+
+void ModHost::restore_slot_overrides(usize slot_index) {
+    if (runtime_context_ == nullptr) {
+        overrides_.clear();
+        return;
+    }
+    for (usize index = overrides_.size(); index > 0; --index) {
+        const Override& entry = overrides_[index - 1];
+        if (entry.slot != slot_index) continue;
+        runtime_context_->restore_interface(static_cast<runtime::ComponentTypeId>(entry.type_id),
+                                            static_cast<runtime::InterfaceId>(entry.interface_id));
+        overrides_.erase(overrides_.begin() + static_cast<std::ptrdiff_t>(index - 1));
+    }
 }
 
 } // namespace mine

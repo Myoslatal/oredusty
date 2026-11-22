@@ -3,6 +3,10 @@
 > **本文档不预设游戏内容。** 资源、结构、需求的具体形式、配方、建筑、剧情、数值全部由设计者
 > 提供，本文档只记录：① 已明确的需求；② 由这些需求推导出的工程约束；③ 需要设计者补充的内容清单。
 > 模块与可执行文件用 `mine` 作临时名（来自"矿场"），最终命名随游戏定名一起改。
+>
+> **架构说明（M2.42）**：下文较早章节里的 `Tile`/`SceneTile`/`EntityTile`/`Warehouse`/`Drill` 类描述是
+> 历史实现；当前模型是“对象只存数据 + 组件类型函数表 + regist/override”，见
+> [RUNTIME.md](RUNTIME.md)。旧类已删除。
 
 ---
 
@@ -392,7 +396,111 @@
     root、研究 root 后 children 可见而 grandchild 不可见；研究一个 child 后 grandchild 可见（但仍需两个父才能研究）；只画
     两端都可见的边（0→3→5 条）；depth/同层位置。正式内容仍只有石头仓库一个节点。
 
-以上五十条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
+51. **2×1 的任务方块 task_block**（原话）："进入mine游戏项目，添加一个2*1大小方块task_block（任务方块），包含task子对象用于处理任务系统，container子对象用于接收物品输入，先制作方块，任务系统之后实现"于是：
+    ① **内容**：新 `content/task_blocks.ecfg`，用 `structure::` 表声明（存档里 kind 就是 structure，**不新增 ContentKind**），
+    `tile_type:"task_block"` 选中新的内置 tile 类型，`capacity:100`（与石头仓库一致，设计者可改），`size:: width:2 height:1`；
+    贴图 `art/task_block.png`（设计者给的 128×64 图）。**不写 `building::`**：先做方块，不进建造栏、没有造价与建造时间。
+    **第 1 层放置**：`content/layers.ecfg` 的 `entrance.place_block` 在 (52,50) 放下它（2×1，占 (52,50)-(53,50)，
+    石头仓库 (50,50) 右边隔一格），容器初始为空。**不能被建造**：它没有 `building::`，不进建造栏、没有解锁行，
+    只由层数据放置（`place_block` 不经过建造栏与解锁，§1.33、§1.35）。
+    ② **足迹机制（前置）**：内容定义的 `size::` 成为 `TileDefinition::width/height`（默认 1×1，1..4096；坏类型/越界/未知字段
+    拒绝）；`make_tile` 的尺寸参数 0 = 用定义尺寸、非 0 显式优先；`MineLayer::place/can_place` 用同一规则解析足迹——
+    place 的格子、越界、重叠、报告、写格全用整块足迹，can_place 对整块足迹做越界与占用检查，存档按放置时的实际足迹恢复。
+    ③ **运行时组件**：新内置组件 `task`（`mine.component.task`；`TaskData` 只有一个预留 `u32`，**无接口表**、
+    interface_count=0，注释写明任务系统以后给它状态与行为），并加入 `is_builtin_component`；新内置 tile 类型
+    `task_block`（`mine.tile.task_block`，名字 "task_block"，组件顺序 task → container → drag → preview → building，
+    role "task_block"）。`capacity` 的读取从只在 `warehouse::` 放宽到**所有地块种类**（任何带 container 的地块都能声明容量，
+    坏值仍按现有风格拒绝）。
+    ④ **测试**：`test_content_runtime` 八组件/五 tile 类型、task 名字/大小/无接口、task_block 组件顺序与 role、重复注册 13 条错误；
+    `test_content_pack` 本体包图片 7 张/地块定义 5 个、task_block 的 image/tile_type/capacity/2×1 与 `make_tile` 建出地块的
+    容器/拖入；`test_world` 的 2×1 定义足迹与 task_block 容器；`test_game_save` 存档往返 2×1 足迹与容器内容；
+    `test_warehouses` 把"别种内容上的 capacity 被忽略"改为 floor 上的 dig_power，并注明原因；`test_mine_types` 的 `size::`
+    解析与拒绝。
+    ⑤ **任务系统**（当时留白；已在 §1.52 / M2（四十四）实现）：本条目只把方块、组件位与数据入口做好。
+
+52. **任务系统：任务方块绑定多个任务，交付物品推进，点击查看进度**（原话）："实现任务，一个任务方块可以绑定多个任务，任务依次进行，首先实现第一个任务类型，为交付指定物品指定数量，通过container子对象交付。点击任务方块可以查看当前的任务进度和总进度，完成后交付截图作为证据"于是：
+    ① **数据**：内容条目的 `tasks::` 表（`content/task_blocks.ecfg`）按书写顺序执行；本条目实现时每步只有一种类型 `deliver`（§1.53 增加了 `rate`）
+    （`type:"deliver"`）+ `item`（物品内容名）+ `count`（大于 0 的整数），最多 **8** 条；空表 = 没有任务。`TileDefinition.tasks`
+    保存定义，运行时 `TaskShared` 把 item 名字解析成本次构建的 item id（解析不到就报错并留空：该步永远无法完成，绝不跳过）。
+    ② **交付**：`task` 组件从数据块变成带 `mine.interface.task`（count/current/step/advance）的组件；`settle_tasks` 在 container
+    里数当前步的 (kind,id)，够数就**正好消费 count 个**并 advance，循环到下一个不满足的步为止。交付不是单独动作：物品一进
+    container 就结算——拖动 `drag_receive` 之后、点击时、`place_block` 填充容器之后（`MineLayer::build`）、读档恢复容器与
+    TASK 之后都跑一遍；没够数的物品留在容器里，就是“当前进度”。
+    ③ **面板**：task_block 的 tile 组件顺序加了 `click`（Task + Container + Click + Drag + Preview + Building）。**单击**方块在它
+    右下角打开任务面板：标题是本地化内容名；第一行 `TASK 当前/总`，第二行 `物品名 已有/需要`；全部完成第二行 `ALL TASKS DONE`，
+    没有任务 `NO TASKS`（三语言字符串在 `assets/text/ui.ecfg`；面板没有图片行，它不是容器槽位列表）。
+    ④ **存档**：新增可选 `TASK` chunk（count + 每条 plot 下标 + completed）；旧存档没有它则每个任务方块从 0 开始；内容把任务改短时
+    completed **夹到任务总数**并往 `warnings` 写一条说明，不拒绝整档（`docs/SAVE.md`）。
+    ⑤ **游戏本体内容**：`content/task_blocks.ecfg` 绑两条：`first_delivery` 10 石头、`second_delivery` 25 石头；第 1 层
+    `place_block` 放下的那座方块容器空，玩家用拖动交付。`games/mine/tests/data/task_demo/` 是**只用于截图**的包：两层
+    `task_progress`（26 石头 → 10 完成后剩 16：面板 TASK 2/2、STONE 16/25）与 `task_done`（40 石头 → 两个任务都完成剩 5：
+    面板 TASK 2/2、ALL TASKS DONE）。
+    ⑥ **截图证据**：![任务进度](../games/mine/docs/images/task_block_progress_en.png) 与
+    ![任务完成](../games/mine/docs/images/task_block_done_en.png)（lead 用真实输入点开面板后截；文件名固定）。
+
+53. **第二种任务类型：按速率交付**（原话）："添加第二种任务类型，要求玩家至少以指定速度输入指定物品，例如>=3石头/s"于是：
+    ① **数据**：`tasks::` 条目新增 `type:"rate"` + `item`（物品内容名）+ `rate`（件/秒，>0 的实数）+ 可选
+    `window`（测量窗口秒数，>0，默认 **1.0**）。`rate` 步**不接受 `count`**，`deliver` 步**不接受 `rate/window`**；
+    每种类型不认识的字段都拒绝，消息里给出该类型允许的字段。完成条件 = 最近 `window` 秒的滑动窗口内该物品
+    累计输入 ≥ `ceil(rate × window)` 件（至少 1 件）；窗口内达标即完成，多出来的物品留在 container，完成时
+    **正好消费需要的那些件数**。速率窗口随时间滑出而减少，面板显示实测速率（窗口内件数 ÷ window）与要求速率；
+    如果这一步还有 `hold`（§1.54），面板再多一行"已持续 / 要求秒数"。
+    ② **运行时**：`kTaskTypeRate`、`kMaxTaskWindowEntries=32`、`TaskDelivery{at, amount}`；`TaskData` 带
+    `entries + recent[]` 窗口历史，`TaskFunctions` 加 `window_progress(now)` 与 `record(kind,id,amount,now)`
+    （只记当前 rate 步的物品；`advance` 清空窗口，下一步从零测量）。`settle_tasks(object, now)` 按步类型分派：
+    deliver 数容器，rate 问窗口；两者都正好消费 `count` 件才推进。`MineLayer::clock_seconds()` 由 `tick(dt)`
+    推进（负数夹到 0，**不**计入“地块跑了一轮”的返回值）；`Tile::note_delivery` 记窗口，`drag_receive` 与
+    `place_block` 填充容器都会记。
+    ③ **存档**：后来升级为 `TASK` chunk **版本 2**，窗口与 hold 进度都会保存并在读档后继续（见 §1.55）。
+    当时（§1.53 初版）窗口是实时状态、`TASK` 只存 `completed`。`docs/SAVE.md`。
+    ④ **测试与 demo**：`test_tasks` 加 8 个用例（解析/ceil/window 默认与拒绝、窗口实测与滑出、可配窗口、
+    deliver+rate 混合链、层时钟、新地块窗口初始为空、放不下的 rate 步永不完成；窗口随存档保留见 §1.55）。本体内容 `content/task_blocks.ecfg`
+    的任务链**不改**（仍是两条 deliver，避免上一张截图失效）；rate 由测试与 `games/mine/tests/data/task_demo/`
+    的 `machine:: task_block::`（`rate:3 window:5`，两层 `rate_progress` 10 石头 / `rate_done` 15 石头）演示。
+    ⑤ **截图证据**：![速率任务进行中](../games/mine/docs/images/task_rate_progress_en.png) 与
+    ![速率任务完成](../games/mine/docs/images/task_rate_done_en.png)（lead 用真实输入点开面板后截；文件名固定）。
+
+54. **rate 任务的 hold：条件必须连续保持一段时间**（原话）："添加hold字段"（接上一轮"要不要持续判定"的提问）。于是：
+    ① **数据**：rate 步新增可选 `hold`（秒，数字 **≥0**，默认 **0**）。`rate:3 window:1 hold:10` = 最近 1 秒窗口内
+    ≥3 件，**并且这个条件连续保持 10 秒**才算完成；`hold` 省略或 0 保持上一轮"窗口内达标即完成"的语义
+    （§1.53）。deliver 步不接受 `hold`（消息给出该类型允许的字段：rate 为 type/item/rate/window/hold）。
+    ② **运行时**：`TaskStep.hold`、`TaskData.held`；`TaskFunctions` 加 `held()` 与 `tick(now, delta)` —— 当前 rate 步
+    的条件成立时 `held += delta`，**条件一旦不成立立刻归零**（必须连续）；`advance` 同时清空窗口与 held。
+    `MineLayer` 维护 task 地块列表，每个 `tick(dt)` 对它们先 `task_tick(dt)` 再 `run_tasks()`（跳过建造中），
+    **不计入 tick 的返回值**——任务计时不是"地块跑了一轮"。
+    ③ **结算**：`settle_tasks` 的 rate 分支在 `hold > 0` 时要求 `held >= hold`（否则仍是窗口达标）；两种都仍然
+    正好消费 `count` 件并 advance，多出来的留在容器里。
+    ④ **实时状态**：`hold` 的已持续秒数与窗口都由 `TASK` **版本 2** 保存并在读档后继续（见 §1.55；
+    初版曾是不写档）。
+    ⑤ **面板**：hold > 0 时面板在"TASK 当前/总"、"物品 实测/要求 每秒"之后**再加一行**
+    `HOLD 已持续/要求 秒`（三语言 `world.task.hold`）；hold 为 0 的旧内容仍是两行。
+    ⑥ **demo 与截图**：`games/mine/tests/data/task_demo/` 的 `rate_block.ecfg` 加 `hold:2`，并加一层
+    `rate_hold`（20 石头，条件成立、HOLD 从 0 累计；用于"持续中"截图）。三张截图（`task_rate_progress_en.png`、
+    `task_rate_done_en.png` 因面板多一行需重生成，以及新的 `task_rate_hold_en.png`）都由 lead 用真实输入生成：
+    ![速率任务进行中](../games/mine/docs/images/task_rate_progress_en.png)、
+    ![速率任务完成](../games/mine/docs/images/task_rate_done_en.png)、
+    ![速率任务持续中](../games/mine/docs/images/task_rate_hold_en.png)。
+
+55. **hold 与 rate 窗口进存档**（原话）："hold进入存档，完成后commit"。于是：
+    ① **`TASK` chunk 升级到版本 2**：count u32；每条地块 plot u32 + completed u32 + **held f32** +
+    **entries u32**（≤ `kMaxTaskWindowEntries`）；随后 entries 条 **remaining f32（剩余秒数）+ amount u32**。
+    只写有 task 组件的地块；没有任务方块的存档仍不写这个 chunk（可选）。
+    ② **为什么存剩余秒数而不是时间戳**：读档后层时钟从 0 开始，remaining 仍然准确，所以存档不必带层时钟；
+    remaining = window - (now - at)，等于 0 的条目在保存时丢弃。读档恢复成 at = remaining - window——
+    窗口在 at <= now - window 时丢弃，这个位置正好让这条交付**还剩 remaining 秒**（若照字面写 at=-remaining，
+    会把交付放早整整一个 window，第一次 tick 就滑出）。**所以半程的窗口与 held 都会无缝续上**。
+    ③ **读档顺序**：容器（PLOT）→ TASK（completed / held / 窗口）→ 对每个任务方块结算。若存档时 held
+    刚好够 hold，读档的结算立即完成这一步并消费容器里的物品，和存档前一刻一致。
+    ④ **旧档兼容**：`TASK` **版本 1**（count + plot + completed）仍可读，held=0、窗口为空；其它版本、越界/
+    重复 plot、非 task 地块、entries 超限、remaining 非有限或 ≤0、amount=0、尾随字节都整档拒绝；缺 chunk
+    的旧档仍全部从 0 开始。其它 chunk 的版本/格式**不变**。
+    ⑤ **测试**：`test_game_save` 加 5 个用例——半程 hold 往返续跑（held≈0.8、窗口仍有 20 件、继续 1.3 秒后
+    完成并正好消费 15 件、剩 5）、完成态往返、v1 兼容（completed 保留、held=0、窗口空、容器 20 件保留）、
+    v2 坏记录整档拒绝（entries 超限/remaining 0、负、NaN/amount 0/held 负、NaN/非 task 地块/重复 plot/尾随
+    字节/版本 3）、纯 deliver 往返（held 0、无窗口，payload 正好 count+4 字段）。
+    ⑥ **提交**：commit 由 lead 在验证后统一执行（设计者原话的后半句），实现者不 commit。
+
+以上五十五条是当前唯一的内容性输入。除此之外的一切内容均由设计者后续提供（见 §7）。
 
 ---
 
@@ -1963,6 +2071,172 @@ world: built stone at 2,5                    ← 第二台钻头，用拖进来�
   （单测 13/141 覆盖）；正式内容仍只保留石头仓库一个节点。故事第 1 层
   （index 0）按研究按钮不再报层号不足，只按仓库里的 10 石报 `stone: 10 of 20`（`layer1_research.png`）。
 * **没做**：科技树节点的鼠标拖拽/缩放、多分类的排序配置、研究完成后的通知动画。
+
+### M2 交付状态（四十二）：内容运行时重写（数据对象、组件函数表、运行时注册/覆写、模组自定义类型）（已落地，含单测）
+
+设计者要求把内容实现按“对象只存数据 + 类型级函数表 + 共享/实例/存档数据分层 + regist/link + dlopen 覆写”重写；不保留旧 concrete tile 类。
+
+* **对象**：`Tile` 只保留 kind/id/layer/anchor/footprint/mirrored/definition 等核心字段和 `runtime::ObjectData`；行为全在组件函数表；删除 `SceneTile/EntityTile/Warehouse/Drill/Floor/SingleOre` 及其 `.cpp`。
+* **组件**：stable ComponentTypeId/InterfaceId；`ComponentDesc`/`TileTypeDesc` C 兼容；`ComponentType` 持有 schema/构造析构/接口表；`Archetype` 计算对齐偏移；`ObjectData` 连续实例字节；函数统一 `fn(const void* shared, void* data, ...)`，data 为 self。
+* **内置内容**：container/click/drag/ticker/preview/building/drill 函数表；floor/ore/warehouse/drill 内置 tile 类型；内容定义生成 per-content shared 和 archetype；`MineLayer` ticking、dragging、click、preview、build animation、save/UI 全走组件。
+* **注册/覆写**：`MineModApi` v2 增加 register/find component/tile、override_component_interface；共享 RuntimeContext 在内容加载前创建，dlopen on_load 先于内容注册；active 表替换、previous 可调、已有/新对象都生效；reload 恢复原表并原地刷新。
+* **自定义内容**：`TileDefinition::tile_type` 选择注册的 tile type；TileTypeDesc 可带每组件 shared；ComponentDesc 可带 C save/load；自定义组件状态进可选 `CMPT` chunk；真实 dlopen fixture 注册自定义组件/tile、shared、状态往返、覆写 preview。
+* **codetab/dlopen 边界**：codetab 仍在游戏代码前合并/重定位，负责大改和非 inline 函数/vtable 覆盖；dlopen 负责运行期自定义类型和 active 接口表覆写；不能改写已链接的直接调用。
+* **测试**：`test_component_runtime` 12/211、`test_content_runtime` 12/322、`test_mod_runtime` 3/61、`test_game_save` 10/160；全量 **debug 45/45、release 45/45**；code table release 1382 节 / 4248 符号 / 16601 重定位 / 2.11 MiB。
+* **实测**：集成后 `mine_game --content build/verify-pack --world-view 1 --mine-layer 1` 正常加载 146 plots，窗口 smoke 通过；仓库选择/面板、建造栏、科技树、存档/读档均沿用现有行为。
+* **已知限制**：自定义 shared 由 tile type 注册，内容文件目前不能逐字段配置自定义 shared；codetab 模组自定义类型注册仍走原生注册面（未来可加描述节）；自定义 CMPT 缺失/版本不一致拒绝整档。
+
+### M2 交付状态（四十三）：2×1 任务方块 task_block、内容 `size::` 足迹与 task 组件（已落地，含单测）
+
+设计者原话：见 §1.51（2×1 的 task_block、task 子对象处理任务系统、container 子对象接收物品输入、先做方块，任务系统之后实现）。
+
+* **内容足迹（前置）**：`TileDefinition::width/height` 读内容条目的 `size::`（任何地块种类；默认 1×1，1..4096；
+  非 table / 非整数 / 越界 / 未知字段按现有 fail 风格拒绝）；`make_tile` 的 width/height 默认 0 = 用定义尺寸、非 0 显式优先；
+  `PlacedContent.width/height` 默认 0（0 = 内容定义声明的足迹，非 0 是这次放置自己说的——存档记录地块实际足迹）；
+  `MineLayer::place/can_place` 共用 `footprint_of()` 解析：place 的格子、越界、重叠、报告、写格全用整块足迹，
+  can_place 对整块足迹做越界与占用检查；app 的建造点击与 drill 的 build 检查都传 definitions。
+* **内容**：新 `games/mine/content/task_blocks.ecfg`——`structure:: task_block::`（`image:"art/task_block.png"`、
+  `tile_type:"task_block"`、`capacity:100`、`size:: width:2 height:1`）；**无 `building::`**（不进建造栏、不发明造价/时间）。
+  `content/layers.ecfg` 的第 1 层 `place_block` 在 (52,50) 放下它（2×1，占 (52,50)-(53,50)，石头仓库右边隔一格；容器空）；
+  **不可建造**（没有 building::，建造栏与解锁表都没有它的行）。贴图 `art/task_block.png` 为设计者提供的 128×64 图。
+* **运行时**：新内置组件 `task`（`mine.component.task`）：`TaskData` 只有一个预留 `u32`，**无接口表**（interface_count=0），
+  注释写明任务系统以后给它状态与行为；加入 `is_builtin_component`。新内置 tile 类型 `task_block`
+  （`mine.tile.task_block`，名字 "task_block"，组件顺序 Task + Container + Drag + Preview + Building，role "task_block"）。
+  内置注册从七组件/四类型改为八组件/五类型；`capacity` 的读取从只在 `warehouse::` 放宽到所有地块种类。
+* **测试（本机实跑，debug）**：`test_content_runtime` **12 用例 / 351 断言**（八组件/五 tile 类型、task 名字与
+  sizeof(TaskData) 与无接口、task_block 组件顺序与 role、重复注册 13 条错误；原 12/322）；`test_mine_types`
+  **13 / 171**（size:: 2×1 生效、默认 1×1、make_tile 用定义尺寸而显式 3×2 仍优先、非 table/1.5/0/-1/4097/未知字段被拒）；
+  `test_world` **21 / 225**（2×1 定义放置占两格、第二格再放被拒、can_place 整块足迹越界报 8x8、显式尺寸优先；
+  task_block 2×1 + 容器拖入）；`test_content_pack` **19 / 345**（本体包 7 张图 / 5 个地块定义，task_block 的
+  image/tile_type/capacity/2×1、make_tile 的 2×1 足迹与容器 add/拖入；第 1 层 `place_block` 2 条——仓库 + (52,50)
+  的 2×1 任务方块；不可建造：解锁表 2 行没有它、任何建造分类都不出现它；原 19/335）；`test_layer_rules` **25 / 840**
+  （本体第 1 层：10000 地板 + 矿 + 2 个放置地块，任务方块在 (52,50)-(53,50) 是同一 plot、width 2、有 task 组件与
+  空容器、`building()==nullptr`、两格下都有泥地；原 25/831）；`test_game_save`
+  **10 / 178**（存档场景加 2×1 task_block + 容器物品：读回宽度 2、第二格仍是它、容器内容回来；原 10/160）；
+  `test_warehouses` **7 / 114**（"别种内容上的 capacity 被忽略"改为 floor 上的 dig_power，并注明 capacity 现在
+  对所有地块种类生效）。本次验收的 **全套 45 个测试 debug 45/45、release 45/45 全绿**。
+* **没做（当时的明确留白；§1.52 / M2（四十四）已实现）**：任务系统本身——当时没有任务表、任务状态机、进度、奖励或 UI，task 组件只有预留数据块；
+  task_block 不进建造栏、没有解锁行（没有 `building::`）——它由第 1 层的层数据放在 (52,50)，不是玩家建造的。
+
+### M2 交付状态（四十四）：任务系统——`tasks::` 数据、container 交付、点击任务面板、TASK 存档（已落地，含单测与无头冒烟）
+
+设计者原话见 §1.52。
+
+* **任务数据**：`TileDefinition.tasks` 读内容条目的 `tasks::`（顺序即执行顺序；只认 `type`/`item`/`count`，`type` 当时只有 `"deliver"`（§1.53 增加 `"rate"`），
+  `item` 必须是名字、`count` 必须大于 0，最多 8 条；坏类型/缺字段/未知字段/第 9 条都拒绝）。游戏本体
+  `content/task_blocks.ecfg` 绑两条：`first_delivery` 10 石头、`second_delivery` 25 石头。
+* **运行时**：`kMaxTaskSteps`/`kTaskTypeDeliver`、`TaskStep`/`TaskShared`/`TaskData`/`TaskFunctions`（count/current/step/advance）；
+  `kTaskInterface`；`settle_tasks(ObjectData&)` 把 container 里当前步的物品正好消费 count 个并推进，直到某步不满足为止。
+  `Tile` 增 `has_task()/task()/run_tasks()/set_task_completed()/task_completed()`；`drag_receive`、`on_click`（covers 且非建造中）、
+  `MineLayer::build` 的 `place_block` 填充之后、读档恢复容器与 TASK 之后都会结算。task_block 的 tile 类型组件改为
+  Task + Container + Click + Drag + Preview + Building（6 个）。
+* **UI / 本地化**：`app.h` 新增 `task_panel()`/`corner_task_panel()`/`draw_task_panel()`；单击 task 方块在右下角画两行
+  （`TASK 当前/总` + `物品 已有/需要`；完成 `ALL TASKS DONE`、无任务 `NO TASKS`）；图片 pass 跳过 task 方块的面板。
+  `assets/text/ui.ecfg` 三语言加 `world.task.progress/deliver/done/none` 与 `content.name.structure.task_block`。
+* **存档**：可选 `TASK` chunk（plot 下标 + completed）；旧存档没有则从 0；下标越界/指向非 task 地块/重复/版本不符整档拒绝，
+  completed 超过本次任务数时夹到总数并写 `report.warnings`（docs/SAVE.md）。
+* **截图用 demo 包**：`games/mine/tests/data/task_demo/`（`pack.ecfg` + `layers.ecfg`，两层 16×9，`task_progress` 26 石头、
+  `task_done` 40 石头，方块在 (7,4)，排在游戏本体 `entrance` 之后即 index 1/2；只用于截图，不进本体内容）。
+* **无头冒烟（本机实跑）**：
+  `cd /mis/oredusty/tile2d && ./build/mine/debug/games/mine/mine_game --headless --frames 3 --size 1280x720 --content games/mine/tests/data/task_demo --world story --world-view 1 --mine-layer 1 --screenshot /tmp/task_demo_smoke.png`
+  → 退出码 0；日志 `content: ... 3 story layer(s), 0 error(s)`、`world: layer 1 is 16x9 with 3 tile layer(s): 145 plot(s)`、
+  `world: layer 2 ... 145 plot(s)`（145 = 144 地板 + 1 座 2×1 任务方块；146 cells 也说明是 2×1），截图文件生成。
+* **测试（本机实跑，debug）**：新增 `test_tasks` **8 用例 / 103 断言**（tasks 解析与拒绝、建出 task_block 的链、容器+拖动 6/10→
+  完成、按顺序交付不提前消费、点击结算、place_block 初始物品结算、set_task_completed/clamp、解析不到的 item 永不满足）；
+  `test_content_runtime` **12 / 369**（原 351：task 接口、6 组件、13 条重复注册）；`test_content_pack` **19 / 366**（原 345：
+  定义两条任务、plot 的 has_task/has_click/step id）；`test_game_save` **12 / 202**（原 178：TASK chunk、旧存档无 chunk、
+  非 task/重复/越界/版本拒绝、clamp+warnings）；`test_layer_rules` **25 / 852**（原 840：本体第 1 层 task().count()==2、
+  step(0) 是 deliver stone 10，容器 add 10 + run_tasks 后 current 1）。**全套 46 个测试 debug 46/46、release 46/46 全绿**。
+* **截图证据**：![任务进度](../games/mine/docs/images/task_block_progress_en.png) 与
+  ![任务完成](../games/mine/docs/images/task_block_done_en.png)。
+* **没做（明确留白；§1.53 已补 `rate`）**：当时只有 `deliver` 一种任务类型；没有奖励/解锁联动、没有任务刷新/多分支/放弃、面板是只读的（没有“领取”）。
+  任务系统的服务端权威与多人同步沿用现有会话模型，不在本期。
+
+### M2 交付状态（四十五）：第二种任务类型 rate——滑动窗口、实测速率、按速率交付（已落地，含单测与无头冒烟）
+
+设计者原话见 §1.53。
+
+* **数据**：`tasks::` 支持 `type:"rate"` + `item` + `rate`（件/秒）+ 可选 `window`（秒，默认 1.0）；rate 不接受 count、
+  deliver 不接受 rate/window，未知字段按类型报出允许字段。`TaskSpec` 加 `rate/window`；解析时算出 `ceil(rate*window)`
+  （至少 1 件）。
+* **运行时**：`kTaskTypeRate`、`kMaxTaskWindowEntries=32`、`TaskDelivery`；`TaskData` 从 2 个 u32 变成
+  `completed/reserved/entries/recent[32]`；`TaskFunctions` 加 `window_progress(now)`/`record(kind,id,amount,now)`
+  （只记当前 rate 步、满 32 条时并入最新一条不丢量；`advance` 清空窗口）。`settle_tasks(ObjectData&, f32 now)`
+  按类型分派：deliver 数容器、rate 问窗口；达标时都正好 take `count` 件再 advance，超出部分留在容器。
+  `MineLayer::clock_seconds()`（`tick(dt)` 推进、负数夹 0、不计入 tick 返回值）；`Tile::note_delivery` 记窗口，
+  `drag_receive` 先 note 再 settle，`place_block` 的填充也 note（初始库存算窗口内的一次性输入）。
+  `tile_runtime.cpp` 在 rate 步写入 rate/window 与 `ceil(rate*window)`，并在任何一步的 count 超过 container 容量时
+  报 T2D_ERROR（该步永不完成但不静默跳过）。
+* **存档**：（**后来变了**：`TASK` 升到版本 2，窗口与 held 都会保存并在读档后继续，见（四十七）与 §1.55。）
+  当时 `TASK` chunk 不变、只存 completed；rate 的滑动窗口是实时状态、不写档，读档后窗口为空、容器物品保留。
+* **面板 / 本地化**：`task_panel` 对 rate 步显示 `物品  实测速率 / 要求速率 PER S`（三语言
+  `world.task.rate`）；补 plain `content.name.task_block`（demo 的 machine:: 用，游戏本体仍由 kind 专属键优先）。
+  （**后来变了**：rate 步有 `hold` 时面板多一行持续进度，见（四十六）与 §1.54。）
+* **demo 内容包**（`games/mine/tests/data/task_demo/`，只用于截图/冒烟，不进本体）：新增 `rate_block.ecfg`
+  （`machine:: task_block::`，容量 100、2×1、`rate:3 window:5` → 15 件）与自带 `art/task_block.png`；
+  `layers.ecfg` 追加 `rate_progress`（10 石头 → 实测 2.0/3.0 每秒、TASK 1/1）与 `rate_done`（15 石头 → 正好达标，
+  TASK 1/1、ALL TASKS DONE），排在原两层之后即 index 3/4。
+* **测试（本机实跑，debug）**：`test_tasks` **16 用例 / 188 断言**（原 8/103；新增：rate 解析与 ceil(3*5)=15、
+  window 默认 1 秒与按类型的拒绝、Task::step 的 rate/window/count、1 秒窗口的实测与 1.5 秒后滑出再交付完成、
+  2 秒窗口的达标/过期、deliver→rate→deliver 混合链按序不提前消费、层时钟只随 tick 前进且不回退、读档式“容器直填不算窗口、
+  note 后才完成”、放不下的 rate 步永不完成）；`test_content_runtime` **12 / 370**（原 369：TaskData 尺寸断言随窗口历史更新）。
+  其余计数不变（`test_content_pack` 19/366、`test_game_save` 12/202、`test_layer_rules` 25/852）。**全套 46 个测试 debug 46/46、
+  release 46/46 全绿**。
+* **无头冒烟（本机实跑）**：`--content games/mine/tests/data/task_demo --world story --world-view 1 --mine-layer 3`（新
+  `rate_progress`）与 `--mine-layer 4`（`rate_done`）各跑 3 帧 1280×720 → 退出码 0；日志 `content: ... 5 story layer(s),
+  0 error(s)`、`world: layer 3/4 is 16x9 with 3 tile layer(s): 145 plot(s), 146 cell(s)`，截图生成。
+* **截图证据**：![速率任务进行中](../games/mine/docs/images/task_rate_progress_en.png) 与
+  ![速率任务完成](../games/mine/docs/images/task_rate_done_en.png)。
+* **没做（明确留白）**：rate 的窗口仍是单次输入历史，不做长周期统计/奖励；没有“速率不够”的失败态（窗口滑出只是回到 0）；
+  本体内容暂没有 rate 任务（设计者在 `tasks::` 里写 rate 步即可用，demo 已示范）。
+
+### M2 交付状态（四十六）：rate 的 hold 持续判定——连续保持、面板第三行、demo 持续层（已落地，含单测与无头冒烟）
+
+设计者原话见 §1.54。
+
+* **数据**：rate 步新增可选 `hold`（秒，≥0，默认 0）；`TaskSpec.hold`、`TaskStepView.hold`、`TaskStep.hold`。
+  deliver 不接受 hold；rate 的允许字段变为 type/item/rate/window/hold，负数/非数字按现有 fail 风格拒绝。
+* **运行时**：`TaskData.held`（放在 reserved 与 entries 之间）；`TaskFunctions` 加 `held()` 与 `tick(now, delta)`：
+  当前 rate 步条件成立时 held 累加该帧秒数，条件不成立立刻归零；`advance` 清窗口与 held。`settle_tasks` 的 rate
+  分支在 hold>0 时要求 `held >= hold`。`MineLayer` 新增 task 地块列表，tick 里先 `task_tick(delta)` 再 `run_tasks()`
+  （跳过建造中），**不计入 tick 返回值**；`Tile::task_tick` 走层时钟。（**后来变了**：hold 与窗口由 `TASK`
+  版本 2 保存、读档后继续，见（四十七）与 §1.55；当时是不写档、读档后为 0。）
+* **面板 / 本地化**：hold>0 时 `task_panel` 在 rate 两行之后再画一行 `HOLD {:.1f} / {:.1f} S`（三语言
+  `world.task.hold`；zh 为“已持续/已持續 … 秒”）；hold=0 的内容仍是两行。
+* **demo 内容包**：`rate_block.ecfg` 的 feed 加 `hold:2`；`layers.ecfg` 追加 `rate_hold` 层（20 石头，条件成立、
+  HOLD 从 0 累计，排在 rate_done 之后即 index 5）。现有 rate_progress（10 件条件不成立：HOLD 0.0/2.0）与 rate_done
+  （15 件条件成立：约 2 秒后自动完成）保持不变，只多了 hold 行。
+* **测试（本机实跑，debug）**：`test_tasks` **20 用例 / 238 断言**（原 16/188；新增：hold 解析生效/默认 0/0 合法/
+  负数与非数字拒绝/deliver 写 hold 拒绝、Task::step 的 hold 与 held 初值、rate 3/s window 1 hold 2 连续交付 4 次×0.5 秒
+  后 held 到 2.0 时结算（正好消费 3 件、窗口与 held 清空）、条件中断（tick 超过窗口）held 立刻归零且不完成、再交付
+  从零重新累计）；其余计数不变。**全套 46 个测试 debug 46/46、release 46/46 全绿**。
+* **无头冒烟（本机实跑）**：demo 包 `--mine-layer 3 / 4 / 5` 各 3 帧 1280×720 → 三次退出码 0；日志
+  `content: ... 6 story layer(s), 0 error(s)`，`world: layer 3/4/5 is 16x9 with 3 tile layer(s): 145 plot(s), 146 cell(s)`。
+* **截图证据**：![速率任务进行中](../games/mine/docs/images/task_rate_progress_en.png)（重生成）、
+  ![速率任务完成](../games/mine/docs/images/task_rate_done_en.png)（重生成）、
+  ![速率任务持续中](../games/mine/docs/images/task_rate_hold_en.png)。
+* **没做（明确留白）**：当时 hold 不跨读档保留（**后来由（四十七）补上**）；没有“条件被打断”的提示动画；demo 只用于截图，不进本体内容。
+
+### M2 交付状态（四十七）：hold 与 rate 窗口进存档——TASK v2、剩余秒数、旧档兼容（已落地，含单测）
+
+设计者原话见 §1.55（commit 由 lead 统一执行）。
+
+* **`TASK` chunk 版本 2**（`game_save.h: kTasksChunkVersion = 2`）：count u32；每条 plot u32 + completed u32 +
+  held f32 + entries u32；随后 entries 条 remaining f32 + amount u32。窗口只写**当前 rate 步**的（保存时按
+  `layer.clock_seconds()` 算 remaining，丢弃 ≤0 的）；deliver 步写 held 0、entries 0。其它 chunk 版本不变。
+* **保存/读取**：`game_save.cpp` 直接读内置 `TaskData`（与 PLOT 写内置组件字段同一条规矩），写入 v2；
+  读取接受版本 1 与 2，v2 校验 held 有限且 ≥0、entries ≤ `kMaxTaskWindowEntries`、每条 remaining 有限且 >0、
+  amount >0、窗口只属于 rate 步；坏记录整档拒绝。读档恢复 `at = remaining - window`（见 §1.55 ②），顺序在
+  容器恢复之后、settle 循环之前，所以“存档前刚好够 hold”会在读档时立即完成并正确消费。
+* **测试（本机实跑，debug）**：`test_game_save` **17 用例 / 263 断言**（原 12/202；新增 5 个用例：半程 hold
+  续跑、完成态往返、v1 兼容、v2 坏记录拒绝（10 种）、纯 deliver 往返）——半程用例用 rate 3/s window 5 hold 2、
+  20 石头（窗口需 15）：tick 0.8 s 存档，读档后 held≈0.8（1e-4 容差）、窗口仍 20 件、容器 20 件；再 tick 1.3 s
+  后完成、窗口/held 清空、容器正好剩 5。`test_tasks` 仍 20/238。**全套 46 个测试 debug 46/46、release 46/46 全绿**。
+* **文档**：`docs/SAVE.md` 的 TASK 行与段落重写为 v2（格式、remaining 约定、v1 兼容、读档顺序）；`docs/RUNTIME.md`
+  TaskFunctions 段落与 `components.h` 注释同步；`docs/MODS.md` tasks:: 行末尾改成“会随存档保存”；§1.53 ③、
+  §1.54 ④、M2(45)、M2(46) 的“不写档”说法改为指向 §1.55。
+* **没做（明确留白）**：窗口历史仍只保留最近 32 条（满时并入最新一条不丢量）；不存层时钟（不需要）；
+  其它 chunk 的格式/版本不动。
 
 ### M1 验收标准（已满足）
 

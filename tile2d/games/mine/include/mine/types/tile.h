@@ -1,168 +1,237 @@
-// Mine - what every plot of a mine has in common.
+// Mine - a plot, as data.
 //
-// A **plot** (地块) is a fixed thing that occupies cells of one layer: a floor, an ore vein, a machine.
-// It is placed where it is and does not move. A plot is often one cell, but not always - a big
-// structure is 2x2, 3x3 or 2x3 (docs/GAME_DESIGN.md section 1.12) - so a plot's footprint is a
-// rectangle of cells whose top left corner is the plot's anchor. Nothing here assumes one cell.
-//
-// What a plot *is* - which content it stands for - is the registry's business (mine/registry.h): a
-// plot holds the kind and the id a save stores, never a name. What it *does* is in the kinds below
-// (types/scene_tile.h, types/entity_tile.h), which exist because of how often it has to be done.
-//
-// This class is the base of that family: identity, footprint, whether the content behind it is still
-// there, and how it draws itself. It has no constructor a caller can reach, because a plot is always
-// scenery - possibly scenery that also runs (types/entity_tile.h) - and there is no such thing as a
-// plot that is neither.
+// A plot is a fixed thing that occupies cells of one layer: a floor, an ore vein, a machine, a
+// warehouse. It has the core fields every plot shares - content identity, footprint, layer, mirroring,
+// the definition it was made from - and it owns one runtime ObjectData: the bytes of the components its
+// tile type is made of. What a plot *does* is in the component function tables; this class only asks
+// them. There is no vtable and no concrete Floor/Warehouse/Drill class: the tile type says what a plot
+// is made of, and an interface query says what it can do.
 #pragma once
 
 #include <mine/content_grid.h>
 #include <mine/registry.h>
 
+#include <mine/runtime/content/components.h>
+
+#include <mine/types/click.h>
+#include <mine/types/container.h>
+#include <mine/types/task.h>
+
 #include <t2d/core/math2d.h>
 #include <t2d/core/rng.h>
+#include <t2d/core/types.h>
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mine {
 
-/// The layer that holds plots (world.h). Only the name is needed here: the definition would be a cycle,
-/// and a plot only ever calls back into the layer it is already in.
 class MineLayer;
 
-} // namespace mine
+namespace runtime {
+class ObjectData;
+class TileType;
+} // namespace runtime
 
-namespace mine::types {
+namespace types {
+
+class TileRuntimeLibrary;
+struct RuntimeTileDefinition;
+struct TileDefinition;
+struct Building;
 
 using t2d::f32;
 using t2d::i32;
 using t2d::TileRect;
-using t2d::Vec2;
+using t2d::usize;
 
-/// The cells a plot of \p width x \p height anchored at \p anchor covers. A plot always covers at
-/// least the cell it is anchored at, so a size below one cell is read as one cell rather than as a
-/// plot that is nowhere.
-[[nodiscard]] constexpr TileRect footprint(GridPos anchor, i32 width = 1, i32 height = 1) {
-    return TileRect{anchor.x, anchor.y, width < 1 ? 1 : width, height < 1 ? 1 : height};
-}
-
-/// One picture of a plot's complete render preview (get_preview): which picture it is, whether it is drawn
-/// mirrored, how far it is turned and about which point of itself.
+/// One picture of a plot's complete render preview: which part it is, whether it is drawn mirrored, how
+/// far it is turned and about which point of itself. Kept as the screen's vocabulary; the component
+/// table answers in C types and get_preview() converts.
 struct PreviewImage {
-    /// Which picture of the content this is: empty for the entry's own "image", "top" for the part a drill
-    /// turns over its base (docs/GAME_DESIGN.md section 1.38).
+    /// Empty is the entry's own "image"; "top" is the part a drill turns over its base.
     std::string part;
-    /// Whether the picture is drawn mirrored left to right, the way the plot draws itself (mirrored()).
     bool mirrored = false;
-    /// How far the picture is turned, in radians, about \p pivot.
     f32 radians = 0.0f;
-    /// The point the picture turns about, in the picture's own coordinates: (0, 0) is its bottom left
-    /// corner and (1, 1) its top right.
-    Vec2 pivot{0.5f, 0.5f};
+    t2d::Vec2 pivot{0.5f, 0.5f};
 };
 
-/// The **complete render preview** of a plot: the pictures it draws, in the order it draws them - the
-/// first one at the bottom, each one after it over that. It is a drawing list and not pixels: what the
-/// pictures are is the logic layer's answer, and it never touches a texture or the GPU.
 struct TilePreview {
     std::vector<PreviewImage> images;
 
     [[nodiscard]] bool empty() const { return images.empty(); }
 };
 
-/// The base class of everything that occupies cells of a mine.
+/// The cells a plot of \p width x \p height anchored at \p anchor covers. A plot always covers at least
+/// the cell it is anchored at.
+[[nodiscard]] constexpr TileRect footprint(GridPos anchor, i32 width = 1, i32 height = 1) {
+    return TileRect{anchor.x, anchor.y, width < 1 ? 1 : width, height < 1 ? 1 : height};
+}
+
+/// A plot: core data plus the runtime object its components live in.
 class Tile {
 public:
-    virtual ~Tile() = default;
+    Tile(std::shared_ptr<const TileRuntimeLibrary> library,
+         std::shared_ptr<const RuntimeTileDefinition> runtime_definition, ContentId id, i32 layer,
+         GridPos anchor, i32 width = 1, i32 height = 1);
+    ~Tile();
+
+    Tile(const Tile&) = delete;
+    Tile& operator=(const Tile&) = delete;
+    Tile(Tile&&) noexcept = default;
+    Tile& operator=(Tile&&) noexcept = default;
 
     // --- what it is -------------------------------------------------------------------------------
     [[nodiscard]] ContentKind kind() const { return kind_; }
-    /// The id the table in force handed out. Kept even when the content is gone, so content that comes
-    /// back repairs the plot by name instead of losing it.
     [[nodiscard]] ContentId id() const { return id_; }
-    /// The name the registry has for this plot's content, or "#<id>" when the content is gone - the
-    /// same text the sandbox shows for a cell whose content disappeared.
     [[nodiscard]] std::string name(const ContentRegistry& registry) const;
-    /// True for content that is a floor: something other plots are placed on and walk over. It is the
-    /// one thing a Floor (types/floor.h) adds, and the reason it is a method rather than a field in the
-    /// data: being a floor is a kind of thing, not a property a file can hand out. Everything else asks
-    /// this question - a machine about the cell under it, pathing about the cell it is walking into -
-    /// without knowing the name of a single floor.
-    [[nodiscard]] virtual bool is_floor() const { return false; }
-    /// True for content that is ore: something that can be dug out of the cell it sits in. The same
-    /// shape of question as is_floor() - it is about what the thing is, so a caller asks it instead of
-    /// comparing content names (types/single_ore.h). A cell can be both, on two tile layers: a floor
-    /// with ore in it is a floor and an ore.
-    [[nodiscard]] virtual bool is_ore() const { return false; }
-
-    /// The content behind the plot is not in the registry any more (a reload can take it away).
+    [[nodiscard]] bool is_floor() const { return kind_ == ContentKind::Floor; }
+    [[nodiscard]] bool is_ore() const { return kind_ == ContentKind::Ore; }
     [[nodiscard]] bool missing() const { return missing_; }
     void set_missing(bool missing) { missing_ = missing; }
-    /// There is content behind it and that content is here.
     [[nodiscard]] bool valid() const { return id_ != kNoContent && !missing_; }
+    /// The definition this plot was made from. Owned by the runtime library the plot holds, so it
+    /// survives a content reload.
+    [[nodiscard]] const TileDefinition* definition() const;
+    [[nodiscard]] const Building* building() const;
+    /// The tile type the plot was built from: the layout every plot of this content shares.
+    [[nodiscard]] const runtime::TileType* tile_type() const { return tile_type_; }
 
     // --- where it is ------------------------------------------------------------------------------
-    /// The tile layer it was placed on. What a layer means is the designer's business; the map only
-    /// numbers them from zero.
     [[nodiscard]] i32 layer() const { return layer_; }
-    /// The cells it covers, half open like every rectangle in the framework.
     [[nodiscard]] const TileRect& cells() const { return cells_; }
-    /// The cell its footprint starts at, top left.
     [[nodiscard]] GridPos anchor() const { return GridPos{cells_.x, cells_.y}; }
     [[nodiscard]] i32 width() const { return cells_.width; }
     [[nodiscard]] i32 height() const { return cells_.height; }
     [[nodiscard]] i32 cell_count() const { return cells_.width * cells_.height; }
     [[nodiscard]] bool covers(GridPos cell) const { return cells_.contains(cell.x, cell.y); }
-    /// True when the two plots are on the same layer and share at least one cell. Two 3x3 structures
-    /// overlap; a structure and the floor under it do not, because they are on different layers.
     [[nodiscard]] bool overlaps(const Tile& other) const;
-    /// True when every cell of the footprint is inside a map of \p map_width x \p map_height cells:
-    /// what a placement check asks before a 2x2 is put down near the edge.
     [[nodiscard]] bool within(i32 map_width, i32 map_height) const;
-
-    /// The layer this plot is in, or nullptr while it is in none. What a plot's own logic needs in order
-    /// to ask the world something from inside its turn - a drill making a drop out of the ore it stands
-    /// on (types/drill.h). Named owner() because layer() is already the tile layer it sits on.
+    /// The layer this plot is in, or nullptr while it is in none.
     [[nodiscard]] MineLayer* owner() const { return owner_; }
 
     // --- how it draws itself ----------------------------------------------------------------------
-    /// Whether this plot's art may be turned around. Some content looks better when every copy of it
-    /// does not face the same way - an ore vein, a patch of floor - and the designer's data says which.
     [[nodiscard]] bool random_reverse() const { return random_reverse_; }
     void set_random_reverse(bool value) { random_reverse_ = value; }
-
-    /// True when this plot draws itself mirrored left to right. It is decided once, when the map is
-    /// built (randomise_mirror), and it is about drawing only: what a plot *does* is never mirrored.
     [[nodiscard]] bool mirrored() const { return mirrored_; }
-    /// Sets the mirroring by hand, for a caller that knows better than the dice (a save that stored
-    /// it, an editor).
     void set_mirrored(bool value) { mirrored_ = value; }
-
-    /// Decides how this plot draws itself, once, while the map is being built: with random_reverse set,
-    /// half of them come out mirrored, the rest do not. It draws from \p rng - the layer's own
-    /// generator, seeded from the world's seed - so the same mine comes out the same way twice
-    /// (docs/GAME_DESIGN.md section 2). A plot that may not be turned around draws nothing from the
-    /// generator, so it cannot shift the dice for the plots after it.
     void randomise_mirror(t2d::Rng& rng);
+    /// The complete preview, from the PreviewFunctions table. \p seconds is the world clock: only a
+    /// turning top reads it.
+    [[nodiscard]] TilePreview get_preview(f32 seconds = 0.0f) const;
 
-    /// The **complete render preview** of this plot: every picture it draws, in drawing order, as it would
-    /// be drawn at \p seconds of the world's clock. It is what an interface draws a plot with when the map
-    /// itself is not being drawn - the building sidebar draws a building's icon this way - so the answer
-    /// comes from the plot and not from a caller looking up its pictures again. The base has no art of its
-    /// own, so it previews as nothing (tile.cpp).
-    [[nodiscard]] virtual TilePreview get_preview(t2d::f32 seconds = 0.0f) const;
+    // --- runtime object ---------------------------------------------------------------------------
+    [[nodiscard]] bool has_component(runtime::ComponentTypeId type_id) const;
+    [[nodiscard]] const void* instance(runtime::ComponentTypeId type_id) const;
+    [[nodiscard]] const void* shared(runtime::ComponentTypeId type_id) const;
+    /// The active table of an interface, or nullptr. Objects cache nothing: an override installed
+    /// before the query is what this answers with.
+    [[nodiscard]] const void* interface(runtime::ComponentTypeId type_id,
+                                        runtime::InterfaceId interface_id) const;
+    [[nodiscard]] runtime::ObjectData* object() { return object_.get(); }
+    [[nodiscard]] const runtime::ObjectData* object() const { return object_.get(); }
 
-protected:
-    /// A plot is constructed where it is: it has no place until it has one. \p width and \p height
-    /// are the footprint in cells (at least one).
-    Tile(ContentKind kind, ContentId id, i32 layer, GridPos anchor, i32 width = 1, i32 height = 1);
+    // --- container / click ------------------------------------------------------------------------
+    [[nodiscard]] bool has_container() const;
+    [[nodiscard]] Container container() const;
+    [[nodiscard]] usize capacity() const;
+    [[nodiscard]] bool holds(GridPos cell) const { return covers(cell); }
+    [[nodiscard]] bool has_click() const;
+    [[nodiscard]] Click click() const;
+    /// A click arrived at \p cell. A plot still going up takes none, and closes a panel it had open:
+    /// it is not finished, so it is not something the player has.
+    bool on_click(GridPos cell);
+
+    // --- drag -------------------------------------------------------------------------------------
+    [[nodiscard]] bool has_drag() const;
+    [[nodiscard]] bool drag_accepts(ContentKind kind, ContentId id, usize count) const;
+    /// Takes a drop in whole or not at all.
+    bool drag_receive(ContentKind kind, ContentId id, usize count);
+
+    // --- the passes -------------------------------------------------------------------------------
+    [[nodiscard]] bool dirty() const { return dirty_; }
+    void mark_dirty() { dirty_ = true; }
+    /// Brings the plot up to date if it is dirty and not still being built. There is no virtual hook:
+    /// the per-content refresh logic is a component table when content needs it.
+    bool refresh();
+    [[nodiscard]] bool under_construction() const;
+    void set_under_construction(bool value);
+
+    // --- ticker -----------------------------------------------------------------------------------
+    [[nodiscard]] bool is_ticking() const;
+    [[nodiscard]] f32 period_seconds() const;
+    void set_period_seconds(f32 seconds);
+    [[nodiscard]] f32 since_last_update() const;
+    void set_since_last_update(f32 seconds);
+    /// Hands the ticker the frame's time. The optional is the span this run accounts for: one run per
+    /// call, with the whole time that had piled up, so a long frame is not replayed and a drill can
+    /// produce what the span is worth.
+    [[nodiscard]] std::optional<f32> advance(f32 delta_seconds);
+
+    // --- drill ------------------------------------------------------------------------------------
+    [[nodiscard]] bool is_drill() const;
+    [[nodiscard]] bool ready() const;
+    [[nodiscard]] f32 dig_power() const;
+    [[nodiscard]] runtime::content::DrillJob job() const;
+    void set_job(runtime::content::DrillJob job);
+    [[nodiscard]] usize produced() const;
+    void set_produced(usize count);
+    [[nodiscard]] f32 spin_seconds() const;
+    [[nodiscard]] f32 spin_angle(f32 seconds) const;
+    [[nodiscard]] t2d::Vec2 spin_origin() const;
+    /// Accounts for \p elapsed_seconds of mining; returns how many drops it threw.
+    usize drill_tick(f32 elapsed_seconds);
+    [[nodiscard]] t2d::u64 drill_rng() const;
+    [[nodiscard]] t2d::u32 drill_side() const;
+
+    // --- task -------------------------------------------------------------------------------------
+    /// True when the plot carries the task component. A plot whose content declares no tasks still answers
+    /// true when its tile type says it has one: an empty chain is a chain, and every question below says
+    /// so (docs/GAME_DESIGN.md section 1.52).
+    [[nodiscard]] bool has_task() const;
+    /// The plot's task chain: a view over its own progress and the content's shared steps. A plot with no
+    /// task component answers an invalid view (count/current 0, no step).
+    [[nodiscard]] Task task() const;
+    /// Delivers whatever the container holds toward the current step, as far as it goes, and consumes it.
+    /// Returns how many steps this call completed. Every path that can put items in the container ends
+    /// with it: a drag, a click, a placement's starting stock, a load.
+    usize run_tasks();
+    /// Restores how many steps a save says are done (docs/SAVE.md). Returns false when the plot has no
+    /// task component; a value past the chain's length is clamped to it.
+    bool set_task_completed(usize completed);
+    /// Remembers that \p count of \p kind / \p id just arrived, at the layer's clock, for a **rate**
+    /// step's sliding window. A deliver step records nothing: its progress is what its container holds.
+    /// Callers that put items into the container outside drag_receive (a placement's starting stock, a
+    /// load) note them the same way, so a rate window counts every way the items got there.
+    void note_delivery(ContentKind kind, ContentId id, usize count);
+    /// Hands the frame's seconds to the plot's task chain: a satisfied **rate** step's hold grows, an
+    /// unsatisfied one resets it (docs/GAME_DESIGN.md section 1.54). The layer's tick pass calls this;
+    /// nothing else has to.
+    void task_tick(f32 delta_seconds);
+    /// How many steps are done, as the plot's own data says (before the Task view's clamp).
+    [[nodiscard]] usize task_completed() const;
 
 private:
-    /// The layer sets this when it takes the plot in (world.h): a plot is placed *into* a layer, and
-    /// what it does while it runs happens in that layer.
     friend class mine::MineLayer;
 
-    MineLayer* owner_ = nullptr;
+    [[nodiscard]] const runtime::content::ContainerFunctions* container_functions() const;
+    [[nodiscard]] const runtime::content::PreviewFunctions* preview_functions() const;
+    [[nodiscard]] const runtime::content::ClickFunctions* click_functions() const;
+    [[nodiscard]] const runtime::content::DragFunctions* drag_functions() const;
+    [[nodiscard]] const runtime::content::BuildingFunctions* building_functions() const;
+    [[nodiscard]] const runtime::content::TickerFunctions* ticker_functions() const;
+    [[nodiscard]] const runtime::content::DrillFunctions* drill_functions() const;
+    [[nodiscard]] const runtime::content::TaskFunctions* task_functions() const;
+    /// The layer's clock in seconds, or 0 for a plot in no layer: what a task window is measured against.
+    [[nodiscard]] f32 now_seconds() const;
+
+    std::shared_ptr<const TileRuntimeLibrary> library_;
+    std::shared_ptr<const RuntimeTileDefinition> runtime_definition_;
+    const runtime::TileType* tile_type_ = nullptr;
+    std::unique_ptr<runtime::ObjectData> object_;
     ContentKind kind_ = ContentKind::Item;
     ContentId id_ = kNoContent;
     i32 layer_ = 0;
@@ -170,6 +239,9 @@ private:
     bool missing_ = false;
     bool random_reverse_ = false;
     bool mirrored_ = false;
+    bool dirty_ = true;
+    MineLayer* owner_ = nullptr;
 };
 
-} // namespace mine::types
+} // namespace types
+} // namespace mine

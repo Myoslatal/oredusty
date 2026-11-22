@@ -1,0 +1,38 @@
+# 本体内容 —— 任务方块（docs/GAME_DESIGN.md §1.51）。
+#
+# 任务方块是 2×1 的**场景地块**：用 structure:: 表声明（存档里 kind 就是 structure），再靠
+# tile_type:"task_block" 选中内置的 task_block tile 类型。它的组件依次是 task（任务链：绑定的多个
+# 任务依次进行）、container（接收物品输入）、click（单击查看进度）、drag、preview、building。
+#
+# 引擎为它读的字段：image（贴图）、tile_type（内置类型名）、capacity（container 装得下多少件）、
+# size::（占地 2×1）。**不写 building::**：它现在是"先把方块做出来"，不进建造栏、没有造价与
+# 建造时间（设计者原话："先制作方块，任务系统之后实现"）。
+#
+# 它由故事第 1 层的 place_block 放在 (52,50)，占 (52,50)-(53,50)：石头仓库右边隔一格，容器初始为空。
+# **不能建造**：它没有 building::，所以不进建造栏、也没有解锁行——它只由层数据放下。不要给它加 building::。
+#
+# tasks:: 是这个方块绑定的任务，**从上到下依次进行**：每步可以是 deliver（交付指定物品指定数量）或
+# rate（至少以指定速率输入指定物品，docs/GAME_DESIGN.md §1.53）；本方块绑定两条 deliver。交付通过它
+# 自己的 container 完成——物品一进容器就计入进度，够数时正好消费要求数量；当前 deliver 任务需要的
+# 物品留在容器里的数量就是“当前进度”。capacity 100 足够装下两步、也不会卡住第二次交付。
+#
+# capacity 暂定 100，与石头仓库一致；任务系统需要多少物品输入由设计者改。
+# 贴图 art/task_block.png 是设计者放进本体包的 128×64 图。
+
+structure::
+    task_block::
+        image:"art/task_block.png"
+        tile_type:"task_block"
+        capacity:100
+        size::
+            width:2
+            height:1
+        tasks::
+            first_delivery::
+                type:"deliver"
+                item:"stone"
+                count:10
+            second_delivery::
+                type:"deliver"
+                item:"stone"
+                count:25

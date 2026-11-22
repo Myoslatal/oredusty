@@ -5,13 +5,13 @@
 // half of that which is not pixels - who is being built, how long it has been going, and when it is done -
 // so the sweep can be tested without a renderer, the way the sidebar's layout is (mine/build_sidebar.h).
 //
-// It is also what says a plot is **still going up** (types/scene_tile.h): the plot is placed at once and it
+// It is also what says a plot is **still going up** (types/tile.h): the plot is placed at once and it
 // draws, but it does nothing until its sweep is over - no turn, no click, no dragged drop. That state is
 // turned on when a sweep starts and off when it ends (or when the sweeps are forgotten), because it is the
 // build that decides it, and it is state of one plot rather than of the entry they share.
 #pragma once
 
-#include <mine/types/scene_tile.h>
+#include <mine/types/tile.h>
 
 #include <t2d/core/types.h>
 
@@ -23,7 +23,7 @@ namespace mine {
 class BuildAnimation {
 public:
     struct Build {
-        types::SceneTile* plot = nullptr;
+        types::Tile* plot = nullptr;
         t2d::f32 elapsed = 0.0f;   ///< seconds since it was placed
         t2d::f32 seconds = 0.0f;   ///< what its entry said it takes
 
@@ -40,7 +40,7 @@ public:
     /// over. A plot that takes no time, one that is already being built, and a null plot are all ignored -
     /// and an ignored build leaves the plot finished rather than marking it: what this holds is exactly
     /// "plots with a sweep left to show".
-    void start(types::SceneTile* plot, t2d::f32 seconds);
+    void start(types::Tile* plot, t2d::f32 seconds);
 
     /// Moves every build on by \\p delta_seconds and forgets the ones that are done. A plot whose sweep
     /// has just ended is finished again: it may run, be clicked and take drops from here on.
@@ -53,7 +53,7 @@ public:
     /// build that takes no time, a negative (or NaN) elapsed, one that has reached its seconds, or a plot
     /// already in the list. The caller refuses a save whose BUIL records and plots disagree, so a false
     /// here means the save cannot come back exactly.
-    [[nodiscard]] bool restore(types::SceneTile* plot, t2d::f32 seconds, t2d::f32 elapsed);
+    [[nodiscard]] bool restore(types::Tile* plot, t2d::f32 seconds, t2d::f32 elapsed);
 
     /// Forgets everything: the layer those plots were on is not the layer on screen any more, so their
     /// sweeps are about plots nobody is looking at. The plots are marked finished on the way out - a plot
@@ -66,7 +66,7 @@ public:
 
     /// How much of \\p plot is up. 1 for a plot that is not being built, which is what a drawing pass wants
     /// to hear about everything else on the map.
-    [[nodiscard]] t2d::f32 progress_of(const types::SceneTile* plot) const;
+    [[nodiscard]] t2d::f32 progress_of(const types::Tile* plot) const;
 
 private:
     std::vector<Build> builds_;

@@ -1,0 +1,9 @@
+# A native runtime-type fixture: registers a component, a tile type and an override through the
+# version 2 mod surface. It is loaded by test_mod_runtime, not by the game's own tests.
+id:"example_runtime"
+name:"Example (runtime types)"
+version:"1.0"
+description:"Registers a custom component and tile type and overrides the preview interface."
+api:2
+native:"libexample_runtime.so"
+content:["content/marker.ecfg"]

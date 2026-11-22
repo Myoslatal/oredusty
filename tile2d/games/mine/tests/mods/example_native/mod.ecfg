@@ -3,7 +3,7 @@ id:"example_native"
 name:"Example (native)"
 version:"1.0"
 description:"Registers content generated from its own parameters: a mod's logic, not just its data."
-api:1
+api:2
 requires:["example_data"]
 native:"libexample_native.so"
 

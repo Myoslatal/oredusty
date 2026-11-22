@@ -361,7 +361,7 @@ private:
     /// What a plot's container panel says and how big it is, before it is placed: the rows are the
     /// container's, in the order things arrived, and \p title is the caller's (a panel opening on a
     /// click says something slightly different from one a selection opened).
-    [[nodiscard]] ContainerPanelLayout container_panel(const types::SceneTile& plot, std::string title) const;
+    [[nodiscard]] ContainerPanelLayout container_panel(const types::Tile& plot, std::string title) const;
     /// Puts \p layout's top left corner at \p anchor, and derives the row origins from where it landed.
     void place_panel_at(ContainerPanelLayout& layout, t2d::Vec2 anchor) const;
     /// Puts \p layout at the **top of \p area, centred** - where a double click's selection shows
@@ -377,16 +377,24 @@ private:
     /// The panel a plot's container shows through a **click**, at the plot's bottom-right corner
     /// (types/warehouse.h, section 1.27), and the one a **selection** shows at the top of the screen
     /// (section 1.31). Both are the same content in the same shape; only where they land differs.
-    [[nodiscard]] ContainerPanelLayout corner_panel(const types::SceneTile& plot) const;
-    [[nodiscard]] ContainerPanelLayout selection_panel(const types::SceneTile& plot, t2d::Aabb2 area) const;
+    [[nodiscard]] ContainerPanelLayout corner_panel(const types::Tile& plot) const;
+    [[nodiscard]] ContainerPanelLayout selection_panel(const types::Tile& plot, t2d::Aabb2 area) const;
+    /// The panel a **task block** shows through a click: how far its chain has got and what the current
+    /// step still asks for (docs/GAME_DESIGN.md section 1.52). The words are laid out like a container
+    /// panel's rows but carry **no pictures**: a step names one item, and the row is a sentence, not a
+    /// slot list. task_panel() builds it, corner_task_panel() hangs it at the plot's bottom-right corner,
+    /// draw_task_panel() draws the words.
+    [[nodiscard]] ContainerPanelLayout task_panel(const types::Tile& plot) const;
+    [[nodiscard]] ContainerPanelLayout corner_task_panel(const types::Tile& plot) const;
+    void draw_task_panel(const ContainerPanelLayout& layout);
     /// The plot a double click selected, or nullptr when nothing is selected any more - the layer was
     /// rebuilt, the plot there is gone, or it no longer holds anything.
-    [[nodiscard]] const types::SceneTile* selected_plot() const;
+    [[nodiscard]] const types::Tile* selected_plot() const;
     /// The same plot, for the code that changes it - paying for a building out of the warehouse that is
     /// selected is what a container is for (docs/GAME_DESIGN.md section 1.37). Null when nothing is selected.
-    [[nodiscard]] types::SceneTile* selected_plot_to_change();
+    [[nodiscard]] types::Tile* selected_plot_to_change();
     /// A double click at \p cell: selects the plot there when it holds a container
-    /// (types/scene_tile.h), and clears the selection when there is nothing to show.
+    /// (types/tile.h), and clears the selection when there is nothing to show.
     void select_at(GridPos cell);
     /// Forgets the selection: the pointer clicked away from it, or the view left the layer.
     void clear_selection();
@@ -519,12 +527,12 @@ private:
     /// options_.autosave_seconds. A save, a load and entering a mine all start it again (section 1.47).
     f32 autosave_elapsed_ = 0.0f;
     /// The rectangle a plot covers on the screen, from the camera the map is drawn with.
-    [[nodiscard]] t2d::Aabb2 plot_box_on_screen(const types::SceneTile& plot) const;
+    [[nodiscard]] t2d::Aabb2 plot_box_on_screen(const types::Tile& plot) const;
     void draw_builds(ore::RenderFrame& frame, const ore::Mat4& view_projection);
     void draw_build_sidebar();
     void draw_sidebar_button(const BuildSidebar::Layout& layout);
     [[nodiscard]] bool sidebar_click(t2d::Vec2 point);
-    std::unique_ptr<types::SceneTile> playtest_selected_{};
+    std::unique_ptr<types::Tile> playtest_selected_{};
     /// A double click in the playtest selects a plot that holds a container, and its contents show at the
     /// top of the screen, exactly as in the world view (docs/GAME_DESIGN.md section 1.31).
     void select_playtest_at(GridPos cell);

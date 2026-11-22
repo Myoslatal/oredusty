@@ -1,5 +1,8 @@
 #include <mine/content_loader.h>
 
+#include <mine/runtime/runtime_context.h>
+#include <mine/types/tile_runtime.h>
+
 #include <t2d/core/log.h>
 
 #include <filesystem>
@@ -12,6 +15,9 @@ void ContentDefinitions::add(types::TileDefinition definition) {
     // of a content name. Two files that declare one name are reported by the registration, not here.
     if (find_tile(definition.kind, definition.name) != nullptr) return;
     tiles_.push_back(std::move(definition));
+    // The runtime built from the previous list is now incomplete. Tiles already made from it keep it
+    // alive through their shared_ptr; the next make_tile builds the larger one.
+    runtime_.reset();
 }
 
 void ContentDefinitions::add(types::ItemDefinition definition) {
@@ -43,6 +49,20 @@ const types::DropDefinition* ContentDefinitions::find_drop(std::string_view name
         if (definition.name == name) return &definition;
     }
     return nullptr;
+}
+
+void ContentDefinitions::set_runtime_context(std::shared_ptr<runtime::RuntimeContext> context) {
+    runtime_context_ = std::move(context);
+    runtime_.reset(); // the library points into the context; a new context needs a new library
+}
+
+std::shared_ptr<const types::TileRuntimeLibrary>
+ContentDefinitions::runtime(const ContentRegistry& registry) const {
+    if (runtime_context_ == nullptr) runtime_context_ = std::make_shared<runtime::RuntimeContext>();
+    if (runtime_ == nullptr) {
+        runtime_ = std::make_shared<types::TileRuntimeLibrary>(registry, tiles_, runtime_context_);
+    }
+    return runtime_;
 }
 
 std::vector<ContentEntry> content_declarations(const t2d::EcfgDocument& document,
@@ -110,15 +130,15 @@ std::vector<ContentImage> content_images(const t2d::EcfgDocument& document) {
                 T2D_WARN("content: drill '{}' has a top_image that is not a quoted path", entry.key());
                 continue;
             }
-            images.push_back(
-                ContentImage{kind, std::string(entry.key()), std::string(top->as_string()), std::string("top")});
+            images.push_back(ContentImage{kind, std::string(entry.key()), std::string(top->as_string()),
+                                          std::string("top")});
         }
     }
     return images;
 }
 
 std::vector<ResolvedImage> resolve_content_images(const t2d::EcfgDocument& document,
-                                                        const std::string& source_path) {
+                                                  const std::string& source_path) {
     std::vector<ResolvedImage> images;
     const std::filesystem::path base_directory = std::filesystem::path(source_path).parent_path();
     for (const ContentImage& declared : content_images(document)) {
@@ -157,7 +177,7 @@ ContentRegistrationReport register_declared_content(ContentRegistry& registry,
             continue;
         }
         const ContentId id = registry.register_content(entry.kind, entry.name);
-        if (id == kNoContent) continue;   // the registry reported why
+        if (id == kNoContent) continue; // the registry reported why
         if (registered_out != nullptr) registered_out->push_back(ContentEntry{entry.kind, id, entry.name});
         ++report.registered;
     }
@@ -171,8 +191,10 @@ ContentLoadReport register_content_from_ecfg(ContentRegistry& registry, const t2
         const ContentId before = registry.find(entry.kind, entry.name);
         const ContentId id = registry.register_content(entry.kind, entry.name);
         if (id == kNoContent) continue; // the registry already reported why
-        if (before == kNoContent) ++report.registered;
-        else ++report.already_present;
+        if (before == kNoContent)
+            ++report.registered;
+        else
+            ++report.already_present;
     }
     if (!report.unknown_tables.empty()) {
         T2D_WARN("content: {} table(s) are not content kinds (first: '{}')", report.unknown_tables.size(),

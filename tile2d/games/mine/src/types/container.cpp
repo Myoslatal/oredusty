@@ -1,53 +1,70 @@
 #include <mine/types/container.h>
 
 #include <algorithm>
+#include <limits>
+
+#include <mine/runtime/content/components.h>
 
 namespace mine::types {
+namespace {
+
+[[nodiscard]] t2d::u32 as_u32(usize value) {
+    return static_cast<t2d::u32>(std::min<usize>(value, std::numeric_limits<t2d::u32>::max()));
+}
+
+} // namespace
+
+Container::Container(void* data, const void* shared, const runtime::content::ContainerFunctions* functions)
+    : data_(data), shared_(shared), functions_(functions) {}
+
+usize Container::capacity() const {
+    const auto* definition = static_cast<const runtime::content::ContainerShared*>(shared_);
+    return definition != nullptr ? definition->capacity : 0;
+}
+
+usize Container::total() const {
+    return functions_ != nullptr ? functions_->total(shared_, data_) : 0;
+}
+
+usize Container::room() const {
+    return functions_ != nullptr ? functions_->room(shared_, data_) : 0;
+}
 
 usize Container::count_of(ContentKind kind, ContentId id) const {
-    for (const ContainerSlot& slot : slots_) {
-        if (slot.kind == kind && slot.id == id) return slot.count;
+    if (functions_ == nullptr) return 0;
+    const runtime::content::ContainerSlot* slots = functions_->slots(shared_, data_);
+    const t2d::u32 count = functions_->count(shared_, data_);
+    for (t2d::u32 index = 0; index < count; ++index) {
+        if (slots[index].kind == static_cast<t2d::u32>(kind) && slots[index].id == id) {
+            return slots[index].count;
+        }
     }
     return 0;
 }
 
-ContainerSlot* Container::find(ContentKind kind, ContentId id) {
-    for (ContainerSlot& slot : slots_) {
-        if (slot.kind == kind && slot.id == id) return &slot;
+std::vector<ContainerSlot> Container::slots() const {
+    std::vector<ContainerSlot> result;
+    if (functions_ == nullptr) return result;
+    const runtime::content::ContainerSlot* slots = functions_->slots(shared_, data_);
+    const t2d::u32 count = functions_->count(shared_, data_);
+    result.reserve(count);
+    for (t2d::u32 index = 0; index < count; ++index) {
+        result.push_back(
+            ContainerSlot{static_cast<ContentKind>(slots[index].kind), slots[index].id, slots[index].count});
     }
-    return nullptr;
+    return result;
 }
 
 usize Container::add(ContentKind kind, ContentId id, usize count) {
-    if (count == 0 || id == kNoContent) return 0;
-    const usize taken = std::min(count, room());
-    if (taken == 0) return 0;
-    if (ContainerSlot* slot = find(kind, id); slot != nullptr) {
-        slot->count += taken;
-    } else {
-        slots_.push_back(ContainerSlot{kind, id, taken});
-    }
-    total_ += taken;
-    return taken;
+    if (functions_ == nullptr || count == 0) return 0;
+    const t2d::u32 wanted = as_u32(count);
+    return functions_->add(shared_, data_, static_cast<t2d::u32>(kind), id, wanted);
 }
 
 usize Container::take(ContentKind kind, ContentId id, usize count) {
-    if (count == 0) return 0;
-    for (usize index = 0; index < slots_.size(); ++index) {
-        if (slots_[index].kind != kind || slots_[index].id != id) continue;
-        const usize given = std::min(count, slots_[index].count);
-        slots_[index].count -= given;
-        total_ -= given;
-        // A slot that ran out is gone: a panel that kept listing "x0" would be listing what is not there.
-        if (slots_[index].count == 0) slots_.erase(slots_.begin() + static_cast<std::ptrdiff_t>(index));
-        return given;
-    }
-    return 0;
-}
-
-void Container::clear() {
-    slots_.clear();
-    total_ = 0;
+    if (functions_ == nullptr || count == 0) return 0;
+    const t2d::u32 wanted = as_u32(count);
+    return functions_->take(shared_, data_, static_cast<t2d::u32>(kind), id, wanted);
 }
 
 } // namespace mine::types

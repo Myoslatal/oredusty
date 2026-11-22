@@ -20,7 +20,7 @@ that direction. What is left is what the game actually uses, and it is all teste
 | `t2d/net` | the channel: shared-memory rings, KCP over UDP, framing, the session handshake, map chunk transfer | `test_kcp`, `test_protocol` |
 | `t2d/save` | the save archive: a versioned `.t2dsave` container (magic, game name and version, chunks with id/version/size/CRC-32) with encode/decode, file helpers and payload reader/writer; **header only**, so a game compiles it into itself | `test_save` |
 | `t2d/render` | one batched quad pipeline for tiles, rectangles and text, a glyph atlas, a tile map renderer that draws a bounded `TileMap` (absolute authored cells) or a resident `OpenWorld` (relative space, chunk culling and chunk/tile stats), the procedural bitmap font | `test_render_offscreen`, `test_sprite_projection` |
-| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save`, `test_research`, `test_research_state`, `test_text_input`, `test_save_library`, `test_save_list` |
+| `games/mine` | the game: session shell, content registry with per-save id tables, the **packed map grid** and the **world** built on it (layers, plots, the refresh and tick passes), the sandbox, the mod host (manifests, load order, the native ABI) — and the **launcher** that runs all of it out of a code table | `test_mine_menu`, `test_registry`, `test_component_runtime`, `test_content_runtime`, `test_mod_runtime`, `test_content_loader`, `test_content_grid`, `test_mine_types`, `test_world`, `test_sandbox`, `test_content_pack`, `test_mod_package`, `test_mine_table`, `test_game_save`, `test_research`, `test_research_state`, `test_text_input`, `test_save_library`, `test_save_list` |
 | `games/mefemma` | a **second, independent game project**: its own scene stack, DrawList, 2D renderer, assets, input and settings — the framework a game is written on, with no world model and no content of its own (its first-run scene asks once for a save directory and records it in `redirect.ecfg`; the Settings menu saves the language in that save directory's `config.ecfg`; the optional engine open world is shown working by its `openworld` scene: two test tiles, two test chunks, streamed, saved, and placeable at an ultra-far absolute chunk; see below) | `test_draw_list`, `test_scene_stack`, `test_settings`, `test_input`, `test_data_paths`, `test_first_run`, `test_scenes`, `test_open_world_scene` |
 
 ## Layout
@@ -55,7 +55,7 @@ parallel** - the build trees are independent, and each target's tests run with `
 takes about three minutes one at a time finishes in well under one. The job count is split between the
 targets (`VERIFY_JOBS=8 tools/verify.sh` to say how many cores to use); logs land in `build/verify/`.
 
-The whole suite is pure CPU work and finishes in about five seconds (42 suites, measured with `ctest` on
+The whole suite is pure CPU work and finishes in about five seconds (45 suites, measured with `ctest` on
 the `mine-debug` preset): the deterministic parts run in milliseconds, and the slowest suite is the CFF
 interpreter comparing every glyph of the Noto CJK collections (3.5 s). The `no-renderer` preset builds the tile map, the text engine and the networking
 without Vulkan, GLFW or either game — the split that lets a dedicated server exist later.
@@ -80,17 +80,20 @@ without Vulkan, GLFW or either game — the split that lets a dedicated server e
     games/mine/tests/test_registry       10 cases / 132 checks  content ids and the per-save name -> id table
     games/mine/tests/test_content_loader  6 cases /  36 checks  .ecfg content file -> registry -> save table
     games/mine/tests/test_content_grid    5 cases / 105 checks  four byte cells, layers allocated on first write, O(1) fill counts
-    games/mine/tests/test_mine_types     22 cases / 281 checks  plots: identity, footprints, the two kinds, the dice, the definer, floors and ore
+    games/mine/tests/test_component_runtime  12 cases / 211 checks  data-only objects: registry, archetypes, object bytes, active interface tables and overrides
+    games/mine/tests/test_content_runtime  12 cases / 322 checks  built-in C component tables: container, click, drag, ticker, preview, building, drill
+    games/mine/tests/test_mod_runtime       3 cases /  61 checks  a real dlopen mod registering a custom component/tile, shared state, save/load and an override
+    games/mine/tests/test_mine_types     12 cases / 151 checks  plots as data: identity, footprints, the two kinds, runtime definitions, floors and ore
     games/mine/tests/test_world          19 cases / 194 checks  a layer built out of content: plots, footprints, the dice, the two passes, the spatial index, placed blocks
     games/mine/tests/test_layer_rules    25 cases / 831 checks  the story's layers in data: the size, the floor creator, placed blocks, the scatter generator, the depth a HUD shows
     games/mine/tests/test_entities        8 cases / 129 checks  things that are not on a cell: free positions, movement, the cadence, the quadtree a radius query walks
     games/mine/tests/test_drops           7 cases / 151 checks  what lies in a layer and is not updated by it, its `drop::` definer, and the pointer drag
     games/mine/tests/test_drills         10 cases / 132 checks  the entity plot that mines the ore under it: hardness / power, and the drop it throws out
-    games/mine/tests/test_warehouses      9 cases / 157 checks  the scene plot that holds things: its container, the draginto, the click, and the drag
+    games/mine/tests/test_warehouses      7 cases / 114 checks  the runtime warehouse: container component, click, drag link, and the drag
     games/mine/tests/test_double_click    8 cases /  28 checks  two presses on one cell inside a window: the gesture a selection is made of
     games/mine/tests/test_build_sidebar  4 cases / 63 checks  the build sidebar: categories, picking, where its parts are, the pages
     games/mine/tests/test_building_unlocks  8 cases / 100 checks  which buildings a save has unlocked: the data's defaults, a reload, and the save blob
-    games/mine/tests/test_game_save  10 cases / 159 checks  a mine saved to a .t2dsave and read back: session, world, plots, containers, drops, sweeps, unlocks, research - all of it or none of it
+    games/mine/tests/test_game_save  10 cases / 160 checks  a mine saved to a .t2dsave and read back: session, world, plots, containers, drops, sweeps, unlocks, research, custom components - all of it or none of it
     games/mine/tests/test_research  13 cases / 141 checks  the technology tree: research:: fields, parents, cycles, depth and layout, visibility, one multi-node tree revealed a level at a time, 1-based layers
     games/mine/tests/test_research_state  5 cases / 35 checks  which nodes a save has studied: the RST1 blob, the name remap and its refusals
     games/mine/tests/test_text_input  7 cases / 81 checks  the save name field: UTF-8 text, the caret, CJK/emoji as one character, the limit, tab as text
@@ -479,8 +482,20 @@ it loads with no arguments at all, and `--content` adds to it rather than replac
 game's own content — a **dirt floor** (`floor:: dirt::`, texture `art/floor_dirt.png`), a **stone ore**
 (`ore:: stone::`, texture `art/ore_stone.png`), a **stone item** (`item:: stone::`, texture
 `art/item_stone.png`: the first thing in the game that is *not* on the map — an item is what a machine
-makes, a recipe moves and a demand asks for) and the **first story layer** (`layer:: entrance::`,
-100×100, dirt under it, 20 to 35 stone). The sandbox paints both plots: the palette lists `floor #1 DIRT`
+makes, a recipe moves and a demand asks for), a **2×1 task block** (`structure:: task_block::`, texture
+`art/task_block.png`: a container with a `task` chain whose deliver steps the block works through — the
+plot and its tasks are both built, docs/GAME_DESIGN.md sections 1.51 and 1.52) that the first story layer places at
+(52,50) and that **cannot be built** (it declares no `building::`, so it is in no build category and on
+no unlock row), and the **first story layer** (`layer:: entrance::`, 100×100, dirt under it, 20 to 35
+stone). The task block's `tasks::` in `content/task_blocks.ecfg` bind two **deliver** steps — 10 then
+25 stone — and a click on the block shows the chain's progress (see the task panel below). The task
+system has a second step type, **rate**: deliver an item at least at a given speed (items per second)
+over a measured window (`window`, one second when it is not written) — the step is done when the last
+window's deliveries reach `ceil(rate * window)`, the surplus stays in the container, and the panel shows
+the measured rate against the required one (docs/GAME_DESIGN.md section 1.53). A rate step can also ask
+for a **hold** (`hold`, seconds, 0 when it is not written): the condition then has to keep holding for
+that long, a frame without it resets the count, and the panel adds a third line with the held time
+against the required one (section 1.54). The sandbox paints both plots: the palette lists `floor #1 DIRT`
 and `ore #1 STONE` (the names the interface uses, docs/TEXT.md), and a cell painted with either draws that texture — an item has no cell to paint, so
 it is not in the palette.
 
@@ -491,20 +506,26 @@ it is not in the palette.
         ores.ecfg            ore:: stone::    with image:"art/ore_stone.png"
         drills.ecfg          drill:: stone::  base + top, dig_power:1, costs 10 stone (building:: extraction)
         warehouses.ecfg      warehouse:: stone::   capacity:100
-        layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35
+        task_blocks.ecfg     structure:: task_block::  2x1, capacity:100, tile_type:"task_block"
+        layers.ecfg          layer:: entrance::  100x100, full_flash dirt, scatter stone 20..35,
+                             places a stone warehouse and a 2x1 task_block
         art/floor_dirt.png
         art/item_stone.png
         art/ore_stone.png
         art/drill_stone_drill_base.png
         art/drill_stone_drill_top.png
+        art/task_block.png
 
 The ore and the item are both called `stone`, and that is not a clash: ids are handed out **per kind**,
 so the stone on the map and the stone you can carry are two entries that never collide.
 
-Two fields are the engine's to read: `image` out of any entry, and `random_reverse` out of the kinds that
-are drawn on the map (a plot turns itself around; an item is not on the map and has no such field).
-Everything else in an entry is the designer's. Both are checked when the content loads: a picture that is not there, or a
-`random_reverse:1` that is not a boolean, is reported rather than quietly ignored. Every source names
+A few fields are the engine's to read: `image` out of any entry, `random_reverse` out of the kinds that
+are drawn on the map (a plot turns itself around; an item is not on the map and has no such field),
+`size::` (how many cells a plot covers, 1×1 when it is not written), `tile_type` (which built-in or mod
+tile type gives the plot its components) and `capacity` (how much a plot with a container holds).
+Everything else in an entry is the designer's. All of them are checked when the content loads: a picture
+that is not there, a `random_reverse:1` that is not a boolean, or a footprint outside 1..4096 is
+reported rather than quietly ignored. Every source names
 its art the same way — relative to the file that declares it — and the atlas is sized to the art that
 actually ships, so a 256×256 texture is neither refused nor silently scaled.
 
@@ -634,7 +655,7 @@ links the framework with `--whole-archive` and exports its own symbols.
 
     mine-0.1.0/
         mine_game            the launcher: the engine, and the table runtime
-        mine.codetab         the game: 1161 sections, 3 651 symbols, 14 369 relocations (release)
+        mine.codetab         the game: 1382 sections, 4 248 symbols, 16 601 relocations / 2.11 MiB (release)
         engine.abi           what the launcher itself was compiled as - the reference a mod is measured against
         engine.api           the published surface, and the version it belongs to
         assets/text/ui.ecfg  the interface strings
@@ -793,8 +814,20 @@ what makes "this cell has ore" and "this plot is that ore" the same question.
 
 The game's own pack is the worked example: `games/mine/content/layers.ecfg` describes the first layer
 (100×100, the game's own dirt under it, 20 to 35 `stone` scattered on tile layer 1) and
-`content/ores.ecfg` declares the ore with the picture it is drawn with. A pack adds layers **after**
-the game's own — that is what the test double under `games/mine/tests/data/story_content/` does.
+`content/ores.ecfg` declares the ore with the picture it is drawn with. The same layer places the
+game's own **task block** at (52,50), right of the stone warehouse: a 2×1 `structure:: task_block::`
+that binds two deliver tasks in `content/task_blocks.ecfg` (10 then 25 stone). Clicking it opens the
+**task panel** at its corner — `TASK 1 / 2` and `STONE 0 / 10` while the first step is open,
+`TASK 2 / 2` and `ALL TASKS DONE` once both are done. Items are delivered by dragging a drop onto the
+block: what is in its container while a step is open is that step's progress, and a full step's items
+are consumed when it completes (docs/GAME_DESIGN.md section 1.52). A **rate** step is measured instead:
+the same block's `tasks::` may ask for an item at a speed over a window, and the panel shows the
+measured rate against the required one (section 1.53). A pack adds layers **after** the game's own —
+that is what the test double under `games/mine/tests/data/story_content/` does. The screenshot/demo
+pack under `games/mine/tests/data/task_demo/` also shows a `machine:: task_block::` with `rate:3` over a
+`window:5` and `hold:2` on its `rate_progress`, `rate_done` and `rate_hold` layers (10, 15 and 20 stone
+placed into it: the condition is unmet, met and then completes, and met while the hold is still
+counting).
 
 Everything else under the entry belongs to the designer. A field the engine reads and cannot read is
 refused with the file named rather than ignored, and content the registry does not have builds the
@@ -856,7 +889,7 @@ script cannot overwrite somebody's save.
 
 ![Mirrored floor plots: the same picture, turned around](games/mine/docs/images/world_mirror_en.png)
 
-Guide: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §4 and §8, [docs/TYPES.md](docs/TYPES.md).
+Guide: [docs/RUNTIME.md](docs/RUNTIME.md), [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) §4 and §8, [docs/TYPES.md](docs/TYPES.md).
 
 ### The sandbox
 
@@ -980,8 +1013,8 @@ others record the last run before the split. No result here is estimated.
 
 | Preset | Result |
 |---|---|
-| `mine-debug` | 42/42 tests green (run in this checkout) |
-| `mine-release` | 42/42 tests green (run in this checkout) |
+| `mine-debug` | 45/45 tests green (run in this checkout) |
+| `mine-release` | 45/45 tests green (run in this checkout) |
 | `mine-asan` (Address + UB sanitizers) | not re-run after the build trees were split |
 | `mine-tsan` (ThreadSanitizer) | not re-run after the build trees were split |
 | `no-renderer` | 14/14 tests green (run in this checkout) |

@@ -76,8 +76,36 @@
 
 实测（本机，debug 与 release 两个预设）：`engine.abi` 与 `mine.codetab` 的指纹都是 `bdcb9b070ab30e78`，
 演示模组也是；启动日志只有一行 `table: module 'mine': __EXCEPTIONS: 0 here, 1 there (does not change a layout)`，
-随后 `tables: 1 module(s), 20457 symbol(s), 27140 relocation(s), 0 override(s), 0 error(s)`（debug）。
+随后 `tables: 1 module(s), 30871 symbol(s), 44837 relocation(s), 0 override(s), 0 error(s)`（debug，
+46 个 object 链接成一张表）。
 这一行「只有一行」是量出来的：H3 的两函数体报告曾经让这张表每次启动刷 36 行，根因与修法见 §2 H3。
+
+## 1.6 dlopen 模组的运行时类型 ABI
+
+版本 2 的 mod API 追加了 register_component / register_tile_type / override_component_interface。
+它们跨过的是**和代码表不同的边界**：dlopen 模组有自己的编译单元，所以结构体布局、版本、函数表
+头都必须显式校验，不能靠链接器。
+
+* ComponentDesc / TileTypeDesc / InterfaceBinding / InterfaceTableHeader 都是 standard-layout、
+  trivially copyable 的 C 布局（runtime/component.h、runtime/tile_type.h 里有 static_assert）。
+* ComponentDesc.struct_size 和 TileTypeDesc.struct_size 先校验：小于本运行时的大小拒绝。
+  ComponentDesc.abi_hash 必须等于 mine::kModComponentAbiHash（FNV-1a of the C surface name）；
+  这不是编译器指纹，只是“你 include 的是这一版头文件”的保险。
+* 覆写接口必须给 expected_version（注册的 schema 版本）和一张以 InterfaceTableHeader 开头的
+  替换表；宿主校验组件存在、版本一致、接口存在、表头大小/版本合法。
+* 重载时宿主先把所有覆写恢复成注册表，再调用 on_unload、关库；同一模组下一次 on_load 用相同 id
+  注册组件/tile 时是**原地刷新**：ComponentType/TileType 对象指针不变，已有 ObjectData 和
+  Archetype 继续有效，只替换 construct/destruct、base 函数表和 tile 的不透明表。
+* **追加字段与 struct_size**：TileTypeDesc 末尾追加 shared/shared_count（每组件一条 shared，count 为
+  0 或 component_count），ComponentDesc 末尾追加 save/load 回调（两阶段 save；load 返回消费字节数）。
+  两个描述符都只要求达到“追加前的前缀大小”，更小的才拒绝；旧模块的追加字段按 null 处理。
+* 因此 dlopen 模组的重载安全边界是：**接口表的指针在 on_unload 前已恢复**；自定义类型的数据布局
+  不能变（instance_size/align/version 变了刷新会被拒绝）；shared 指针属于模组静态数据，必须在该
+  模组加载期间有效。刷新时宿主通过 RuntimeContext 的 tile-type 监听器原地更新已有 archetype 的
+  shared 指针，因此重载完成后旧对象也走新指针；从 on_unload 到新 on_load 之间不要调用旧对象。
+* 自定义组件状态存档在 CMPT chunk：只有**非内置**组件、同时有 save/load 回调、且 save 返回非 0
+  字节时写出。读档校验 CMPT chunk 版本、地块下标、type_id 是否存在、组件 schema 版本、load 消费
+  字节数，并拒绝任何指向内置组件的记录；旧存档没有 CMPT 时按组件默认状态读回。
 
 ## 2. 十二处不一致
 

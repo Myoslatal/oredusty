@@ -125,7 +125,8 @@ const std::vector<u8> bytes = save::encode(file);
 ## Mine 的存档
 
 `mine` 的存档（`tile2d/games/mine/include/mine/game_save.h`）用同一个容器：`game` = `"mine"`，
-`game_version` = 1，每个 chunk 的 `version` 也都是 1（`kGameSaveChunkVersion`）。六个 chunk 缺一不可，RSCH 可选：
+`game_version` = 1，每个 chunk 的 `version` 也都是 1（`kGameSaveChunkVersion`）。六个必需 chunk 缺一不可，
+RSCH、TASK 与 CMPT 可选：
 
 | chunk | 内容 |
 |---|---|
@@ -136,10 +137,41 @@ const std::vector<u8> bytes = save::encode(file);
 | `ENTT` | 地上的掉落物：kind/id、位置、数量（堆） |
 | `BUIL` | 进行中的建造扫描线：地块在 `PLOT` 里的下标、已扫时间、总时间 |
 | `RSCH` | 已研究的科技节点（`ResearchState::serialize`：'RST1' + 版本 + 每行 kind/id/researched）。**可选**：旧存档没有它，读档按无研究处理 |
+| `CMPT` | 自定义组件状态。**可选**：没有自定义状态时不写；旧存档没有它，读档按组件自身默认值。格式：count u32，随后每条 plot u32（`PLOT` 下标）+ type_id u64 + schema version u32 + size u32 + bytes |
+| `TASK` | 任务方块做到哪一步，以及 rate 步的实时进度（`docs/GAME_DESIGN.md` §1.52–§1.55）。**可选**：没有任务方块时不写；旧存档没有它，读档时每个任务方块都从 0 开始。**chunk 版本 2**：count u32，随后每条 plot u32（`PLOT` 下标）+ completed u32 + held f32 + entries u32（≤ `kMaxTaskWindowEntries`），再随后 entries 条 remaining f32（**剩余秒数**）+ amount u32（只写有 task 组件的地块）。**版本 1**（plot u32 + completed u32）仍可读 |
+
+`PLOT` 的字节布局没有变，但字段来源已经是运行时组件：container 槽位来自 `ContainerData`，ticking
+的 period/elapsed 来自 `TickerData`，drill 的 produced 来自 `DrillData`，建造中来自 `BuildingData`。
+`tile_type` **不写进存档**：它属于内容定义，读档时按 `CONT` 的名字表找到本次构建的定义，再由
+`TileDefinition.tile_type` 在同一套共享 `TileTypeRegistry` 里解析。因此读一份用自定义 tile 的存档，
+提供该 tile 类型的 dlopen 模组必须已加载；否则该内容会被当作不可翻译而整档拒绝（与缺任何其它内容
+的规则相同）。
+
+CMPT 只写**非内置**组件的状态（内置字段归 PLOT 所有，重复写会被读档拒绝），且只写实现了
+save/load 回调、且这次确实返回了字节的组件；它按保存时的 PLOT 下标定位地块。读 CMPT 时，类型
+不存在、schema 版本不符、回调拒绝、同一 plot/type 重复、或指向内置组件，都整档拒绝；CMPT 不
+存在则正常按默认状态读回。PLOT 的字节布局没有变化，旧存档不需要重写。
+
+TASK 只写有 task 组件的地块（在 PLOT 里按放置顺序），读档时按同一个下标找回地块：下标越界、指向
+没有 task 的地块、同一地块出现两次，都整档拒绝。保存的 completed 若比本次构建给这块地的任务数还大
+（设计者把任务改短了），**夹到任务总数**并往 `report.warnings` 写一条说明——内容变了不是丢整座矿的
+理由。TASK 不存在则每个任务方块都从 0 开始；容器里的物品照旧由 PLOT 恢复，读档结束对每个任务方块
+跑一次结算，让容器里已经够数的物品立即成为进度。
+
+TASK **版本 2** 不只存 `completed`：它把 rate 步的**已持续秒数 held** 与**当前窗口的交付记录**也写下来
+（§1.55）。窗口记录用的是**剩余秒数** `remaining = window - (now - at)` 加数量，而不是时间戳：读档后
+层时钟从 0 开始，剩余寿命与存档时**完全一致**，所以不需要额外存层时钟；读档时恢复成
+`at = remaining - window`（窗口在 `at <= now - window` 时丢弃，这个位置正好剩 `remaining` 秒）。
+恢复顺序是**容器（PLOT）→ TASK（completed/held/窗口）→ 逐个任务方块结算**：如果存档时 held 刚好
+够 `hold`，读档的结算会立即完成这一步并消费容器里的物品，与存档前一刻的表现一致。
+
+**旧档兼容**：TASK **版本 1**（count + plot + completed）照旧可读，读回来 held=0、窗口为空、容器物品
+保留；其它版本、越界/重复 plot、非 task 地块、entries 超限、remaining 非有限或 ≤0、amount=0、尾随
+字节都**整档拒绝**。没有 TASK chunk 的旧档仍按全部从 0 开始。
 
 读档是**要么整座矿、要么什么都没有**（`load_game_save`）：
 
-* 六个 chunk 必须都在、版本都是 1；认不得的 chunk 被忽略而不是报错（新存档旧游戏仍能读）。
+* 六个必需 chunk 必须都在、版本都是 1；认不得的 chunk 被忽略而不是报错（新存档旧游戏仍能读）。
 * `CONT` 的名字表必须能**完整**翻译：存档里有、本次构建没有的内容，整档拒绝（并报出缺了哪些）。
 * 地块按存档顺序经 `MineLayer::place` 重新放置，所以放置规则（层、格子、钻头底下要有矿）第二次也照样生效；
   一块放不下、或容器装不下存档里的东西，整档拒绝。
@@ -152,7 +184,7 @@ const std::vector<u8> bytes = save::encode(file);
   有它但读不完整则整档拒绝。
 
 **保存了**：会话、世界/层的种子与形状、层的编号、全部地块与容器、掉落物、进行中的建造、建筑解锁、已研究的科技节点、
-世界时钟、镜头位置与缩放。
+任务方块的任务进度（TASK）、世界时钟、镜头位置与缩放。
 
 **没有保存**：钻头的 RNG 流（读档后按内容 id/锚点重新播种，之后的产出序列不保证逐位相同）、界面状态
 （选中的地块、双击计时、拖在指针上的掉落物、建造栏是否打开）、内容包/模组的加载列表本身（存档只记内容的

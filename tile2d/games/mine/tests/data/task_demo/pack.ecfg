@@ -1,0 +1,8 @@
+# 截图用内容包：任务方块的两个状态（docs/GAME_DESIGN.md §1.52）。
+#
+# 它只给故事**加两层**，内容全部点本体已有的：地板 `dirt`、`structure:: task_block::` 与它绑定的
+# 两个任务（content/task_blocks.ecfg）。加层是内容包能做的事（docs/MODS.md），所以这个包不注册任何
+# 新内容，也不进游戏本体；它只用于面板截图与无头冒烟。
+id:"task_demo"
+name:"Task demo"
+version:"0.1"

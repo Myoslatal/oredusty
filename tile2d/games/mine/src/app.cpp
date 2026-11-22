@@ -1573,8 +1573,8 @@ void MineApp::open_research() {
         const types::TileDefinition* definition =
             content_.report().definitions.find_tile(node.kind, node.name);
         if (definition == nullptr) continue;
-        const std::unique_ptr<types::SceneTile> plot =
-            types::make_tile(*definition, node.id, 0, GridPos{0, 0});
+        const std::unique_ptr<types::Tile> plot = types::make_tile(
+            content_.report().definitions, *definition, registry_, node.id, 0, GridPos{0, 0});
         if (plot != nullptr) research_previews_[index] = plot->get_preview(0.0f);
     }
     research_hovered_.reset();
@@ -1787,18 +1787,18 @@ void MineApp::research_selected() {
     }
     // The price comes out of the selected warehouse, the same box the building price comes out of
     // (docs/GAME_DESIGN.md section 1.37).
-    types::SceneTile* holder = selected_plot_to_change();
-    types::Container* stock = holder != nullptr ? holder->container() : nullptr;
-    if (stock == nullptr) {
+    types::Tile* holder = selected_plot_to_change();
+    if (holder == nullptr || !holder->has_container()) {
         set_status(locale_.text("research.no_stock"), true);
         return;
     }
+    types::Container stock = holder->container();
     std::string short_of;
-    if (!can_afford(*stock, registry_, node.cost, &short_of)) {
+    if (!can_afford(stock, registry_, node.cost, &short_of)) {
         set_status(format_localized(locale_.text("research.short"), short_of), true);
         return;
     }
-    pay_for(*stock, registry_, node.cost);
+    pay_for(stock, registry_, node.cost);
     research_.set_researched(node.kind, node.id, true);
     // The stone warehouse is a node and a building at once: studying it is what unlocks it (section 1.45).
     unlocked_.set_unlocked(node.kind, node.id, true);
@@ -2114,18 +2114,19 @@ void MineApp::report_release(ReleaseResult result) {
     }
 }
 
-MineApp::ContainerPanelLayout MineApp::container_panel(const types::SceneTile& plot, std::string title) const {
+MineApp::ContainerPanelLayout MineApp::container_panel(const types::Tile& plot, std::string title) const {
     const TextLookup text = [this](std::string_view id) { return locale_.text(id); };
     ContainerPanelLayout layout;
-    const types::Container* container = plot.container();
-    if (container == nullptr) return layout;   // nothing to show: the caller draws nothing
+    if (!plot.has_container()) return layout;   // nothing to show: the caller draws nothing
+    const types::Container container = plot.container();
+    const std::vector<types::ContainerSlot> slots = container.slots();
 
     layout.title = std::move(title);
-    layout.labels.reserve(container->slots().size());
-    for (const types::ContainerSlot& slot : container->slots()) {
+    layout.labels.reserve(slots.size());
+    for (const types::ContainerSlot& slot : slots) {
         layout.labels.push_back(content_label(registry_, slot.kind, slot.id, text));
     }
-    layout.empty = container->slots().empty();
+    layout.empty = slots.empty();
 
     const f32 padding = 8.0f * unit_;
     const f32 inset = 4.0f * unit_;
@@ -2143,7 +2144,7 @@ MineApp::ContainerPanelLayout MineApp::container_panel(const types::SceneTile& p
     }
     // The title and one line per kind of thing inside - an empty container still takes one line, because
     // saying "empty" is an answer and a panel with no room for it would look broken.
-    const usize rows = layout.empty ? 1u : container->slots().size();
+    const usize rows = layout.empty ? 1u : slots.size();
     layout.size = t2d::Vec2{width + padding * 2.0f,
                             layout.row_height * static_cast<f32>(rows + 1) + padding};
     return layout;
@@ -2166,20 +2167,20 @@ void MineApp::place_panel_top_centre(ContainerPanelLayout& layout, t2d::Aabb2 ar
     place_panel_at(layout, t2d::Vec2{x, area.min.y + margin});
 }
 
-MineApp::ContainerPanelLayout MineApp::corner_panel(const types::SceneTile& plot) const {
+MineApp::ContainerPanelLayout MineApp::corner_panel(const types::Tile& plot) const {
     const TextLookup text = [this](std::string_view id) { return locale_.text(id); };
     // The title is the plot's **own localized name** when the text file has one, and the warehouse's own
     // kind word when it does not (content_name.h): "石头仓库   1 / 100" is what a player reads, and a
     // designer who has not written a label still gets a title rather than an id (section 1.28).
     bool named = false;
     const std::string label = content_label(registry_, plot.kind(), plot.id(), text, &named);
-    const types::Container* container = plot.container();
-    const usize capacity = container != nullptr ? container->capacity() : 0;
-    const usize total = container != nullptr ? container->total() : 0;
+    const types::Container container = plot.container();
+    const usize capacity = container.capacity();
+    const usize total = container.total();
     ContainerPanelLayout layout = container_panel(
         plot, format_localized(locale_.text("world.warehouse.title"),
                                named ? label : std::string(locale_.text("world.warehouse.name")), total, capacity));
-    if (container == nullptr) return layout;
+    if (!plot.has_container()) return layout;
     // The panel hangs off the plot's **bottom-right corner**, which is what the designer asked for
     // (docs/GAME_DESIGN.md section 1.27): the corner of the plot, in screen pixels.
     const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{
@@ -2189,8 +2190,8 @@ MineApp::ContainerPanelLayout MineApp::corner_panel(const types::SceneTile& plot
     return layout;
 }
 
-MineApp::ContainerPanelLayout MineApp::selection_panel(const types::SceneTile& plot, t2d::Aabb2 area) const {
-    const types::Container* container = plot.container();
+MineApp::ContainerPanelLayout MineApp::selection_panel(const types::Tile& plot, t2d::Aabb2 area) const {
+    const types::Container container = plot.container();
     // The selection's title is the plot's localized name, and the name the registry knows it by when the
     // table has none (section 1.29): this panel belongs to **any** plot that holds a container, so there
     // is no single kind word to fall back to that would be right for all of them.
@@ -2198,28 +2199,120 @@ MineApp::ContainerPanelLayout MineApp::selection_panel(const types::SceneTile& p
         plot, format_localized(locale_.text("world.warehouse.title"),
                                content_label(registry_, plot.kind(), plot.id(),
                                              [this](std::string_view id) { return locale_.text(id); }),
-                               container != nullptr ? container->total() : 0,
-                               container != nullptr ? container->capacity() : 0));
-    if (container != nullptr) place_panel_top_centre(layout, area);
+                               container.total(), container.capacity()));
+    if (plot.has_container()) place_panel_top_centre(layout, area);
     return layout;
 }
 
-const types::SceneTile* MineApp::selected_plot() const {
+MineApp::ContainerPanelLayout MineApp::task_panel(const types::Tile& plot) const {
+    const TextLookup text = [this](std::string_view id) { return locale_.text(id); };
+    ContainerPanelLayout layout;
+    if (!plot.has_task()) return layout;   // nothing to show: the caller draws nothing
+    const types::Task task = plot.task();
+    const usize total = task.count();
+    const usize current = task.current();
+
+    // The title is the block's own localized name, the same rule the container panel follows
+    // (content_name.h, docs/GAME_DESIGN.md section 1.28).
+    layout.title = content_label(registry_, plot.kind(), plot.id(), text);
+    layout.picture = 0.0f;   // the rows are sentences: neither a slot nor a picture
+
+    const f32 padding = 8.0f * unit_;
+    layout.row_height = line_for(body_px_);
+    t2d::TextStyle style;
+    style.size_px = body_px_;
+    f32 width = text_->measure(layout.title, fonts_, style).width;
+    // Two lines, and what they say is the whole interface of a task: which task of how many, and - while
+    // one is open - what it wants and how much of it is already in the block's container. No tasks is
+    // one line, and a finished chain says so (docs/GAME_DESIGN.md section 1.52).
+    if (total == 0) {
+        layout.labels.push_back(std::string(locale_.text("world.task.none")));
+    } else if (current >= total) {
+        layout.labels.push_back(format_localized(locale_.text("world.task.progress"), total, total));
+        layout.labels.push_back(std::string(locale_.text("world.task.done")));
+    } else {
+        layout.labels.push_back(format_localized(locale_.text("world.task.progress"), current + 1, total));
+        const std::optional<types::TaskStepView> step = task.step(current);
+        if (step.has_value()) {
+            if (step->type == types::TaskType::Rate) {
+                // A rate step is about speed, not stock: the panel shows what the window has measured so
+                // far divided by the window (items per second) against the rate the data asks for
+                // (docs/GAME_DESIGN.md section 1.53).
+                const f32 now = world_.has_layer() ? world_.layer().clock_seconds() : 0.0f;
+                const f32 window = step->window > 0.0f ? step->window : 1.0f;
+                const f32 measured =
+                    static_cast<f32>(task.window_progress(now)) / window;
+                layout.labels.push_back(format_localized(locale_.text("world.task.rate"),
+                                                         content_label(registry_, step->kind, step->id, text),
+                                                         measured, step->rate));
+                // A step with a hold is not satisfied by one good window: the panel says how long its
+                // condition has kept holding against how long it has to (docs/GAME_DESIGN.md section
+                // 1.54). No hold means no third line - older content keeps its two-line panel.
+                if (step->hold > 0.0f) {
+                    layout.labels.push_back(
+                        format_localized(locale_.text("world.task.hold"), task.held(), step->hold));
+                }
+            } else {
+                const types::Container container = plot.container();
+                const usize have = std::min(container.count_of(step->kind, step->id), step->count);
+                layout.labels.push_back(format_localized(locale_.text("world.task.deliver"),
+                                                         content_label(registry_, step->kind, step->id, text),
+                                                         have, step->count));
+            }
+        }
+    }
+    layout.empty = layout.labels.empty();
+    for (const std::string& row : layout.labels) {
+        width = std::max(width, text_->measure(row, fonts_, style).width);
+    }
+    const usize rows = layout.empty ? 1u : layout.labels.size();
+    layout.size = t2d::Vec2{width + padding * 2.0f,
+                            layout.row_height * static_cast<f32>(rows + 1) + padding};
+    return layout;
+}
+
+MineApp::ContainerPanelLayout MineApp::corner_task_panel(const types::Tile& plot) const {
+    ContainerPanelLayout layout = task_panel(plot);
+    if (!plot.has_task()) return layout;
+    // The same corner a container's click panel hangs off (docs/GAME_DESIGN.md section 1.27), so a plot
+    // that shows either kind of panel shows it in the same place.
+    const t2d::Vec2 corner = world_camera_.screen_of(t2d::Vec2{
+        static_cast<f32>(plot.anchor().x + plot.width()), static_cast<f32>(plot.anchor().y + plot.height())});
+    const f32 inset = 4.0f * unit_;
+    place_panel_at(layout, t2d::Vec2{corner.x + inset, corner.y + inset});
+    return layout;
+}
+
+void MineApp::draw_task_panel(const ContainerPanelLayout& layout) {
+    batch_->draw_rect(layout.panel, kPalette.panel_fill);
+    batch_->draw_rect(t2d::Aabb2{t2d::Vec2{layout.panel.min.x, layout.panel.min.y},
+                                 t2d::Vec2{layout.panel.max.x, layout.panel.min.y + 2.0f}},
+                      kPalette.panel_edge);
+    const f32 padding = 8.0f * unit_;
+    draw_line(layout.panel.min.x + padding, layout.title_y, body_px_, kPalette.accent, layout.title);
+    for (usize index = 0; index < layout.labels.size(); ++index) {
+        draw_line(layout.panel.min.x + padding,
+                  layout.first_row_y + static_cast<f32>(index) * layout.row_height, body_px_,
+                  index == 0 ? kPalette.text : kPalette.text_dim, layout.labels[index]);
+    }
+}
+
+const types::Tile* MineApp::selected_plot() const {
     if (!has_selection_ || !world_.has_layer()) return nullptr;
     if (!world_.layer().inside(selected_cell_)) return nullptr;
-    const types::SceneTile* plot = world_.layer().top_plot_at(selected_cell_);
+    const types::Tile* plot = world_.layer().top_plot_at(selected_cell_);
     // A plot that is still going up is not a selection: it is not finished, so it is not something the
     // player has, and it is not the warehouse a build is paid out of either (docs/GAME_DESIGN.md 1.40).
     if (plot != nullptr && plot->under_construction()) return nullptr;
-    return plot != nullptr && plot->container() != nullptr ? plot : nullptr;
+    return plot != nullptr && plot->has_container() ? plot : nullptr;
 }
 
 void MineApp::select_at(GridPos cell) {
-    const types::SceneTile* plot = world_.layer().top_plot_at(cell);
+    const types::Tile* plot = world_.layer().top_plot_at(cell);
     // A building that is still going up cannot be selected - it is in the same class as scenery that holds
     // nothing: the double click is ignored and does not change what is selected (docs/GAME_DESIGN.md 1.40).
     if (plot != nullptr && plot->under_construction()) plot = nullptr;
-    if (plot == nullptr || plot->container() == nullptr) {
+    if (plot == nullptr || !plot->has_container()) {
         // A double click on scenery, or on ground, selects nothing - and it does **not** put down what is
         // selected either: the designer asked for the selection to stay when the pointer looks elsewhere,
         // and the way to put a plot down is to double click **it** (docs/GAME_DESIGN.md section 1.31).
@@ -2232,23 +2325,23 @@ void MineApp::select_at(GridPos cell) {
     // One pointer, one thing shown (types/click.h): a double click asks for the contents at the top of
     // the screen, so the panels single clicks opened step aside - the player then reads one place
     // instead of two saying the same thing.
-    for (const std::unique_ptr<types::SceneTile>& other : world_.layer().plots()) {
-        if (auto* warehouse = dynamic_cast<types::Warehouse*>(other.get()); warehouse != nullptr) {
-            warehouse->click().set_open(false);
-        }
+    for (const std::unique_ptr<types::Tile>& other : world_.layer().plots()) {
+        if (other->has_click()) (void)other->click().receive(false);
     }
     T2D_INFO("world: selected {} #{} at {},{}", content_kind_name(plot->kind()), plot->id(), cell.x, cell.y);
-    if (const types::Container* held = plot->container(); held != nullptr) {
+    if (plot->has_container()) {
+        const types::Container held = plot->container();
+        const std::vector<types::ContainerSlot> slots = held.slots();
         // What the selection holds, said out loud: a report like "it says stone 0/10 and there is stone in
         // it" is answered by this line before anything else is looked at.
-        T2D_INFO("world: it holds {} of {} ({} slot(s))", held->total(), held->capacity(), held->slots().size());
+        T2D_INFO("world: it holds {} of {} ({} slot(s))", held.total(), held.capacity(), slots.size());
     }
 }
 
-types::SceneTile* MineApp::selected_plot_to_change() {
+types::Tile* MineApp::selected_plot_to_change() {
     // The selection holds the plot itself (select_at), so this is the same plot the const one answers with -
     // asked for by code that means to change it, not just to look at it.
-    return has_selection_ ? const_cast<types::SceneTile*>(selected_plot()) : nullptr;
+    return has_selection_ ? const_cast<types::Tile*>(selected_plot()) : nullptr;
 }
 
 void MineApp::clear_selection() {
@@ -2271,8 +2364,9 @@ void MineApp::select_playtest_at(GridPos cell) {
         const types::TileDefinition* definition =
             content_.report().definitions.find_tile(value.kind, value.name);
         if (definition == nullptr) continue;
-        std::unique_ptr<types::SceneTile> plot = types::make_tile(*definition, value.id, layer, cell);
-        if (plot == nullptr || plot->container() == nullptr) continue;
+        std::unique_ptr<types::Tile> plot =
+            types::make_tile(content_.report().definitions, *definition, registry_, value.id, layer, cell);
+        if (plot == nullptr || !plot->has_container()) continue;
         playtest_selected_ = std::move(plot);
         T2D_INFO("sandbox: selected {} #{} at {},{}", content_kind_name(value.kind), value.id, cell.x, cell.y);
         return;
@@ -2363,7 +2457,7 @@ MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const
 
     const auto draw_panel = [&](const ContainerPanelLayout& layout, const types::Container& container) {
         if (layout.empty) return;
-        const std::vector<types::ContainerSlot>& slots = container.slots();
+        const std::vector<types::ContainerSlot> slots = container.slots();
         for (usize index = 0; index < slots.size(); ++index) {
             const ContentEntry* entry = registry_.find(slots[index].kind, slots[index].id);
             if (entry == nullptr) continue;
@@ -2383,14 +2477,17 @@ MineApp::ImagePassCost MineApp::draw_panel_images(ore::RenderFrame& frame, const
             cost.dropped += batch_->dropped_quads();
         }
     };
-    for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
-        const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
-        if (warehouse == nullptr || !warehouse->click().open()) continue;
-        draw_panel(corner_panel(*warehouse), *warehouse->container());
+    for (const std::unique_ptr<types::Tile>& plot : world_.layer().plots()) {
+        if (!plot->has_click() || !plot->click().open()) continue;
+        // The task panel has no picture rows: its lines are sentences, not slots (section 1.52).
+        if (plot->has_task()) continue;
+        if (!plot->has_container()) continue;
+        draw_panel(corner_panel(*plot), plot->container());
     }
     // The selection shows the same rows at the top of the screen (docs/GAME_DESIGN.md section 1.31).
-    if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
-        draw_panel(selection_panel(*selected, world_area()), *selected->container());
+    if (const types::Tile* selected = selected_plot(); selected != nullptr) {
+        const types::Container container = selected->container();
+        draw_panel(selection_panel(*selected, world_area()), container);
     }
     return cost;
 }
@@ -2411,7 +2508,7 @@ std::string MineApp::world_cell_text(GridPos cell) const {
         return format_localized(locale_.text("world.dragging"), content_kind_name(held->kind()), held->id(),
                                 content_name(held->kind(), held->id()));
     }
-    const types::SceneTile* plot = world_.layer().top_plot_at(cell);
+    const types::Tile* plot = world_.layer().top_plot_at(cell);
     if (plot == nullptr) return std::string{locale_.text("sandbox.cell.empty")};
     std::string text = format_localized(locale_.text("world.cell.plot"), content_kind_name(plot->kind()),
                                         plot->id(), content_name(plot->kind(), plot->id()), plot->width(),
@@ -2517,30 +2614,32 @@ void MineApp::handle_world_input(f32 delta_seconds) {
             where.layer = layer.first_free_layer(cell);
             where.anchor = cell;
             std::string why;
-            if (!layer.can_place(where, &why)) {
+            if (!layer.can_place(content_.report().definitions, where, &why)) {
                 T2D_INFO("world: {} cannot stand there: {}", picked->name, why);
                 set_status(format_localized(locale_.text("world.build.refused"), picked->name, why), true);
             } else {
                 // The price comes out of the **selected warehouse**: the player builds with what is in the box
                 // they picked, and a plot with no warehouse picked (or not enough in it) is not built at all
                 // (docs/GAME_DESIGN.md sections 1.31, 1.37).
-                types::SceneTile* holder = selected_plot_to_change();
-                types::Container* stock = holder != nullptr ? holder->container() : nullptr;
+                types::Tile* holder = selected_plot_to_change();
                 std::string short_of;
-                if (stock == nullptr) {
+                if (holder == nullptr || !holder->has_container()) {
                     T2D_INFO("world: {} costs {} and no warehouse is selected", picked->name, picked->materials.size());
                     set_status(format_localized(locale_.text("world.build.no_stock"), picked->name), true);
-                } else if (!can_afford(*stock, registry_, picked->materials, &short_of)) {
-                    T2D_INFO("world: {} cannot be paid for: {}", picked->name, short_of);
-                    set_status(format_localized(locale_.text("world.build.short"), picked->name, short_of), true);
-                } else if (types::SceneTile* plot = layer.place(registry_, content_.report().definitions, where,
+                } else {
+                    types::Container stock = holder->container();
+                    if (!can_afford(stock, registry_, picked->materials, &short_of)) {
+                        T2D_INFO("world: {} cannot be paid for: {}", picked->name, short_of);
+                        set_status(format_localized(locale_.text("world.build.short"), picked->name, short_of), true);
+                    } else if (types::Tile* plot = layer.place(registry_, content_.report().definitions, where,
                                                                nullptr);
-                           plot != nullptr) {
-                    pay_for(*stock, registry_, picked->materials);
-                    T2D_INFO("world: built {} at {},{}", picked->name, cell.x, cell.y);
-                    // The scan line sweeps it once, over the time its entry says (section 1.37).
-                    building_.start(plot, picked->seconds);
-                    sidebar_.clear_selection();
+                               plot != nullptr) {
+                        pay_for(stock, registry_, picked->materials);
+                        T2D_INFO("world: built {} at {},{}", picked->name, cell.x, cell.y);
+                        // The scan line sweeps it once, over the time its entry says (section 1.37).
+                        building_.start(plot, picked->seconds);
+                        sidebar_.clear_selection();
+                    }
                 }
             }
             return;
@@ -2561,10 +2660,8 @@ void MineApp::handle_world_input(f32 delta_seconds) {
                 // A click: everything that receives clicks is told about it, and the one it landed on is
                 // what opens (or closes) its panel - the others close theirs, because there is one
                 // pointer and therefore one thing selected (types/click.h).
-                for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
-                    if (auto* warehouse = dynamic_cast<types::Warehouse*>(plot.get()); warehouse != nullptr) {
-                        (void)warehouse->on_click(cell);
-                    }
+                for (const std::unique_ptr<types::Tile>& plot : world_.layer().plots()) {
+                    (void)plot->on_click(cell);
                 }
                 // A click elsewhere does **not** put the selection back: the player asked to see what one plot
                 // is holding, and looking at something else is not the same as putting it down. The second
@@ -2621,7 +2718,7 @@ void MineApp::handle_world_input(f32 delta_seconds) {
     }
 
     // The two passes, once a frame: scenery is brought up to date only where something asked it to be,
-    // and the plots that run take their turn on the cadence each one owns (types/entity_tile.h). What
+    // and the plots that run take their turn on the cadence each one owns (types/tile.h). What
     // they did is on the HUD - "the mine runs" has to be visible somewhere.
     world_refreshed_ = world_.refresh();
     world_ticked_ = world_.tick(delta_seconds);
@@ -3383,8 +3480,9 @@ void MineApp::draw_playtest_over_art() {
     batch_->draw_rect_outline(box, 3.0f, kPalette.accent);
     // And what it holds, at the top of the screen, centred - the same panel the world view draws. The
     // sandbox has no storage, so the container is empty and the panel says so rather than hiding it.
-    if (const types::Container* container = playtest_selected_->container(); container != nullptr) {
-        draw_container_panel(selection_panel(*playtest_selected_, sandbox_grid_area()), *container);
+    if (playtest_selected_->has_container()) {
+        const types::Container container = playtest_selected_->container();
+        draw_container_panel(selection_panel(*playtest_selected_, sandbox_grid_area()), container);
     }
 }
 
@@ -3466,7 +3564,7 @@ void MineApp::draw_sidebar_button(const BuildSidebar::Layout& layout) {
                 sidebar_.open() ? std::string(">") : std::string("<"), layout.toggle.width() - 8.0f * unit_);
 }
 
-t2d::Aabb2 MineApp::plot_box_on_screen(const types::SceneTile& plot) const {
+t2d::Aabb2 MineApp::plot_box_on_screen(const types::Tile& plot) const {
     // The cell on the screen, from the camera the map is drawn with - not from a second guess at it.
     const GridPos at = plot.anchor();
     const t2d::Vec2 top_left =
@@ -3636,7 +3734,7 @@ void MineApp::draw_world_overlay() {
     // What a double click selected is marked **where it is**, not only at the top of the screen: a box round
     // the plot's whole footprint (so a 2x2 warehouse reads as one thing) with the accent at a quarter alpha
     // inside it, which marks the plot without hiding its art (docs/GAME_DESIGN.md section 1.31).
-    if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
+    if (const types::Tile* selected = selected_plot(); selected != nullptr) {
         const t2d::Vec2 at = world_camera_.screen_of(t2d::Vec2{static_cast<f32>(selected->anchor().x),
                                                                static_cast<f32>(selected->anchor().y)});
         const t2d::Aabb2 box{at, t2d::Vec2{at.x + cell * static_cast<f32>(selected->width()),
@@ -3696,16 +3794,21 @@ void MineApp::draw_world_overlay() {
     // bottom-right corner) and for the plot a double click selected. It is drawn after the two lines
     // because a panel that the status bar painted over would not be an answer to anything
     // (docs/GAME_DESIGN.md section 1.27).
-    for (const std::unique_ptr<types::SceneTile>& plot : world_.layer().plots()) {
-        const auto* warehouse = dynamic_cast<const types::Warehouse*>(plot.get());
-        if (warehouse != nullptr && warehouse->click().open()) {
-            draw_container_panel(corner_panel(*warehouse), *warehouse->container());
+    for (const std::unique_ptr<types::Tile>& plot : world_.layer().plots()) {
+        if (!plot->has_click() || !plot->click().open()) continue;
+        // A task block opens the task panel; every other clickable plot opens what it holds
+        // (docs/GAME_DESIGN.md section 1.52).
+        if (plot->has_task()) {
+            draw_task_panel(corner_task_panel(*plot));
+            continue;
         }
+        if (plot->has_container()) draw_container_panel(corner_panel(*plot), plot->container());
     }
     // The selection last of all: it sits at the top of the screen, which is where the player who just
     // double clicked a plot is looking (section 1.31).
-    if (const types::SceneTile* selected = selected_plot(); selected != nullptr) {
-        draw_container_panel(selection_panel(*selected, area), *selected->container());
+    if (const types::Tile* selected = selected_plot(); selected != nullptr) {
+        const types::Container container = selected->container();
+        draw_container_panel(selection_panel(*selected, area), container);
     }
     // The scan line over every plot that is going up (docs/GAME_DESIGN.md section 1.37).
     for (const BuildAnimation::Build& build : building_.builds()) {
@@ -3858,7 +3961,7 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             }
             here.groups[found->second].second.push_back(std::move(quad));
         };
-        layer.for_each_plot_in(visible, [&](const types::SceneTile& plot) {
+        layer.for_each_plot_in(visible, [&](const types::Tile& plot) {
             if (plot.layer() != tile_layer) return;
             // A plot that is still going up is **not** drawn here: only the part the sweep has reached
             // exists yet, and draw_builds draws that part from the plot's complete preview - the rest
@@ -3886,17 +3989,16 @@ MineApp::ImagePassCost MineApp::draw_world_layer(ore::RenderFrame& frame, const 
             // A drill is **two** pictures (docs/GAME_DESIGN.md section 1.38): the base it stands on, drawn
             // where it is, and the top that turns on it - drawn over the base, at the angle the world's
             // clock says. Everything else on the map is one picture.
-            const auto* drill = dynamic_cast<const types::Drill*>(&plot);
-            if (drill != nullptr && content_textures_.find(image_key(plot.kind(), entry->name, "top")) !=
-                                          content_textures_.end()) {
+            if (plot.is_drill() &&
+                content_textures_.find(image_key(plot.kind(), entry->name, "top")) != content_textures_.end()) {
                 const t2d::Aabb2 art = plot.mirrored() ? mirrored_uv : full_uv;
                 // A machine that is still going up does not run, so its top does not turn: it is drawn as
                 // a still frame until the build is done, and turns by the world's clock from then on
                 // (docs/GAME_DESIGN.md section 1.40).
-                const f32 turn = plot.under_construction() ? 0.0f : drill->spin_angle(world_seconds_);
+                const f32 turn = plot.under_construction() ? 0.0f : plot.spin_angle(world_seconds_);
                 add_quad(Quad{key, rect, art, 0.0f});
                 add_quad(Quad{image_key(plot.kind(), entry->name, "top"), rect, art, turn,
-                               drill->spin_origin()});
+                               plot.spin_origin()});
                 return;
             }
             add_quad(Quad{key, rect, plot.mirrored() ? mirrored_uv : full_uv});

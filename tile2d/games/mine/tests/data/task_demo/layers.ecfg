@@ -1,0 +1,105 @@
+# 截图用内容包的五层：deliver 任务进行中 / 全部完成，rate 任务进行中 / 全部完成 / 持续中。
+#
+# 它们排在游戏本体 `layer:: entrance::` 之后（内容包加层，见 docs/MODS.md），所以 index 1 是
+# task_progress、2 是 task_done、3 是 rate_progress、4 是 rate_done、5 是 rate_hold。每层都是 16x9、泥地、
+# 在 (7,4) 放一座 2x1 任务方块——这个坐标接近地图中心，相机 fit 之后屏幕中心能点到方块的第二格
+# （docs/GAME_DESIGN.md §1.52、§1.53）。
+#
+# place_block 的初始物品在层构建时就会结算（任务交付即消费）：26 → 第一个 deliver 任务（10）完成后
+# 剩 16，进入第二个任务（25），面板是 TASK 2/2、STONE 16/25；40 → 两个任务（10+25）都完成，剩 5，
+# 面板是 TASK 2/2、ALL TASKS DONE。rate 方块（demo 的 machine:: task_block::）要求 3 件/秒、窗口
+# 5 秒，即窗口内 15 件，并且条件要连续保持 hold:2 秒；10 → 条件不成立（实测 2.0/3.0 每秒、HOLD
+# 0.0/2.0）；15 → 条件成立，约 2 秒后自动完成、15 件被消费，面板 TASK 1/1、ALL TASKS DONE；
+# 20 → 条件成立，HOLD 从 0 开始累计，用于约 0.8 秒时截“持续中”。石块数量按任务数据算出来，不是随便写的。
+
+layer::
+    task_progress::
+        size::
+            width:16
+            height:9
+            tile_layers:3
+        floor::
+            layer:0
+            full_flash:"dirt"
+        place_block::
+            task::
+                kind:"structure"
+                content:"task_block"
+                layer:2
+                x:7
+                y:4
+                subobject::
+                    container::
+                        items:["stone",26]
+    task_done::
+        size::
+            width:16
+            height:9
+            tile_layers:3
+        floor::
+            layer:0
+            full_flash:"dirt"
+        place_block::
+            task::
+                kind:"structure"
+                content:"task_block"
+                layer:2
+                x:7
+                y:4
+                subobject::
+                    container::
+                        items:["stone",40]
+    rate_progress::
+        size::
+            width:16
+            height:9
+            tile_layers:3
+        floor::
+            layer:0
+            full_flash:"dirt"
+        place_block::
+            feed::
+                kind:"machine"
+                content:"task_block"
+                layer:2
+                x:7
+                y:4
+                subobject::
+                    container::
+                        items:["stone",10]
+    rate_done::
+        size::
+            width:16
+            height:9
+            tile_layers:3
+        floor::
+            layer:0
+            full_flash:"dirt"
+        place_block::
+            feed::
+                kind:"machine"
+                content:"task_block"
+                layer:2
+                x:7
+                y:4
+                subobject::
+                    container::
+                        items:["stone",15]
+    rate_hold::
+        size::
+            width:16
+            height:9
+            tile_layers:3
+        floor::
+            layer:0
+            full_flash:"dirt"
+        place_block::
+            feed::
+                kind:"machine"
+                content:"task_block"
+                layer:2
+                x:7
+                y:4
+                subobject::
+                    container::
+                        items:["stone",20]

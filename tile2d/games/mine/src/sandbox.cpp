@@ -77,7 +77,7 @@ void add_unique(ContentTable& table, const ContentEntry& entry) {
 bool is_placeable_kind(ContentKind kind) {
     // The kinds whose instances occupy a tile. Extending this is a one line change the moment the
     // designer says what else sits on the map (a submit channel, for instance). Ore is one of them -
-    // a SingleOre is a scene plot on one cell (docs/TYPES.md) - so the palette can paint the ore the
+    // a plot is one cell when its tile type says so (docs/TYPES.md) - so the palette can paint the ore the
     // story scatters, and a layout that holds one loads instead of being counted as an unknown kind.
     // A warehouse is one too: it is a scene plot on one cell, and the playtest is where a designer looks
     // at what the game draws - a plot that holds things has to be placeable to be looked at

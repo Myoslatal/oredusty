@@ -27,32 +27,37 @@
 #include <t2d/core/module.h>
 #include <t2d/core/types.h>
 
+#include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace mine {
+
+namespace runtime {
+class RuntimeContext;
+}
 
 using t2d::usize;
 
 /// What a package's mod.ecfg says.
 struct ModManifest {
-    std::string id;          ///< unique; what other mods list in "requires"
-    std::string name;        ///< for humans; defaults to the id
+    std::string id;   ///< unique; what other mods list in "requires"
+    std::string name; ///< for humans; defaults to the id
     std::string version;
     std::string description;
-    std::string directory;   ///< where the package lives
-    std::string native;      ///< file name of the shared library, empty for a data only mod
-    u32 api = 0;             ///< the ABI the library was built against (native mods only)
+    std::string directory; ///< where the package lives
+    std::string native;    ///< file name of the shared library, empty for a data only mod
+    u32 api = 0;           ///< the ABI the library was built against (native mods only)
     std::vector<std::string> requirements;
-    std::vector<std::string> content;   ///< content files, relative to the package, in load order
+    std::vector<std::string> content; ///< content files, relative to the package, in load order
 
     /// Reads a manifest out of an already parsed mod.ecfg; \p directory is the package's folder, which
     /// the relative paths inside the manifest are resolved against. A missing or malformed field is
     /// refused rather than guessed at.
-    [[nodiscard]] static std::optional<ModManifest> from_document(const t2d::EcfgDocument& document,
-                                                                  const std::string& directory,
-                                                                  std::string* error);
+    [[nodiscard]] static std::optional<ModManifest>
+    from_document(const t2d::EcfgDocument& document, const std::string& directory, std::string* error);
     /// Convenience for a caller that only wants the manifest, not the document behind it.
     [[nodiscard]] static std::optional<ModManifest> parse_file(const std::string& path, std::string* error);
 };
@@ -70,8 +75,8 @@ struct ModContentEntry {
 /// content list (content_list.h) asks the first one.
 struct LoadedMod {
     ModManifest manifest;
-    std::vector<std::string> content_paths;   ///< absolute paths, in load order
-    std::vector<ModContentEntry> registered;  ///< what it actually added to the registry
+    std::vector<std::string> content_paths;  ///< absolute paths, in load order
+    std::vector<ModContentEntry> registered; ///< what it actually added to the registry
     /// The pictures its content files ship, resolved against the directory of the file that declares
     /// them - the same rule the game's own content and the packs follow.
     std::vector<ResolvedImage> images;
@@ -88,7 +93,7 @@ struct LoadedMod {
     /// layer exactly the way the game's own content does.
     std::vector<LayerRule> layers;
     bool native_loaded = false;
-    bool ok = true;                           ///< false: the report says why, the game runs without it
+    bool ok = true; ///< false: the report says why, the game runs without it
     std::string error;
 };
 
@@ -122,13 +127,21 @@ class ModHost {
 public:
     ModHost();
     ~ModHost();
-    T2D_NON_MOVABLE(ModHost);   // it owns loaded libraries: copying or moving one would double free
+    T2D_NON_MOVABLE(ModHost); // it owns loaded libraries: copying or moving one would double free
 
     /// Scans every directory in \p directories for packages, checks them against each other, orders
     /// them by what they require and loads them: data into \p registry first, then code. Whatever was
     /// loaded before is unloaded first, so calling this again is a reload. Names the registry already
     /// has are reported as collisions and left with their first owner.
     const ModLoadReport& load(const std::vector<std::string>& directories, ContentRegistry& registry);
+    /// Loads against the game's long-lived registries. A module's on_load() registers custom components
+    /// and tile types here, and overrides original interface tables for the objects that exist now and
+    /// the ones built later. The context must outlive the host.
+    const ModLoadReport& load(const std::vector<std::string>& directories, ContentRegistry& registry,
+                              runtime::RuntimeContext& context);
+    /// The registries a host created for itself (the overload without a context), for a caller that
+    /// wants to build content out of what the mods registered.
+    [[nodiscard]] runtime::RuntimeContext& runtime();
 
     /// Calls every module's on_unload in reverse load order, then closes the libraries. Safe when
     /// nothing is loaded, and safe to call twice.
@@ -150,6 +163,12 @@ public:
     const char* api_content_name(void* self, u32 kind, ContentId id);
     const char* api_mod_value(void* self, const char* key);
     i64 api_mod_int(void* self, const char* key, i64 fallback);
+    u64 api_find_component(void* self, const char* name);
+    u64 api_find_tile_type(void* self, const char* name);
+    int api_register_component(void* self, const MineComponentDesc* desc);
+    int api_register_tile_type(void* self, const MineTileTypeDesc* desc);
+    int api_override_component_interface(void* self, u64 type_id, u32 interface_id, u32 expected_version,
+                                         const void* replacement, const void** previous);
 
 private:
     struct Slot {
@@ -166,10 +185,27 @@ private:
     /// Renders \p value the way the file writes it, into the host's scratch buffer.
     [[nodiscard]] const char* render_value(const t2d::EcfgValue& value);
 
+    struct Override {
+        u64 type_id = 0;
+        u32 interface_id = 0;
+        usize slot = 0;
+    };
+
+    [[nodiscard]] bool load_native(Slot& slot, const ModManifest& manifest);
+    [[nodiscard]] Slot* loaded_slot(void* self, const char* what);
+    void restore_slot_overrides(usize slot);
+    void record_error(Slot& slot, std::string message);
+
     std::vector<Slot> slots_;
     ModLoadReport report_;
     MineModApi api_{};
     ContentRegistry* registry_ = nullptr;
+    runtime::RuntimeContext* runtime_context_ = nullptr;
+    std::shared_ptr<runtime::RuntimeContext> owned_runtime_;
+    std::vector<Override> overrides_;
+    std::unordered_set<u64> components_this_load_;
+    std::unordered_set<u64> tile_types_this_load_;
+    bool in_on_load_ = false;
     /// Where content_name() and mod_value() write their answers: valid until the next API call.
     std::string scratch_;
 };

@@ -49,7 +49,7 @@
 // cannot know what a mod adds later.
 //
 // A scatter **places one plot per cell**: a cell is either ore or not, which is what "single ore" means
-// (types/single_ore.h), and it is why the count is a count of cells.
+// (types/tile.h), and it is why the count is a count of cells.
 //
 // **The order the data declares the layers in is the story's order**: layer 0 is the first entry, layer
 // 1 the second, and so on. That is the same order the registry hands out Layer ids in (registry.h), so

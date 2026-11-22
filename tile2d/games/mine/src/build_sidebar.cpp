@@ -32,8 +32,8 @@ void BuildSidebar::rebuild(const ContentRegistry& registry, const ContentDefinit
             // picture fields here: the sidebar builds the plot it would place and asks it for its complete
             // render preview (docs/GAME_DESIGN.md section 1.39). A definition that is not a plot at all
             // answers with nothing to draw, which is what the name alone is for.
-            const std::unique_ptr<types::SceneTile> plot =
-                types::make_tile(*definition, entry.id, 0, GridPos{0, 0});
+            const std::unique_ptr<types::Tile> plot =
+                types::make_tile(definitions, *definition, registry, entry.id, 0, GridPos{0, 0});
             if (plot != nullptr) building.preview = plot->get_preview();
             all_.push_back(std::move(building));
         }

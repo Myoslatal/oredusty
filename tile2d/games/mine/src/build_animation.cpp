@@ -4,12 +4,12 @@
 
 namespace mine {
 
-void BuildAnimation::start(types::SceneTile* plot, t2d::f32 seconds) {
+void BuildAnimation::start(types::Tile* plot, t2d::f32 seconds) {
     if (plot == nullptr || !(seconds > 0.0f)) return;
     const auto already = std::find_if(builds_.begin(), builds_.end(),
                                       [plot](const Build& build) { return build.plot == plot; });
     if (already != builds_.end()) return;   // one sweep per plot: placing it twice does not build it twice
-    // The plot is on the map and drawn, but it does nothing until the sweep is over (types/scene_tile.h).
+    // The plot is on the map and drawn, but it does nothing until the sweep is over (types/tile.h).
     plot->set_under_construction(true);
     builds_.push_back(Build{plot, 0.0f, seconds});
 }
@@ -26,7 +26,7 @@ void BuildAnimation::advance(t2d::f32 delta_seconds) {
     });
 }
 
-bool BuildAnimation::restore(types::SceneTile* plot, t2d::f32 seconds, t2d::f32 elapsed) {
+bool BuildAnimation::restore(types::Tile* plot, t2d::f32 seconds, t2d::f32 elapsed) {
     // A sweep in progress is exactly what this list holds: no plot, no time, a time that already ran out,
     // or a negative/NaN elapsed is not one (the caller keeps such a plot finished and warns).
     if (plot == nullptr || !(seconds > 0.0f) || !(elapsed >= 0.0f) || !(elapsed < seconds)) return false;
@@ -46,7 +46,7 @@ void BuildAnimation::clear() {
     builds_.clear();
 }
 
-t2d::f32 BuildAnimation::progress_of(const types::SceneTile* plot) const {
+t2d::f32 BuildAnimation::progress_of(const types::Tile* plot) const {
     for (const Build& build : builds_) {
         if (build.plot == plot) return build.progress();
     }

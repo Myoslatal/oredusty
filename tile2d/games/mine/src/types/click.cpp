@@ -1,16 +1,12 @@
 #include <mine/types/click.h>
 
+#include <mine/runtime/content/components.h>
+
 namespace mine::types {
 
-bool Click::receive(bool on_it) {
-    if (!on_it) {
-        // A click somewhere else closes the panel: there is one pointer, so there is one thing selected.
-        open_ = false;
-        return false;
-    }
-    ++clicks_;
-    open_ = !open_;
-    return true;
+u32 Click::clicks() const {
+    if (data_ == nullptr) return 0;
+    return static_cast<const runtime::content::ClickData*>(data_)->clicks;
 }
 
 } // namespace mine::types

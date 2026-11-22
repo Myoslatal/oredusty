@@ -6,6 +6,7 @@
 #include <mine/building_unlocks.h>
 #include <mine/content_pack.h>
 #include <mine/layer_rules.h>
+#include <mine/runtime/content/content_ids.h>
 
 #include <support/test_support.h>
 
@@ -97,7 +98,7 @@ struct Fixture {
 /// same way" compares.
 [[nodiscard]] std::vector<GridPos> ore_cells(const MineLayer& layer) {
     std::vector<GridPos> cells;
-    for (const std::unique_ptr<SceneTile>& plot : layer.plots()) {
+    for (const std::unique_ptr<Tile>& plot : layer.plots()) {
         if (plot->is_ore()) cells.push_back(plot->anchor());
     }
     return cells;
@@ -362,7 +363,8 @@ layer::
     T2D_CHECK_EQ(parsed.rules[1].name, std::string("shaft"));
 
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
     const LayerGenerator generator = story_layer_generator(rules, LayerShape{16, 16, 1});
     T2D_CHECK_EQ(generator(1, 0).shape.width, 4u);
     T2D_CHECK_EQ(generator(1, 1).shape.width, 6u);
@@ -386,7 +388,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt");
@@ -430,7 +433,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt", /*random_reverse=*/true);
@@ -453,7 +457,7 @@ layer::
             T2D_CHECK_EQ(ref.kind, ContentKind::Floor);
             T2D_CHECK_EQ(ref.id, content.registry.find(ContentKind::Floor, "dirt"));
             T2D_CHECK_FALSE(ref.stale);
-            const SceneTile* plot = layer.plot_at(0, GridPos{x, y});
+            const Tile* plot = layer.plot_at(0, GridPos{x, y});
             T2D_REQUIRE(plot != nullptr);
             T2D_CHECK(plot->is_floor());
             T2D_CHECK_EQ(plot->anchor().x, x);
@@ -472,7 +476,8 @@ layer::
     const std::string first_dump = layer.dump_text(content.registry);
     MineWorld same_seed(99, LayerShape{6, 4, 1});
     same_seed.set_generator(story_layer_generator(rules, same_seed.shape()));
-    T2D_CHECK_EQ(same_seed.enter(0, content.registry, content.definitions).dump_text(content.registry), first_dump);
+    T2D_CHECK_EQ(same_seed.enter(0, content.registry, content.definitions).dump_text(content.registry),
+                 first_dump);
 
     MineWorld other_seed(1234, LayerShape{6, 4, 1});
     other_seed.set_generator(story_layer_generator(rules, other_seed.shape()));
@@ -502,7 +507,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt");
@@ -548,7 +554,8 @@ T2D_TEST(the_last_rule_to_paint_a_cell_wins) {
     T2D_CHECK_EQ(layer.plot_count(), 6u);
     for (i32 y = 0; y < 2; ++y) {
         for (i32 x = 0; x < 3; ++x) {
-            T2D_CHECK_EQ(layer.ref_at(0, GridPos{x, y}).id, content.registry.find(ContentKind::Floor, "dirt"));
+            T2D_CHECK_EQ(layer.ref_at(0, GridPos{x, y}).id,
+                         content.registry.find(ContentKind::Floor, "dirt"));
         }
     }
 }
@@ -716,7 +723,8 @@ layer::
 
 T2D_TEST(a_scatter_that_cannot_be_read_is_refused) {
     const auto one = [](std::string_view body) {
-        return parse(std::format("layer::\n    entrance::\n        scatter::\n            copper::\n{}\n", body));
+        return parse(
+            std::format("layer::\n    entrance::\n        scatter::\n            copper::\n{}\n", body));
     };
 
     const Parsed no_content = one("                kind:\"ore\"\n                density:0.1");
@@ -754,8 +762,9 @@ T2D_TEST(a_scatter_that_cannot_be_read_is_refused) {
     T2D_CHECK(text_density.rules.empty());
     T2D_CHECK(mentions(text_density.errors, "takes a number for density"));
 
-    const Parsed backwards = one("                kind:\"ore\"\n                content:\"copper\"\n"
-                                 "                density:0.1\n                min:20\n                max:8");
+    const Parsed backwards =
+        one("                kind:\"ore\"\n                content:\"copper\"\n"
+            "                density:0.1\n                min:20\n                max:8");
     T2D_CHECK(backwards.rules.empty());
     T2D_CHECK(mentions(backwards.errors, "wants at least 20 and at most 8"));
 
@@ -830,7 +839,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt");
@@ -838,9 +848,8 @@ layer::
     MineWorld world(4, LayerShape{8, 6, 1});
     world.set_generator(story_layer_generator(rules, world.shape()));
     const MineLayer& layer = world.enter(0, content.registry, content.definitions);
-    T2D_CHECK_MSG(world.build_report().clean(), "{}", world.build_report().errors.empty()
-                                                       ? std::string{}
-                                                       : world.build_report().errors.front());
+    T2D_CHECK_MSG(world.build_report().clean(), "{}",
+                  world.build_report().errors.empty() ? std::string{} : world.build_report().errors.front());
 
     // Every cell: the floor below, one ore above it. A density of 1 takes every eligible cell, and
     // every cell is eligible because the whole map is dirt.
@@ -849,10 +858,10 @@ layer::
     T2D_CHECK_EQ(layer.filled_cells(1), 48u);
     for (i32 y = 0; y < 6; ++y) {
         for (i32 x = 0; x < 8; ++x) {
-            const SceneTile* floor_plot = layer.plot_at(0, GridPos{x, y});
+            const Tile* floor_plot = layer.plot_at(0, GridPos{x, y});
             T2D_REQUIRE(floor_plot != nullptr);
             T2D_CHECK(floor_plot->is_floor());
-            const SceneTile* ore = layer.plot_at(1, GridPos{x, y});
+            const Tile* ore = layer.plot_at(1, GridPos{x, y});
             T2D_REQUIRE(ore != nullptr);
             T2D_CHECK(ore->is_ore());
             T2D_CHECK_EQ(ore->kind(), ContentKind::Ore);
@@ -876,7 +885,8 @@ T2D_TEST(the_density_sets_the_count_and_min_and_max_bound_it) {
         content.add_floor("dirt");
         content.add_ore("copper");
         LayerRules rules;
-        for (const LayerRule& rule : parsed.rules) rules.add(rule);
+        for (const LayerRule& rule : parsed.rules)
+            rules.add(rule);
         MineWorld world(7, shape);
         world.set_generator(story_layer_generator(rules, world.shape()));
         const MineLayer& layer = world.enter(0, content.registry, content.definitions);
@@ -898,9 +908,10 @@ T2D_TEST(the_density_sets_the_count_and_min_and_max_bound_it) {
                  64u);
     // In between, the density is an average: the count varies around density x cells and stays inside
     // the bounds. 4096 cells at a quarter is 1024 +- 28, so a band of 4.5 sigma is a wide one.
-    const usize middling = build("                layer:1\n                density:0.25\n                min:900\n"
-                                 "                max:1150",
-                                 LayerShape{64, 64, 2});
+    const usize middling =
+        build("                layer:1\n                density:0.25\n                min:900\n"
+              "                max:1150",
+              LayerShape{64, 64, 2});
     T2D_CHECK_GT(middling, 900u);
     T2D_CHECK_LT(middling, 1150u);
 }
@@ -925,7 +936,8 @@ T2D_TEST(a_floor_restriction_only_takes_cells_whose_floor_is_that_one) {
         content.add_floor("dirt");
         content.add_ore("copper");
         LayerRules rules;
-        for (const LayerRule& rule : parsed.rules) rules.add(rule);
+        for (const LayerRule& rule : parsed.rules)
+            rules.add(rule);
         MineWorld world(7, LayerShape{8, 8, 2});
         world.set_generator(story_layer_generator(rules, world.shape()));
         const MineLayer& layer = world.enter(0, content.registry, content.definitions);
@@ -935,8 +947,8 @@ T2D_TEST(a_floor_restriction_only_takes_cells_whose_floor_is_that_one) {
     // The floor of the cell decides. Under a floor of dirt every cell is eligible; under a floor of
     // stone - which is what the layer is made of instead - none of them is.
     const Built dirt = build("                floor:\"dirt\"\n");
-    T2D_CHECK_MSG(dirt.report.clean(), "{}", dirt.report.errors.empty() ? std::string{}
-                                                                       : dirt.report.errors.front());
+    T2D_CHECK_MSG(dirt.report.clean(), "{}",
+                  dirt.report.errors.empty() ? std::string{} : dirt.report.errors.front());
     T2D_CHECK_EQ(dirt.ore, 64u);
 
     // A restriction nothing satisfies is a rule that places nothing, and it says so rather than being
@@ -976,7 +988,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt");
@@ -985,9 +998,8 @@ layer::
     MineWorld world(4, LayerShape{8, 8, 2});
     world.set_generator(story_layer_generator(rules, world.shape()));
     const MineLayer& layer = world.enter(0, content.registry, content.definitions);
-    T2D_CHECK_MSG(world.build_report().clean(), "{}", world.build_report().errors.empty()
-                                                       ? std::string{}
-                                                       : world.build_report().errors.front());
+    T2D_CHECK_MSG(world.build_report().clean(), "{}",
+                  world.build_report().errors.empty() ? std::string{} : world.build_report().errors.front());
 
     // Ten of each, and no cell carries two: a scatter never lands on a cell of its own tile layer that
     // the same description already holds.
@@ -995,9 +1007,8 @@ layer::
     T2D_CHECK_EQ(layer.filled_cells(1), 20u);
     std::vector<GridPos> cells = ore_cells(layer);
     T2D_REQUIRE(cells.size() == 20u);
-    std::sort(cells.begin(), cells.end(), [](GridPos a, GridPos b) {
-        return a.y != b.y ? a.y < b.y : a.x < b.x;
-    });
+    std::sort(cells.begin(), cells.end(),
+              [](GridPos a, GridPos b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
     for (usize index = 1; index < cells.size(); ++index) {
         T2D_CHECK_FALSE(cells[index] == cells[index - 1]);
     }
@@ -1023,7 +1034,8 @@ layer::
 )");
     T2D_CHECK(on_the_floor.errors.empty());
     LayerRules on_floor_rules;
-    for (const LayerRule& rule : on_the_floor.rules) on_floor_rules.add(rule);
+    for (const LayerRule& rule : on_the_floor.rules)
+        on_floor_rules.add(rule);
     MineWorld other(4, LayerShape{4, 4, 1});
     other.set_generator(story_layer_generator(on_floor_rules, other.shape()));
     const MineLayer& floored = other.enter(0, content.registry, content.definitions);
@@ -1055,7 +1067,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt");
@@ -1064,9 +1077,9 @@ layer::
         MineWorld world(seed, LayerShape{16, 16, 2});
         world.set_generator(story_layer_generator(rules, world.shape()));
         const MineLayer& layer = world.enter(0, content.registry, content.definitions);
-        T2D_CHECK_MSG(world.build_report().clean(), "{}", world.build_report().errors.empty()
-                                                           ? std::string{}
-                                                           : world.build_report().errors.front());
+        T2D_CHECK_MSG(world.build_report().clean(), "{}",
+                      world.build_report().errors.empty() ? std::string{}
+                                                          : world.build_report().errors.front());
         return ore_cells(layer);
     };
 
@@ -1105,7 +1118,8 @@ layer::
 )");
     T2D_CHECK(parsed.errors.empty());
     LayerRules rules;
-    for (const LayerRule& rule : parsed.rules) rules.add(rule);
+    for (const LayerRule& rule : parsed.rules)
+        rules.add(rule);
 
     Fixture content;
     content.add_floor("dirt");
@@ -1158,29 +1172,66 @@ T2D_TEST(the_games_own_story_layer_is_the_first_one_and_the_fixture_follows_it) 
     T2D_CHECK_MSG(world.build_report().clean(), "the build refused {} placement(s)",
                   world.build_report().refused);
     const std::vector<GridPos> stone = ore_cells(first);
-    // The floor, the ore, and the one block the designer placed: a stone warehouse in the middle of the
+    // The floor, the ore, and the two blocks the designer placed: a stone warehouse in the middle of the
     // map (content/layers.ecfg), on tile layer 2 - the layer for buildings, above the floor (0) and above
-    // the ore in the ground (1) - holding the ten stone it starts with.
-    T2D_CHECK_EQ(first.plot_count(), 10000u + stone.size() + 1u);
-    const SceneTile* building = first.plot_at(2, GridPos{50, 50});
+    // the ore in the ground (1) - holding the ten stone it starts with, and a 2x1 task block right of it
+    // (one plot, not two).
+    T2D_CHECK_EQ(first.plot_count(), 10000u + stone.size() + 2u);
+    const Tile* building = first.plot_at(2, GridPos{50, 50});
     T2D_REQUIRE(building != nullptr);
-    T2D_REQUIRE(building->container() != nullptr);
-    T2D_CHECK_EQ(building->container()->total(), 10u);
+    T2D_REQUIRE(building->has_container());
+    T2D_CHECK_EQ(building->container().total(), 10u);
+    // The task block the layer data places at (52,50): one 2x1 plot answering for both cells, with the
+    // task data block and the container its tile type gives it (docs/GAME_DESIGN.md section 1.51). It
+    // starts empty, and it has **no building half** - that is what "cannot be built" means here.
+    const Tile* task_block = first.plot_at(2, GridPos{52, 50});
+    T2D_REQUIRE(task_block != nullptr);
+    T2D_CHECK(first.plot_at(2, GridPos{53, 50}) == task_block);
+    T2D_CHECK_EQ(task_block->width(), 2);
+    T2D_CHECK_EQ(task_block->height(), 1);
+    T2D_CHECK(task_block->has_component(runtime::content::kTaskComponent));
+    T2D_REQUIRE(task_block->has_container());
+    T2D_CHECK_EQ(task_block->container().total(), 0u);
+    T2D_CHECK(task_block->building() == nullptr);
+    T2D_CHECK(first.plot_at(2, GridPos{54, 50}) == nullptr);
+    // It stands on the floor, over both of its cells: a block goes above the floor, never in its place.
+    T2D_CHECK(first.plot_at(0, GridPos{52, 50}) != nullptr);
+    T2D_CHECK(first.plot_at(0, GridPos{53, 50}) != nullptr);
+    // The chain the designer bound to it: two deliver steps for stone (10, then 25). It starts at the
+    // first step with nothing done, and ten stone put in its container settles that first step -
+    // delivering consumes exactly what the step asks for (docs/GAME_DESIGN.md section 1.52).
+    T2D_CHECK(task_block->has_task());
+    const Task task = task_block->task();
+    T2D_CHECK(task.valid());
+    T2D_CHECK_EQ(task.count(), 2u);
+    T2D_CHECK_EQ(task.current(), 0u);
+    const std::optional<TaskStepView> first_step = task.step(0);
+    T2D_REQUIRE(first_step.has_value());
+    T2D_CHECK(first_step->type == TaskType::Deliver);
+    T2D_CHECK_EQ(first_step->kind, ContentKind::Item);
+    T2D_CHECK_EQ(first_step->id, registry.find(ContentKind::Item, "stone"));
+    T2D_CHECK_EQ(first_step->count, 10u);
+    // The layer's plots are handed out const; settling is an act on the plot, so the test says so.
+    Tile* task_plot = const_cast<Tile*>(task_block);
+    T2D_CHECK_EQ(task_plot->container().add(ContentKind::Item, first_step->id, 10), 10u);
+    T2D_CHECK_EQ(task_plot->run_tasks(), 1u);
+    T2D_CHECK_EQ(task_plot->task().current(), 1u);
+    T2D_CHECK_EQ(task_plot->container().total(), 0u);
     // The stone warehouse is a **building**, and a new save has it locked (docs/GAME_DESIGN.md 1.44,
     // 1.45) - and that changes nothing here: `place_block` puts content down directly, it does not go
     // through the build menu, and being unlocked is not a placement condition.
     BuildingUnlocks unlocks;
     unlocks.reset(registry, report.definitions);
     T2D_CHECK_FALSE(unlocks.unlocked(ContentKind::Warehouse, registry.find(ContentKind::Warehouse, "stone")));
-    T2D_CHECK(first.plot_at(0, GridPos{50, 50}) != nullptr);   // the floor is still under it
+    T2D_CHECK(first.plot_at(0, GridPos{50, 50}) != nullptr); // the floor is still under it
     T2D_CHECK_GE(stone.size(), 20u);
     T2D_CHECK(stone.size() <= 35u);
     for (const GridPos cell : stone) {
-        const SceneTile* plot = first.plot_at(1, cell);
+        const Tile* plot = first.plot_at(1, cell);
         T2D_REQUIRE(plot != nullptr);
         T2D_CHECK(plot->is_ore());
         T2D_CHECK_EQ(plot->id(), registry.find(ContentKind::Ore, "stone"));
-        const SceneTile* below = first.plot_at(0, cell);
+        const Tile* below = first.plot_at(0, cell);
         T2D_REQUIRE(below != nullptr);
         T2D_CHECK(below->is_floor());
     }
@@ -1205,13 +1256,13 @@ T2D_TEST(the_games_own_story_layer_is_the_first_one_and_the_fixture_follows_it) 
     T2D_CHECK_GT(ore.size(), 5u);
     T2D_CHECK_LT(ore.size(), 41u);
     for (const GridPos cell : ore) {
-        const SceneTile* plot = layer.plot_at(1, cell);
+        const Tile* plot = layer.plot_at(1, cell);
         T2D_REQUIRE(plot != nullptr);
         T2D_CHECK(plot->is_ore());
         T2D_CHECK_EQ(plot->id(), registry.find(ContentKind::Ore, "copper"));
         // What the restriction is for: every ore sits on the game's own dirt, because that is the only
         // floor the layer has.
-        const SceneTile* below = layer.plot_at(0, cell);
+        const Tile* below = layer.plot_at(0, cell);
         T2D_REQUIRE(below != nullptr);
         T2D_CHECK(below->is_floor());
     }
@@ -1317,27 +1368,32 @@ T2D_TEST(a_place_block_that_is_not_a_placement_is_refused) {
     };
     const Case cases[] = {
         // No y: a cell has two coordinates.
-        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
-                    "                x:4\n"),
+        {layer_with(
+             "            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+             "                x:4\n"),
          "where it sits"},
         // An odd number of items: they come in pairs.
-        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
-                    "                x:4\n                y:8\n                subobject::\n"
-                    "                    container::\n                        items:[\"ore\",100,\"chunk\"]\n"),
+        {layer_with(
+             "            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+             "                x:4\n                y:8\n                subobject::\n"
+             "                    container::\n                        items:[\"ore\",100,\"chunk\"]\n"),
          "pairs of name and count"},
         // A sub-object the engine does not have.
-        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
-                    "                x:4\n                y:8\n                subobject::\n"
-                    "                    socket::\n"),
+        {layer_with(
+             "            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+             "                x:4\n                y:8\n                subobject::\n"
+             "                    socket::\n"),
          "only one there is is container"},
         // A count that is not a count.
-        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
-                    "                x:4\n                y:8\n                subobject::\n"
-                    "                    container::\n                        items:[\"ore\",0]\n"),
+        {layer_with(
+             "            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+             "                x:4\n                y:8\n                subobject::\n"
+             "                    container::\n                        items:[\"ore\",0]\n"),
          "count above zero"},
         // An attribute that is not one of its own.
-        {layer_with("            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
-                    "                x:4\n                y:8\n                colour:\"red\"\n"),
+        {layer_with(
+             "            start::\n                kind:\"warehouse\"\n                content:\"stone\"\n"
+             "                x:4\n                y:8\n                colour:\"red\"\n"),
          "has no attribute"},
     };
     for (const Case& one : cases) {

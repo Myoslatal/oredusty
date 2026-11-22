@@ -3,9 +3,10 @@
 //
 // The content in here is a **test double**: names like "wall" or "dirt" are the fixture's, not the
 // game's - the game names no content at all (docs/GAME_DESIGN.md section 7).
-#include <mine/view_limits.h>
 #include <mine/build_animation.h>
 #include <mine/build_cost.h>
+#include <mine/runtime/content/content_ids.h>
+#include <mine/view_limits.h>
 #include <mine/world.h>
 
 #include <support/test_support.h>
@@ -26,13 +27,17 @@ struct Fixture {
     ContentRegistry registry;
     ContentDefinitions definitions;
 
-    ContentId add(ContentKind kind, std::string_view name, bool random_reverse = false, usize capacity = 0) {
+    ContentId add(ContentKind kind, std::string_view name, bool random_reverse = false, usize capacity = 0,
+                  i32 width = 1, i32 height = 1, std::string_view tile_type = {}) {
         const ContentId id = registry.register_content(kind, name);
         TileDefinition definition;
         definition.kind = kind;
         definition.name = std::string(name);
         definition.random_reverse = random_reverse;
-        definition.capacity = capacity;   // a container a placement fills needs room to fill it
+        definition.capacity = capacity; // a container a placement fills needs room to fill it
+        definition.width = width;       // the footprint the entry declares (types/tile_definition.h)
+        definition.height = height;
+        definition.tile_type = std::string(tile_type); // empty: the built-in type of the kind
         definitions.add(std::move(definition));
         return id;
     }
@@ -42,8 +47,10 @@ struct Fixture {
     }
 };
 
-[[nodiscard]] PlacedContent at(ContentKind kind, std::string name, i32 tile_layer, i32 x, i32 y, i32 width = 1,
-                               i32 height = 1) {
+/// A placement that names no size (width/height 0) takes the footprint its definition declares; a
+/// test that wants a particular one passes it here.
+[[nodiscard]] PlacedContent at(ContentKind kind, std::string name, i32 tile_layer, i32 x, i32 y,
+                               i32 width = 0, i32 height = 0) {
     PlacedContent where;
     where.kind = kind;
     where.name = std::move(name);
@@ -55,9 +62,9 @@ struct Fixture {
 }
 
 /// The plots a query over \p cells finds, in the order the layer visits them.
-[[nodiscard]] std::vector<const SceneTile*> plots_in(const MineLayer& layer, const t2d::TileRect& cells) {
-    std::vector<const SceneTile*> found;
-    layer.for_each_plot_in(cells, [&](const SceneTile& plot) { found.push_back(&plot); });
+[[nodiscard]] std::vector<const Tile*> plots_in(const MineLayer& layer, const t2d::TileRect& cells) {
+    std::vector<const Tile*> found;
+    layer.for_each_plot_in(cells, [&](const Tile& plot) { found.push_back(&plot); });
     return found;
 }
 
@@ -70,9 +77,9 @@ T2D_TEST(a_layer_is_built_out_of_the_description_it_was_given) {
 
     MineLayer layer(0, LayerShape{8, 8, 2}, 42);
     LayerBuildReport report;
-    T2D_REQUIRE(layer.place(content.registry, content.definitions, at(ContentKind::Floor, "dirt", 0, 0, 0), &report) !=
-                nullptr);
-    SceneTile* big = layer.place(content.registry, content.definitions,
+    T2D_REQUIRE(layer.place(content.registry, content.definitions, at(ContentKind::Floor, "dirt", 0, 0, 0),
+                            &report) != nullptr);
+    Tile* big = layer.place(content.registry, content.definitions,
                             at(ContentKind::Structure, "wall", 1, 1, 1, 3, 3), &report);
     T2D_REQUIRE(big != nullptr);
 
@@ -117,6 +124,91 @@ T2D_TEST(a_layer_is_built_out_of_the_description_it_was_given) {
     T2D_CHECK(layer.plot_at(1, GridPos{7, 7}) == nullptr);
 }
 
+T2D_TEST(a_definition_footprint_is_the_footprint_a_placement_covers) {
+    Fixture content;
+    content.add(ContentKind::Floor, "dirt");
+    // The entry declares a 2x1 footprint: that is a **definition** attribute, so a placement that says
+    // nothing about its size covers both cells (docs/MODS.md, types/tile_definition.h).
+    content.add(ContentKind::Structure, "bench", /*random_reverse=*/false, /*capacity=*/0, /*width=*/2,
+                /*height=*/1);
+    const LayerShape shape{8, 8, 2};
+    MineLayer layer(0, shape, 5);
+
+    Tile* bench = layer.place(content.registry, content.definitions,
+                              at(ContentKind::Structure, "bench", 1, 1, 1));
+    T2D_REQUIRE(bench != nullptr);
+    T2D_CHECK_EQ(bench->width(), 2);
+    T2D_CHECK_EQ(bench->height(), 1);
+    T2D_CHECK_EQ(bench->cell_count(), 2);
+    // Both cells answer for the one plot, and the grid has both of them.
+    T2D_CHECK(layer.plot_at(1, GridPos{1, 1}) == bench);
+    T2D_CHECK(layer.plot_at(1, GridPos{2, 1}) == bench);
+    T2D_CHECK(layer.plot_at(1, GridPos{3, 1}) == nullptr);
+    T2D_CHECK_EQ(layer.ref_at(1, GridPos{2, 1}).kind, ContentKind::Structure);
+    T2D_CHECK_EQ(layer.filled_cells(1), 2u);
+
+    // A second placement on the second cell is refused: the first one covers it, not only its anchor.
+    LayerBuildReport report;
+    T2D_CHECK(layer.place(content.registry, content.definitions,
+                          at(ContentKind::Structure, "bench", 1, 2, 1), &report) == nullptr);
+    T2D_REQUIRE(report.errors.size() == 1u);
+    T2D_CHECK(report.errors.front().find("overlaps") != std::string::npos);
+
+    // can_place asks about the whole footprint too: the second cell is taken, and a 2x1 anchored on the
+    // last column of an 8x8 map hangs over the edge.
+    std::string why;
+    T2D_CHECK_FALSE(
+        layer.can_place(content.definitions, at(ContentKind::Structure, "bench", 1, 2, 1), &why));
+    T2D_CHECK(why.find("already there") != std::string::npos);
+    T2D_CHECK_FALSE(
+        layer.can_place(content.definitions, at(ContentKind::Structure, "bench", 1, 7, 2), &why));
+    T2D_CHECK(why.find("8x8") != std::string::npos);
+    T2D_CHECK(layer.can_place(content.definitions, at(ContentKind::Structure, "bench", 1, 3, 2), &why));
+
+    // A placement that names its own size overrides the definition: a save writes the footprint a plot
+    // actually had (world.h, PlacedContent).
+    Tile* narrow = layer.place(content.registry, content.definitions,
+                               at(ContentKind::Structure, "bench", 1, 4, 2, 1, 1));
+    T2D_REQUIRE(narrow != nullptr);
+    T2D_CHECK_EQ(narrow->width(), 1);
+    T2D_CHECK_EQ(narrow->height(), 1);
+    T2D_CHECK(layer.plot_at(1, GridPos{4, 2}) == narrow);
+    T2D_CHECK(layer.plot_at(1, GridPos{5, 2}) == nullptr);
+}
+
+T2D_TEST(a_task_block_is_a_2x1_container_built_from_the_data) {
+    // The data selects the built-in "task_block" tile type, declares a 2x1 footprint and a capacity:
+    // the task data block, the container and the drag half all come from the type, not from a class
+    // (docs/GAME_DESIGN.md section 1.51).
+    Fixture content;
+    const ContentId stone = content.add(ContentKind::Item, "stone");
+    content.add(ContentKind::Structure, "task_block", /*random_reverse=*/false, /*capacity=*/100,
+                /*width=*/2, /*height=*/1, /*tile_type=*/"task_block");
+    const LayerShape shape{8, 8, 2};
+    MineLayer layer(0, shape, 9);
+    LayerBuildReport report;
+    Tile* plot = layer.place(content.registry, content.definitions,
+                             at(ContentKind::Structure, "task_block", 1, 1, 1), &report);
+    T2D_REQUIRE(plot != nullptr);
+    T2D_CHECK_MSG(report.clean(), "{}", report.errors.empty() ? "" : report.errors.front());
+    T2D_REQUIRE(plot->tile_type() != nullptr);
+    T2D_CHECK_EQ(std::string(plot->tile_type()->name()), std::string("task_block"));
+    // The definition's footprint is what the layer places, on both cells.
+    T2D_CHECK_EQ(plot->width(), 2);
+    T2D_CHECK_EQ(plot->height(), 1);
+    T2D_CHECK(layer.plot_at(1, GridPos{2, 1}) == plot);
+    T2D_CHECK(layer.ref_at(1, GridPos{2, 1}).id == plot->id());
+    // The container half receives items whole, and the task data block has its reserved state.
+    T2D_REQUIRE(plot->has_container());
+    T2D_REQUIRE(plot->has_drag());
+    T2D_CHECK(plot->has_component(runtime::content::kTaskComponent));
+    T2D_CHECK_EQ(plot->container().capacity(), 100u);
+    T2D_CHECK(plot->drag_accepts(ContentKind::Item, stone, 4));
+    T2D_CHECK(plot->drag_receive(ContentKind::Item, stone, 4));
+    T2D_CHECK_EQ(plot->container().count_of(ContentKind::Item, stone), 4u);
+    T2D_CHECK_EQ(plot->container().total(), 4u);
+}
+
 T2D_TEST(a_placement_that_cannot_be_made_is_refused_and_nothing_is_half_placed) {
     Fixture content;
     content.add(ContentKind::Floor, "dirt");
@@ -128,11 +220,11 @@ T2D_TEST(a_placement_that_cannot_be_made_is_refused_and_nothing_is_half_placed) 
     T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Structure, "gate", 0, 0, 0),
                           &report) == nullptr);
     // A kind that does not occupy cells at all.
-    T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Item, "dirt", 0, 0, 0), &report) ==
-              nullptr);
+    T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Item, "dirt", 0, 0, 0),
+                          &report) == nullptr);
     // A tile layer this map does not have.
-    T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Floor, "dirt", 1, 0, 0), &report) ==
-              nullptr);
+    T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Floor, "dirt", 1, 0, 0),
+                          &report) == nullptr);
     // A footprint that hangs over the edge.
     T2D_CHECK(layer.place(content.registry, content.definitions,
                           at(ContentKind::Structure, "wall", 0, 6, 6, 3, 3), &report) == nullptr);
@@ -144,7 +236,7 @@ T2D_TEST(a_placement_that_cannot_be_made_is_refused_and_nothing_is_half_placed) 
     T2D_CHECK_EQ(report.placed, 0u);
     T2D_CHECK_EQ(layer.plot_count(), 0u);
     T2D_CHECK_EQ(layer.filled_cells(), 0u);
-    T2D_CHECK_EQ(layer.cell_bytes(), 0u);   // a layer nobody placed anything on has no storage
+    T2D_CHECK_EQ(layer.cell_bytes(), 0u); // a layer nobody placed anything on has no storage
 
     // Two plots on one tile layer cannot share a cell; the same footprint on another tile layer is
     // exactly what a floor and the machine standing on it are.
@@ -152,8 +244,8 @@ T2D_TEST(a_placement_that_cannot_be_made_is_refused_and_nothing_is_half_placed) 
                             at(ContentKind::Structure, "wall", 0, 1, 1, 2, 2)) != nullptr);
     T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Structure, "wall", 0, 2, 2),
                           &report) == nullptr);
-    T2D_CHECK(layer.place(content.registry, content.definitions, at(ContentKind::Structure, "wall", 0, 0, 0, 3, 3),
-                          &report) == nullptr);
+    T2D_CHECK(layer.place(content.registry, content.definitions,
+                          at(ContentKind::Structure, "wall", 0, 0, 0, 3, 3), &report) == nullptr);
     T2D_CHECK_EQ(report.errors.size(), 6u);
     T2D_CHECK(report.errors[4].find("overlaps") != std::string::npos);
     T2D_CHECK_EQ(layer.plot_count(), 1u);
@@ -180,7 +272,7 @@ T2D_TEST(content_that_registered_no_definition_is_still_a_plot) {
     registry.register_content(ContentKind::Machine, "mystery");
     ContentDefinitions none;
     MineLayer layer(0, LayerShape{4, 4, 1}, 1);
-    const SceneTile* plot = layer.place(registry, none, at(ContentKind::Machine, "mystery", 0, 1, 1));
+    const Tile* plot = layer.place(registry, none, at(ContentKind::Machine, "mystery", 0, 1, 1));
     T2D_REQUIRE(plot != nullptr);
     T2D_CHECK_FALSE(plot->random_reverse());
     T2D_CHECK_FALSE(plot->mirrored());
@@ -196,7 +288,8 @@ T2D_TEST(the_dice_decide_how_plots_draw_themselves_and_only_once) {
     spec.index = 0;
     spec.shape = shape;
     for (i32 y = 0; y < 16; ++y) {
-        for (i32 x = 0; x < 16; ++x) spec.content.push_back(at(ContentKind::Floor, "dirt", 0, x, y));
+        for (i32 x = 0; x < 16; ++x)
+            spec.content.push_back(at(ContentKind::Floor, "dirt", 0, x, y));
     }
 
     MineLayer layer(0, shape, 99);
@@ -232,19 +325,22 @@ T2D_TEST(content_that_may_not_be_turned_around_does_not_touch_the_dice) {
         LayerSpec spec;
         spec.shape = LayerShape{4, 4, 1};
         if (with_still) spec.content.push_back(at(ContentKind::Floor, "still", 0, 0, 0));
-        for (i32 x = 0; x < 4; ++x) spec.content.push_back(at(ContentKind::Floor, "turning", 0, x, 1));
+        for (i32 x = 0; x < 4; ++x)
+            spec.content.push_back(at(ContentKind::Floor, "turning", 0, x, 1));
         MineLayer layer(0, spec.shape, 5);
         layer.build(spec, content.registry, content.definitions, nullptr);
         std::vector<bool> mirrored;
-        for (const auto& plot : layer.plots()) mirrored.push_back(plot->mirrored());
+        for (const auto& plot : layer.plots())
+            mirrored.push_back(plot->mirrored());
         return mirrored;
     };
     const std::vector<bool> without = build_with(false);
     const std::vector<bool> with = build_with(true);
     T2D_REQUIRE(without.size() == 4u);
     T2D_REQUIRE(with.size() == 5u);
-    T2D_CHECK_FALSE(with[0]);   // the content that may not turn around never does
-    for (usize index = 0; index < without.size(); ++index) T2D_CHECK_EQ(with[index + 1], without[index]);
+    T2D_CHECK_FALSE(with[0]); // the content that may not turn around never does
+    for (usize index = 0; index < without.size(); ++index)
+        T2D_CHECK_EQ(with[index + 1], without[index]);
 }
 
 T2D_TEST(only_the_plots_that_run_are_ticked_and_only_the_dirty_are_refreshed) {
@@ -254,10 +350,12 @@ T2D_TEST(only_the_plots_that_run_are_ticked_and_only_the_dirty_are_refreshed) {
     content.add(ContentKind::Machine, "drill");
     MineLayer layer(0, LayerShape{8, 8, 1}, 3);
     LayerBuildReport report;
-    (void)layer.place(content.registry, content.definitions, at(ContentKind::Floor, "dirt", 0, 0, 0), &report);
-    (void)layer.place(content.registry, content.definitions, at(ContentKind::Structure, "wall", 0, 1, 0), &report);
-    SceneTile* machine = layer.place(content.registry, content.definitions,
-                                     at(ContentKind::Machine, "drill", 0, 2, 0), &report);
+    (void)layer.place(content.registry, content.definitions, at(ContentKind::Floor, "dirt", 0, 0, 0),
+                      &report);
+    (void)layer.place(content.registry, content.definitions, at(ContentKind::Structure, "wall", 0, 1, 0),
+                      &report);
+    Tile* machine = layer.place(content.registry, content.definitions,
+                                at(ContentKind::Machine, "drill", 0, 2, 0), &report);
     T2D_REQUIRE(machine != nullptr);
     T2D_CHECK_EQ(report.ticking, 1u);
     T2D_CHECK_EQ(layer.ticking_count(), 1u);
@@ -271,15 +369,13 @@ T2D_TEST(only_the_plots_that_run_are_ticked_and_only_the_dirty_are_refreshed) {
     T2D_CHECK_EQ(layer.refresh(), 1u);
 
     // The tick pass walks the machines and nothing else, on the cadence each one owns.
-    auto* entity = dynamic_cast<EntityTile*>(machine);
-    T2D_REQUIRE(entity != nullptr);
-    entity->set_period_seconds(1.0f);
+    machine->set_period_seconds(1.0f);
     T2D_CHECK_EQ(layer.tick(0.5f), 0u);
     T2D_CHECK_EQ(layer.tick(0.5f), 1u);
     // A frame longer than a period runs it once and hands it the whole span: a plot cannot replay the
     // ticks it missed, or a hitch would change what the mine produces.
     T2D_CHECK_EQ(layer.tick(2.5f), 1u);
-    T2D_CHECK_NEAR(entity->since_last_update(), 0.5f, 1e-6f);
+    T2D_CHECK_NEAR(machine->since_last_update(), 0.5f, 1e-6f);
 }
 
 T2D_TEST(a_query_visits_what_is_near_and_each_plot_exactly_once) {
@@ -288,13 +384,13 @@ T2D_TEST(a_query_visits_what_is_near_and_each_plot_exactly_once) {
     MineLayer layer(0, LayerShape{64, 8, 1}, 1);
     // A 3x3 that straddles the chunk boundary at x = 32: it is indexed in two chunks, and a query that
     // covers both of them must still see it once.
-    SceneTile* straddling = layer.place(content.registry, content.definitions,
-                                        at(ContentKind::Structure, "wall", 0, 31, 2, 3, 3));
+    Tile* straddling = layer.place(content.registry, content.definitions,
+                                   at(ContentKind::Structure, "wall", 0, 31, 2, 3, 3));
     T2D_REQUIRE(straddling != nullptr);
     T2D_REQUIRE(layer.place(content.registry, content.definitions,
                             at(ContentKind::Structure, "wall", 0, 60, 0)) != nullptr);
 
-    const std::vector<const SceneTile*> both = plots_in(layer, t2d::TileRect{30, 0, 4, 8});
+    const std::vector<const Tile*> both = plots_in(layer, t2d::TileRect{30, 0, 4, 8});
     T2D_REQUIRE(both.size() == 1u);
     T2D_CHECK(both[0] == straddling);
 
@@ -448,7 +544,7 @@ T2D_TEST(the_views_camera_draws_a_cell_between_forty_and_a_hundred_pixels) {
     T2D_CHECK_NEAR(kMinViewZoom, 40.0f, 1e-6f);
     T2D_CHECK_NEAR(kMaxViewZoom, 100.0f, 1e-6f);
     T2D_CHECK_NEAR(clamp_view_zoom(0.0f), 40.0f, 1e-6f);
-    T2D_CHECK_NEAR(clamp_view_zoom(12.0f), 40.0f, 1e-6f);   // fitting a 100x100 layer would be ~12
+    T2D_CHECK_NEAR(clamp_view_zoom(12.0f), 40.0f, 1e-6f); // fitting a 100x100 layer would be ~12
     T2D_CHECK_NEAR(clamp_view_zoom(40.0f), 40.0f, 1e-6f);
     T2D_CHECK_NEAR(clamp_view_zoom(64.0f), 64.0f, 1e-6f);
     T2D_CHECK_NEAR(clamp_view_zoom(100.0f), 100.0f, 1e-6f);
@@ -502,14 +598,15 @@ T2D_TEST(a_placed_block_is_there_holding_what_the_data_said) {
     LayerBuildReport report;
     layer.build(spec, content.registry, content.definitions, &report);
     T2D_CHECK_MSG(report.clean(), "{}", report.errors.empty() ? "" : report.errors.front());
-    const types::SceneTile* plot = layer.plot_at(1, GridPos{4, 3});
+    const types::Tile* plot = layer.plot_at(1, GridPos{4, 3});
     T2D_REQUIRE(plot != nullptr);
-    const types::Container* container = plot->container();
-    T2D_REQUIRE(container != nullptr);
-    T2D_CHECK_EQ(container->total(), 7u);
-    T2D_REQUIRE(container->slots().size() == 1u);
-    T2D_CHECK_EQ(container->slots()[0].id, chunk);
-    T2D_CHECK_EQ(container->slots()[0].count, 7u);
+    T2D_REQUIRE(plot->has_container());
+    const types::Container container = plot->container();
+    const std::vector<types::ContainerSlot> slots = container.slots();
+    T2D_CHECK_EQ(container.total(), 7u);
+    T2D_REQUIRE(slots.size() == 1u);
+    T2D_CHECK_EQ(slots[0].id, chunk);
+    T2D_CHECK_EQ(slots[0].count, 7u);
 }
 
 T2D_TEST(a_placed_block_that_holds_something_nobody_has_is_refused_and_still_built) {
@@ -531,13 +628,11 @@ T2D_TEST(a_placed_block_that_holds_something_nobody_has_is_refused_and_still_bui
     T2D_CHECK(!report.clean());
     T2D_REQUIRE(report.errors.size() == 1u);
     T2D_CHECK_MSG(report.errors.front().find("ghost") != std::string::npos, "{}", report.errors.front());
-    const types::SceneTile* plot = layer.plot_at(0, GridPos{1, 1});
+    const types::Tile* plot = layer.plot_at(0, GridPos{1, 1});
     T2D_REQUIRE(plot != nullptr);
-    const types::Container* container = plot->container();
-    T2D_REQUIRE(container != nullptr);
-    T2D_CHECK_EQ(container->total(), 0u);
+    T2D_REQUIRE(plot->has_container());
+    T2D_CHECK_EQ(plot->container().total(), 0u);
 }
-
 
 T2D_TEST(can_place_answers_before_anything_is_placed) {
     Fixture content;
@@ -550,7 +645,7 @@ T2D_TEST(can_place_answers_before_anything_is_placed) {
     LayerSpec spec;
     spec.shape = shape;
     spec.content.push_back(at(ContentKind::Floor, "dirt", 0, 4, 4));
-    spec.content.push_back(at(ContentKind::Ore, "stone", 1, 4, 4));   // the floor and the ore under the drill
+    spec.content.push_back(at(ContentKind::Ore, "stone", 1, 4, 4)); // the floor and the ore under the drill
     spec.content.push_back(at(ContentKind::Warehouse, "bin", 1, 0, 0));
     MineLayer layer(0, shape, 7);
     LayerBuildReport report;
@@ -559,18 +654,18 @@ T2D_TEST(can_place_answers_before_anything_is_placed) {
 
     // The four questions a caller asks before placing anything (docs/GAME_DESIGN.md section 1.34).
     std::string why;
-    T2D_CHECK(layer.can_place(at(ContentKind::Structure, "wall", 2, 6, 6), &why));
-    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Structure, "wall", 1, 0, 0), &why));   // taken
+    T2D_CHECK(layer.can_place(content.definitions, at(ContentKind::Structure, "wall", 2, 6, 6), &why));
+    T2D_CHECK_FALSE(layer.can_place(content.definitions, at(ContentKind::Structure, "wall", 1, 0, 0), &why)); // taken
     T2D_CHECK(why.find("already there") != std::string::npos);
-    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Structure, "wall", 2, 9, 9), &why));   // off the map
+    T2D_CHECK_FALSE(layer.can_place(content.definitions, at(ContentKind::Structure, "wall", 2, 9, 9), &why)); // off the map
     T2D_CHECK(why.find("8x8") != std::string::npos);
-    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Structure, "wall", 3, 2, 2), &why));   // no such layer
+    T2D_CHECK_FALSE(layer.can_place(content.definitions, at(ContentKind::Structure, "wall", 3, 2, 2), &why)); // no such layer
     T2D_CHECK(why.find("tile layer 3") != std::string::npos);
 
     // The rule the designer gave as the example: a drill has to sit on ore - a lower tile layer of the
     // same cell has to hold one.
-    T2D_CHECK(layer.can_place(at(ContentKind::Drill, "drill", 2, 4, 4), &why));
-    T2D_CHECK_FALSE(layer.can_place(at(ContentKind::Drill, "drill", 2, 6, 6), &why));
+    T2D_CHECK(layer.can_place(content.definitions, at(ContentKind::Drill, "drill", 2, 4, 4), &why));
+    T2D_CHECK_FALSE(layer.can_place(content.definitions, at(ContentKind::Drill, "drill", 2, 6, 6), &why));
     T2D_CHECK(why.find("no ore under it") != std::string::npos);
 
     // And the layer asks it while it builds: a drill placed from data with nothing under it is refused and
@@ -580,13 +675,12 @@ T2D_TEST(can_place_answers_before_anything_is_placed) {
     MineLayer built(0, shape, 7);
     LayerBuildReport built_report;
     built.build(spec, content.registry, content.definitions, &built_report);
-    T2D_CHECK(built.plot_at(2, GridPos{4, 4}) != nullptr);   // on the ore: it stands
-    T2D_CHECK(built.plot_at(2, GridPos{6, 6}) == nullptr);   // nothing under it: it does not
+    T2D_CHECK(built.plot_at(2, GridPos{4, 4}) != nullptr); // on the ore: it stands
+    T2D_CHECK(built.plot_at(2, GridPos{6, 6}) == nullptr); // nothing under it: it does not
     T2D_CHECK(!built_report.clean());
     T2D_CHECK_MSG(built_report.errors.front().find("no ore under it") != std::string::npos, "{}",
                   built_report.errors.front());
 }
-
 
 T2D_TEST(a_building_is_paid_for_out_of_the_warehouse_that_is_selected) {
     Fixture content;
@@ -596,12 +690,14 @@ T2D_TEST(a_building_is_paid_for_out_of_the_warehouse_that_is_selected) {
     const ContentId stone = content.registry.find(ContentKind::Item, "stone");
     T2D_REQUIRE(bin != kNoContent && stone != kNoContent);
 
-    // Built from its definition, the way the layer builds one: the capacity is the definition's (section 1.35).
+    // Built from its definition, the way the layer builds one: the capacity is the definition's
+    // (section 1.35).
     const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
     T2D_REQUIRE(definition != nullptr);
-    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
-    T2D_REQUIRE(plot != nullptr && plot->container() != nullptr);
-    types::Container& stock = *plot->container();
+    const std::unique_ptr<Tile> plot =
+        make_tile(content.definitions, *definition, content.registry, bin, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr && plot->has_container());
+    types::Container stock = plot->container();
     T2D_CHECK_EQ(stock.capacity(), 10u);
     T2D_REQUIRE(stock.add(ContentKind::Item, stone, 10) == 10u);
 
@@ -619,21 +715,21 @@ T2D_TEST(a_building_is_paid_for_out_of_the_warehouse_that_is_selected) {
     T2D_CHECK_FALSE(can_afford(stock, content.registry, unknown, &missing));
 }
 
-
 T2D_TEST(the_sweep_of_a_build_is_the_models_to_answer_for) {
     Fixture content;
     content.add(ContentKind::Warehouse, "bin", /*random_reverse=*/false, /*capacity=*/4);
     const ContentId bin = content.registry.find(ContentKind::Warehouse, "bin");
     const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
     T2D_REQUIRE(definition != nullptr);
-    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
+    const std::unique_ptr<Tile> plot =
+        make_tile(content.definitions, *definition, content.registry, bin, 1, GridPos{0, 0});
     T2D_REQUIRE(plot != nullptr);
 
     BuildAnimation sweep;
     T2D_CHECK(sweep.empty());
-    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 1.0f);   // nothing being built: everything is up
+    T2D_CHECK_EQ(sweep.progress_of(plot.get()), 1.0f); // nothing being built: everything is up
     sweep.start(nullptr, 5.0f);
-    sweep.start(plot.get(), 0.0f);                       // an entry that says time:0 goes up at once
+    sweep.start(plot.get(), 0.0f); // an entry that says time:0 goes up at once
     T2D_CHECK(sweep.empty());
     // An ignored build leaves the plot finished: it is a plot that takes no time, not one going up.
     T2D_CHECK_FALSE(plot->under_construction());
@@ -642,13 +738,13 @@ T2D_TEST(the_sweep_of_a_build_is_the_models_to_answer_for) {
     T2D_REQUIRE(sweep.size() == 1u);
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.0f);
     // The sweep is the build: while it runs the plot is **still going up**, which is what stops it from
-    // running, taking clicks and taking drops (types/scene_tile.h).
-    sweep.start(plot.get(), 4.0f);                       // placing it twice does not build it twice
+    // running, taking clicks and taking drops (types/tile.h).
+    sweep.start(plot.get(), 4.0f); // placing it twice does not build it twice
     T2D_CHECK_EQ(sweep.size(), 1u);
 
     sweep.advance(1.0f);
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.25f);
-    T2D_CHECK(plot->under_construction());   // half way up is still not up
+    T2D_CHECK(plot->under_construction()); // half way up is still not up
     sweep.advance(1.0f);
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 0.5f);
     sweep.advance(0.5f);
@@ -657,7 +753,7 @@ T2D_TEST(the_sweep_of_a_build_is_the_models_to_answer_for) {
     sweep.advance(10.0f);
     T2D_CHECK(sweep.empty());
     T2D_CHECK_EQ(sweep.progress_of(plot.get()), 1.0f);
-    T2D_CHECK_FALSE(plot->under_construction());   // done: the plot is a finished plot again
+    T2D_CHECK_FALSE(plot->under_construction()); // done: the plot is a finished plot again
 
     // Leaving the layer forgets the sweeps: those plots are not the ones on screen any more - and a
     // forgotten sweep finishes its plot, because a plot outlives the build it was on.
@@ -676,9 +772,10 @@ T2D_TEST(paying_for_a_build_that_cannot_be_paid_for_leaves_the_stock_alone) {
     const ContentId stone = content.registry.find(ContentKind::Item, "stone");
     const TileDefinition* definition = content.definitions.find_tile(ContentKind::Warehouse, "bin");
     T2D_REQUIRE(definition != nullptr);
-    const std::unique_ptr<SceneTile> plot = make_tile(*definition, bin, 1, GridPos{0, 0});
-    T2D_REQUIRE(plot != nullptr && plot->container() != nullptr);
-    types::Container& stock = *plot->container();
+    const std::unique_ptr<Tile> plot =
+        make_tile(content.definitions, *definition, content.registry, bin, 1, GridPos{0, 0});
+    T2D_REQUIRE(plot != nullptr && plot->has_container());
+    types::Container stock = plot->container();
     T2D_REQUIRE(stock.add(ContentKind::Item, stone, 3) == 3u);
 
     // An item the registry does not know is not paid for: it takes nothing out of the stock.
@@ -696,6 +793,4 @@ T2D_TEST(paying_for_a_build_that_cannot_be_paid_for_leaves_the_stock_alone) {
     T2D_CHECK_EQ(stock.total(), 0u);
 }
 
-
 T2D_TEST_MAIN
-

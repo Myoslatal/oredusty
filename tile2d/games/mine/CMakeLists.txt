@@ -29,26 +29,31 @@ add_library(mine_core STATIC
     src/text_input.cpp
     src/types/click.cpp
     src/types/container.cpp
-    src/types/drag_into.cpp
     src/build_animation.cpp
     src/build_cost.cpp
     src/build_sidebar.cpp
     src/building_unlocks.cpp
     src/types/building.cpp
-    src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
     src/types/entity.cpp
-    src/types/entity_tile.cpp
-    src/types/floor.cpp
     src/types/item.cpp
     src/types/item_definition.cpp
-    src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp
+    src/types/tile_runtime.cpp
     src/types/update_cadence.cpp
-    src/types/warehouse.cpp
     src/world.cpp
+    # The runtime core: data-only objects, archetypes, and regist-time function-table overrides.
+    src/runtime/archetype.cpp
+    src/runtime/component.cpp
+    src/runtime/component_registry.cpp
+    src/runtime/object_data.cpp
+    src/runtime/runtime_context.cpp
+    src/runtime/tile_type.cpp
+    # The built-in content on top of the runtime core: data, function tables and tile types.
+    src/runtime/content/builtin.cpp
+    src/runtime/content/components.cpp
 )
 add_library(mine::core ALIAS mine_core)
 t2d_apply_settings(mine_core)
@@ -105,26 +110,31 @@ set(MINE_TABLE_SOURCES
     src/text_input.cpp
     src/types/click.cpp
     src/types/container.cpp
-    src/types/drag_into.cpp
     src/build_animation.cpp
     src/build_cost.cpp
     src/build_sidebar.cpp
     src/building_unlocks.cpp
     src/types/building.cpp
-    src/types/drill.cpp
     src/types/drop.cpp
     src/types/drop_definition.cpp
     src/types/entity.cpp
-    src/types/entity_tile.cpp
-    src/types/floor.cpp
     src/types/item.cpp
     src/types/item_definition.cpp
-    src/types/scene_tile.cpp
     src/types/tile.cpp
     src/types/tile_definition.cpp
+    src/types/tile_runtime.cpp
     src/types/update_cadence.cpp
-    src/types/warehouse.cpp
     src/world.cpp
+    # The runtime core and the built-in content the game itself uses: they are part of the table now,
+    # because a plot is an ObjectData and its behaviour is in these tables (docs/TABLES.md).
+    src/runtime/archetype.cpp
+    src/runtime/component.cpp
+    src/runtime/component_registry.cpp
+    src/runtime/object_data.cpp
+    src/runtime/runtime_context.cpp
+    src/runtime/tile_type.cpp
+    src/runtime/content/builtin.cpp
+    src/runtime/content/components.cpp
 )
 # What the toolchain is told about this build. The includes and the defines are the ones the sources
 # need to compile at all; the optimisation follows the build type and is deliberately **not** part of

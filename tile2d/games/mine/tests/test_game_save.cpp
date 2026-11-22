@@ -3,22 +3,22 @@
 // sweeps, the unlocked buildings - and the rule that a save never comes back as half a mine.
 #include <mine/game_save.h>
 
-#include <mine/types/drill.h>
 #include <mine/types/drop.h>
-#include <mine/types/entity_tile.h>
 #include <mine/types/tile_definition.h>
-#include <mine/types/warehouse.h>
 
 #include <support/test_support.h>
 
 #include <t2d/save/archive.h>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace mine;
@@ -93,11 +93,60 @@ struct Fixture {
         definitions.add(std::move(definition));
         return id;
     }
+
+    /// A 2x1 task block: structure:: in the registry, the built-in "task_block" tile type for its
+    /// components, and the footprint and capacity its entry declares (docs/GAME_DESIGN.md section 1.51).
+    ContentId add_task_block(std::string_view name, usize capacity) {
+        const ContentId id = registry.register_content(ContentKind::Structure, name);
+        TileDefinition definition;
+        definition.kind = ContentKind::Structure;
+        definition.name = std::string(name);
+        definition.tile_type = "task_block";
+        definition.capacity = capacity;
+        definition.width = 2;
+        definition.height = 1;
+        TaskSpec first;
+        first.name = "first_delivery";
+        first.type = TaskType::Deliver;
+        first.item = "stone";
+        first.count = 10;
+        TaskSpec second;
+        second.name = "second_delivery";
+        second.type = TaskType::Deliver;
+        second.item = "stone";
+        second.count = 25;
+        definition.tasks = {first, second};
+        definitions.add(std::move(definition));
+        return id;
+    }
+
+    /// A 2x1 task block whose one step is a **rate** step: the item has to arrive fast enough within
+    /// p window seconds and keep doing so for p hold seconds (docs/GAME_DESIGN.md sections 1.53-1.55).
+    ContentId add_rate_block(std::string_view name, usize capacity, f32 rate, f32 window, f32 hold) {
+        const ContentId id = registry.register_content(ContentKind::Structure, name);
+        TileDefinition definition;
+        definition.kind = ContentKind::Structure;
+        definition.name = std::string(name);
+        definition.tile_type = "task_block";
+        definition.capacity = capacity;
+        definition.width = 2;
+        definition.height = 1;
+        TaskSpec feed;
+        feed.name = "feed";
+        feed.type = TaskType::Rate;
+        feed.item = "stone";
+        feed.rate = rate;
+        feed.window = window;
+        feed.hold = hold;
+        definition.tasks = {feed};
+        definitions.add(std::move(definition));
+        return id;
+    }
 };
 
 /// One layer with everything a save has to bring back: a floor, ore in the ground and a drill on it, a
-/// warehouse holding stone and turned around, two drops (one of them a pile), a locked building, and two
-/// sweeps half way through with **different** elapsed times.
+/// warehouse holding stone and turned around, a 2x1 task block holding stone, two drops (one of them a
+/// pile), a locked building, and two sweeps half way through with **different** elapsed times.
 struct BuiltScene {
     MineWorld world{7, LayerShape{8, 6, 3}};
     BuildAnimation builds;
@@ -106,8 +155,10 @@ struct BuiltScene {
     ContentId stone = kNoContent;
     ContentId bin = kNoContent;
     ContentId rig = kNoContent;
+    ContentId task_block = kNoContent;
     usize rig_index = 0;
     usize bin_index = 0;
+    usize task_index = 0;
 };
 
 [[nodiscard]] std::optional<BuiltScene> build_scene(Fixture& content) {
@@ -115,13 +166,13 @@ struct BuiltScene {
     scene.stone = content.add_item("stone");
     scene.bin = content.add_warehouse("bin", 100, true, /*research_node=*/true);
     scene.rig = content.add_drill("rig", 1.0f);
+    scene.task_block = content.add_task_block("task_block", 100);
     (void)content.add_floor("dirt");
     (void)content.add_ore("stone", 1.0f, "stone");
 
     auto layer = std::make_unique<MineLayer>(3, LayerShape{8, 6, 3}, 11);
     LayerBuildReport report;
-    const auto place = [&](ContentKind kind, std::string_view name, i32 tile_layer, i32 x,
-                           i32 y) -> SceneTile* {
+    const auto place = [&](ContentKind kind, std::string_view name, i32 tile_layer, i32 x, i32 y) -> Tile* {
         PlacedContent where;
         where.kind = kind;
         where.name = std::string(name);
@@ -129,21 +180,26 @@ struct BuiltScene {
         where.anchor = GridPos{x, y};
         return layer->place(content.registry, content.definitions, where, &report);
     };
-    SceneTile* dirt = place(ContentKind::Floor, "dirt", 0, 1, 1);
-    SceneTile* ore = place(ContentKind::Ore, "stone", 1, 2, 2);
-    SceneTile* rig = place(ContentKind::Drill, "rig", 2, 2, 2);
-    SceneTile* bin = place(ContentKind::Warehouse, "bin", 2, 4, 4);
-    if (dirt == nullptr || ore == nullptr || rig == nullptr || bin == nullptr) return std::nullopt;
+    Tile* dirt = place(ContentKind::Floor, "dirt", 0, 1, 1);
+    Tile* ore = place(ContentKind::Ore, "stone", 1, 2, 2);
+    Tile* rig = place(ContentKind::Drill, "rig", 2, 2, 2);
+    Tile* bin = place(ContentKind::Warehouse, "bin", 2, 4, 4);
+    // The task block's 2x1 footprint comes from its definition; the placement names no size.
+    Tile* task_block = place(ContentKind::Structure, "task_block", 2, 0, 4);
+    if (dirt == nullptr || ore == nullptr || rig == nullptr || bin == nullptr || task_block == nullptr)
+        return std::nullopt;
 
-    const std::vector<std::unique_ptr<SceneTile>>& plots = layer->plots();
+    const std::vector<std::unique_ptr<Tile>>& plots = layer->plots();
     for (usize index = 0; index < plots.size(); ++index) {
         if (plots[index].get() == rig) scene.rig_index = index;
         if (plots[index].get() == bin) scene.bin_index = index;
+        if (plots[index].get() == task_block) scene.task_index = index;
     }
     bin->set_mirrored(true);
-    layer->recount_mirrored();   // the count place() keeps is not told about a flag set afterwards
-    bin->container()->add(ContentKind::Item, scene.stone, 10);
-    auto* drill = dynamic_cast<Drill*>(rig);
+    layer->recount_mirrored(); // the count place() keeps is not told about a flag set afterwards
+    bin->container().add(ContentKind::Item, scene.stone, 10);
+    task_block->container().add(ContentKind::Item, scene.stone, 5);
+    Tile* drill = rig;
     if (drill == nullptr) return std::nullopt;
     drill->set_produced(7);
     drill->set_since_last_update(1.25f);
@@ -179,10 +235,66 @@ struct BuiltScene {
 
 [[nodiscard]] t2d::save::File make_test_save(const BuiltScene& scene, const Fixture& content,
                                              const SessionConfig& session, f32 world_seconds = 12.5f,
-                                             t2d::Vec2 center = t2d::Vec2{3.25f, 4.5f},
-                                             f32 zoom = 0.75f) {
+                                             t2d::Vec2 center = t2d::Vec2{3.25f, 4.5f}, f32 zoom = 0.75f) {
     return make_game_save(scene.world, session, scene.unlocks, scene.research, scene.builds, world_seconds,
                           center, zoom, content.registry);
+}
+
+/// One layer whose only content is a dirt floor and a 2x1 **rate** task block holding \p stock stone:
+/// the window is satisfied as soon as the layer exists, so the hold starts counting on the first tick
+/// (docs/GAME_DESIGN.md section 1.54). The block is plot 1, so a TASK record for plot 0 names the floor.
+struct RateScene {
+    Fixture content;
+    MineWorld world{7, LayerShape{8, 6, 3}};
+    BuildAnimation builds;
+    BuildingUnlocks unlocks;
+    ResearchState research;
+    ContentId stone = kNoContent;
+    usize block_index = 1;
+};
+
+[[nodiscard]] std::optional<RateScene> build_rate_scene(usize stock = 20, f32 rate = 3.0f, f32 window = 5.0f,
+                                                        f32 hold = 2.0f) {
+    RateScene scene;
+    scene.stone = scene.content.add_item("stone");
+    (void)scene.content.add_rate_block("pump", 100, rate, window, hold);
+    (void)scene.content.add_floor("dirt");
+
+    auto layer = std::make_unique<MineLayer>(0, LayerShape{8, 6, 3}, 31);
+    LayerBuildReport build;
+    PlacedContent floor;
+    floor.kind = ContentKind::Floor;
+    floor.name = "dirt";
+    floor.layer = 0;
+    floor.anchor = GridPos{0, 0};
+    if (layer->place(scene.content.registry, scene.content.definitions, floor, &build) == nullptr) {
+        return std::nullopt;
+    }
+    PlacedContent block;
+    block.kind = ContentKind::Structure;
+    block.name = "pump";
+    block.layer = 2;
+    block.anchor = GridPos{1, 1};
+    Tile* pump = layer->place(scene.content.registry, scene.content.definitions, block, &build);
+    if (pump == nullptr) return std::nullopt;
+    // The stock a layer rule's place_block would start it with, and the same note that rule's fill makes:
+    // items already in the box count toward the rate window from the moment the layer exists
+    // (docs/GAME_DESIGN.md sections 1.53 and 1.55).
+    pump->container().add(ContentKind::Item, scene.stone, stock);
+    pump->note_delivery(ContentKind::Item, scene.stone, stock);
+    const std::vector<std::unique_ptr<Tile>>& plots = layer->plots();
+    for (usize index = 0; index < plots.size(); ++index) {
+        if (plots[index].get() == pump) scene.block_index = index;
+    }
+    scene.unlocks.reset(scene.content.registry, scene.content.definitions);
+    scene.research.reset(scene.content.registry, scene.content.definitions);
+    scene.world.install_layer(std::move(layer), build);
+    return scene;
+}
+
+[[nodiscard]] t2d::save::File save_rate_scene(const RateScene& scene) {
+    return make_game_save(scene.world, test_session(), scene.unlocks, scene.research, scene.builds, 3.0f,
+                          t2d::Vec2{3.0f, 3.0f}, 1.0f, scene.content.registry);
 }
 
 } // namespace
@@ -191,22 +303,25 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     Fixture content;
     const std::optional<BuiltScene> scene = build_scene(content);
     T2D_REQUIRE(scene.has_value());
-    T2D_CHECK_EQ(scene->rig_index, 2u);   // the order the layer placed them in: floor, ore, drill, warehouse
+    T2D_CHECK_EQ(scene->rig_index, 2u); // the order the layer placed them in: floor, ore, drill, warehouse
     T2D_CHECK_EQ(scene->bin_index, 3u);
 
     const SessionConfig session = test_session();
     const t2d::save::File file = make_test_save(*scene, content, session);
     T2D_CHECK_EQ(file.game, std::string("mine"));
     T2D_CHECK_EQ(file.game_version, kGameSaveVersion);
-    // All seven chunks are there, each at the version this build reads.
-    for (const t2d::u32 id : {game_save_chunk::kMeta, game_save_chunk::kContent,
-                              game_save_chunk::kUnlocks, game_save_chunk::kResearch,
-                              game_save_chunk::kPlots, game_save_chunk::kEntities,
-                              game_save_chunk::kBuilds}) {
+    // All eight chunks are there, each at the version this build reads. TASK is optional in general, but
+    // this layer has a task block, so it is written here - at its own version, which carries the rate
+    // state as well (docs/SAVE.md, docs/GAME_DESIGN.md sections 1.52 and 1.55).
+    for (const t2d::u32 id : {game_save_chunk::kMeta, game_save_chunk::kContent, game_save_chunk::kUnlocks,
+                              game_save_chunk::kResearch, game_save_chunk::kPlots, game_save_chunk::kEntities,
+                              game_save_chunk::kBuilds, game_save_chunk::kTasks}) {
         const t2d::save::Chunk* chunk = file.find(id);
         T2D_REQUIRE(chunk != nullptr);
-        T2D_CHECK_EQ(chunk->version, kGameSaveChunkVersion);
+        T2D_CHECK_EQ(chunk->version, id == game_save_chunk::kTasks ? kTasksChunkVersion : kGameSaveChunkVersion);
     }
+    // No custom component state means no CMPT chunk: a pure built-in save stays at the old shape.
+    T2D_CHECK(file.find(game_save_chunk::kComponents) == nullptr);
 
     // Through the framework's container first: a save is bytes before it is a game's state.
     const std::vector<u8> bytes = t2d::save::encode(file);
@@ -220,7 +335,7 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     T2D_CHECK(report.ok);
     T2D_CHECK(report.error.empty());
     T2D_CHECK(report.warnings.empty());
-    T2D_CHECK_EQ(report.plots, 4u);
+    T2D_CHECK_EQ(report.plots, 5u);
     T2D_CHECK_EQ(report.entities, 2u);
 
     // --- the session, the world, the view -----------------------------------------------------------
@@ -247,8 +362,8 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     T2D_CHECK_NEAR(loaded->camera_zoom, 0.75f, 1e-6f);
 
     // --- the plots, in the saved order --------------------------------------------------------------
-    const std::vector<std::unique_ptr<SceneTile>>& before = scene->world.layer().plots();
-    const std::vector<std::unique_ptr<SceneTile>>& after = loaded->world->layer().plots();
+    const std::vector<std::unique_ptr<Tile>>& before = scene->world.layer().plots();
+    const std::vector<std::unique_ptr<Tile>>& after = loaded->world->layer().plots();
     T2D_REQUIRE(after.size() == before.size());
     for (usize index = 0; index < before.size(); ++index) {
         T2D_CHECK_EQ(after[index]->kind(), before[index]->kind());
@@ -265,25 +380,51 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     T2D_CHECK_FALSE(after[0]->under_construction());
     // The count place() keeps is part of the layer's identity, not just the plots' flags: it has to
     // survive the round trip too, or the layer reports nothing turned around (MineLayer::recount_mirrored).
-    T2D_CHECK_EQ(before.size(), 4u);
+    T2D_CHECK_EQ(before.size(), 5u);
     T2D_CHECK_EQ(scene->world.layer().mirrored_count(), 1u);
     T2D_CHECK_EQ(loaded->world->layer().mirrored_count(), 1u);
 
     // The warehouse: turned around, and holding what it held.
-    const auto* before_bin = dynamic_cast<const Warehouse*>(before[scene->bin_index].get());
-    const auto* after_bin = dynamic_cast<const Warehouse*>(after[scene->bin_index].get());
+    const Tile* before_bin = before[scene->bin_index].get();
+    const Tile* after_bin = after[scene->bin_index].get();
     T2D_REQUIRE(before_bin != nullptr);
     T2D_REQUIRE(after_bin != nullptr);
     T2D_CHECK(after_bin->mirrored());
-    T2D_REQUIRE(after_bin->container() != nullptr);
-    T2D_CHECK_EQ(after_bin->container()->total(), before_bin->container()->total());
-    T2D_CHECK_EQ(after_bin->container()->total(), 10u);
-    T2D_CHECK_EQ(after_bin->container()->count_of(ContentKind::Item, scene->stone), 10u);
+    T2D_REQUIRE(after_bin->has_container());
+    T2D_CHECK_EQ(after_bin->container().total(), before_bin->container().total());
+    T2D_CHECK_EQ(after_bin->container().total(), 10u);
+    T2D_CHECK_EQ(after_bin->container().count_of(ContentKind::Item, scene->stone), 10u);
     T2D_CHECK(after_bin->under_construction());
 
+    // The 2x1 task block: the footprint the save recorded comes back, the second cell answers for the
+    // same plot, and what its container held is in it again (docs/GAME_DESIGN.md section 1.51).
+    T2D_CHECK_EQ(scene->task_index, 4u);
+    const Tile* before_task = before[scene->task_index].get();
+    const Tile* after_task = after[scene->task_index].get();
+    T2D_REQUIRE(before_task != nullptr);
+    T2D_REQUIRE(after_task != nullptr);
+    T2D_CHECK_EQ(after_task->width(), 2);
+    T2D_CHECK_EQ(after_task->height(), 1);
+    T2D_CHECK(loaded->world->layer().plot_at(2, GridPos{1, 4}) == after_task);
+    T2D_CHECK(loaded->world->layer().plot_at(2, GridPos{2, 4}) == nullptr);
+    T2D_REQUIRE(after_task->has_container());
+    T2D_CHECK_EQ(after_task->container().total(), before_task->container().total());
+    T2D_CHECK_EQ(after_task->container().total(), 5u);
+    T2D_CHECK_EQ(after_task->container().count_of(ContentKind::Item, scene->stone), 5u);
+    // Its task chain came back too: two deliver steps, nothing completed, and the five stone in the box
+    // are progress toward the first step (5 of 10), not a step the load already finished.
+    T2D_REQUIRE(after_task->has_task());
+    T2D_CHECK_EQ(after_task->task().count(), 2u);
+    T2D_CHECK_EQ(after_task->task().current(), 0u);
+    T2D_CHECK_FALSE(after_task->task().complete());
+    T2D_REQUIRE(after_task->task().step(0).has_value());
+    T2D_CHECK_EQ(after_task->task().step(0)->id, scene->stone);
+    T2D_CHECK_EQ(after_task->task().step(0)->count, 10u);
+    T2D_CHECK_EQ(after_task->task().step(1)->count, 25u);
+
     // The drill: what it produced and the time its cadence had carried.
-    const auto* before_rig = dynamic_cast<const Drill*>(before[scene->rig_index].get());
-    const auto* after_rig = dynamic_cast<const Drill*>(after[scene->rig_index].get());
+    const Tile* before_rig = before[scene->rig_index].get();
+    const Tile* after_rig = after[scene->rig_index].get();
     T2D_REQUIRE(before_rig != nullptr);
     T2D_REQUIRE(after_rig != nullptr);
     T2D_CHECK_EQ(after_rig->produced(), 7u);
@@ -332,7 +473,6 @@ T2D_TEST(a_layer_round_trips_through_a_save) {
     T2D_CHECK_EQ(t2d::save::encode(resaved), bytes);
 }
 
-
 T2D_TEST(a_save_follows_its_names_into_another_registry) {
     Fixture content;
     const std::optional<BuiltScene> scene = build_scene(content);
@@ -355,6 +495,7 @@ T2D_TEST(a_save_follows_its_names_into_another_registry) {
     (void)other.add_ore("stone", 1.0f, "stone");
     const ContentId other_bin = other.add_warehouse("bin", 100);
     const ContentId other_rig = other.add_drill("rig", 1.0f);
+    (void)other.add_task_block("task_block", 100);
     T2D_CHECK_NE(other_stone, scene->stone);
     T2D_CHECK_NE(other_bin, scene->bin);
     T2D_CHECK_NE(other_rig, scene->rig);
@@ -364,21 +505,26 @@ T2D_TEST(a_save_follows_its_names_into_another_registry) {
         load_game_save(*decoded, other.registry, other.definitions, &report);
     T2D_REQUIRE(loaded.has_value());
     T2D_CHECK(report.ok);
-    const std::vector<std::unique_ptr<SceneTile>>& plots = loaded->world->layer().plots();
-    T2D_REQUIRE(plots.size() == 4u);
+    const std::vector<std::unique_ptr<Tile>>& plots = loaded->world->layer().plots();
+    T2D_REQUIRE(plots.size() == 5u);
     // The names came across; the ids are the ones this build hands out.
     T2D_CHECK_EQ(plots[scene->rig_index]->id(), other_rig);
     T2D_CHECK_EQ(plots[scene->bin_index]->id(), other_bin);
     T2D_CHECK_EQ(plots[scene->bin_index]->kind(), ContentKind::Warehouse);
-    const auto* bin = dynamic_cast<const Warehouse*>(plots[scene->bin_index].get());
+    const Tile* bin = plots[scene->bin_index].get();
     T2D_REQUIRE(bin != nullptr);
-    T2D_CHECK_EQ(bin->container()->count_of(ContentKind::Item, other_stone), 10u);
+    T2D_CHECK_EQ(bin->container().count_of(ContentKind::Item, other_stone), 10u);
     T2D_CHECK_FALSE(loaded->unlocks.unlocked(ContentKind::Warehouse, other_bin));
     T2D_CHECK_EQ(loaded->world->layer().entity_count(), 2u);
-    const auto* drill = dynamic_cast<const Drill*>(plots[scene->rig_index].get());
+    const Tile* drill = plots[scene->rig_index].get();
     T2D_REQUIRE(drill != nullptr);
     T2D_CHECK_EQ(drill->produced(), 7u);
     T2D_CHECK_NEAR(loaded->builds.progress_of(plots[scene->rig_index].get()), 0.2f, 1e-6f);
+    // The task block's footprint and container came across by name too.
+    const Tile* task_block = plots[scene->task_index].get();
+    T2D_REQUIRE(task_block != nullptr);
+    T2D_CHECK_EQ(task_block->width(), 2);
+    T2D_CHECK_EQ(task_block->container().count_of(ContentKind::Item, other_stone), 5u);
 }
 
 T2D_TEST(a_save_that_names_content_this_build_lacks_is_refused) {
@@ -418,11 +564,10 @@ T2D_TEST(a_save_that_cannot_come_back_exactly_is_refused) {
     // A chunk this build needs is missing.
     {
         t2d::save::File broken = good;
-        broken.chunks.erase(std::remove_if(broken.chunks.begin(), broken.chunks.end(),
-                                           [](const t2d::save::Chunk& chunk) {
-                                               return chunk.id == game_save_chunk::kMeta;
-                                           }),
-                            broken.chunks.end());
+        broken.chunks.erase(
+            std::remove_if(broken.chunks.begin(), broken.chunks.end(),
+                           [](const t2d::save::Chunk& chunk) { return chunk.id == game_save_chunk::kMeta; }),
+            broken.chunks.end());
         GameLoadReport report;
         T2D_CHECK_FALSE(load_game_save(broken, content.registry, content.definitions, &report).has_value());
         T2D_CHECK(report.error.find("META") != std::string::npos);
@@ -456,8 +601,7 @@ T2D_TEST(a_save_that_cannot_come_back_exactly_is_refused) {
     // A chunk this build does not know is ignored, not refused: a newer save still loads.
     {
         t2d::save::File with_extra = good;
-        with_extra.chunks.push_back(
-            t2d::save::Chunk{t2d::save::fourcc('X', 'T', 'R', 'A'), 7, {1u, 2u, 3u}});
+        with_extra.chunks.push_back(t2d::save::Chunk{t2d::save::fourcc('X', 'T', 'R', 'A'), 7, {1u, 2u, 3u}});
         GameLoadReport report;
         T2D_CHECK(load_game_save(with_extra, content.registry, content.definitions, &report).has_value());
         T2D_CHECK(report.ok);
@@ -486,7 +630,6 @@ T2D_TEST(a_world_with_no_layer_saves_a_file_that_cannot_load) {
     T2D_CHECK(report.error.find("no layer") != std::string::npos);
 }
 
-
 T2D_TEST(a_save_whose_plots_no_longer_fit_is_refused) {
     // Content that can be translated by name and still not come back: a container with less room than the
     // save says, and a drill whose ore under it no longer says how hard it is (so the layer refuses to
@@ -502,11 +645,14 @@ T2D_TEST(a_save_whose_plots_no_longer_fit_is_refused) {
     (void)small.add_item("stone");
     (void)small.add_floor("dirt");
     (void)small.add_ore("stone", 1.0f, "stone");
-    (void)small.add_warehouse("bin", 5);   // the save says it held 10
+    (void)small.add_warehouse("bin", 5); // the save says it held 10
     (void)small.add_drill("rig", 1.0f);
+    // The task block is content this build has, with the same capacity: the save has to reach the
+    // warehouse it cannot refill, not be refused for a name the build never had.
+    (void)small.add_task_block("task_block", 100);
     GameLoadReport report;
     T2D_CHECK_FALSE(load_game_save(*decoded, small.registry, small.definitions, &report).has_value());
-    T2D_CHECK(report.error.find("cannot hold") != std::string::npos);
+    T2D_CHECK_MSG(report.error.find("cannot hold") != std::string::npos, "error: {}", report.error);
 
     // A PLOT chunk edited so two plots claim one cell - the layout is the one make_game_save() writes,
     // which is how a test makes a save the game itself would never produce. The layer refuses the second
@@ -520,16 +666,16 @@ T2D_TEST(a_save_whose_plots_no_longer_fit_is_refused) {
         for (int plot = 0; plot < 2; ++plot) {
             writer.write_u8(static_cast<u8>(ContentKind::Floor));
             writer.write_u32(dirt);
-            writer.write_i32(0);   // tile layer
-            writer.write_i32(1);   // anchor x
-            writer.write_i32(1);   // anchor y
-            writer.write_i32(1);   // width
-            writer.write_i32(1);   // height
-            writer.write_bool(false);   // mirrored
-            writer.write_bool(false);   // under construction
-            writer.write_bool(false);   // ticking
-            writer.write_bool(false);   // drill
-            writer.write_bool(false);   // container
+            writer.write_i32(0);      // tile layer
+            writer.write_i32(1);      // anchor x
+            writer.write_i32(1);      // anchor y
+            writer.write_i32(1);      // width
+            writer.write_i32(1);      // height
+            writer.write_bool(false); // mirrored
+            writer.write_bool(false); // under construction
+            writer.write_bool(false); // ticking
+            writer.write_bool(false); // drill
+            writer.write_bool(false); // container
         }
         chunk.payload = writer.finish();
     }
@@ -549,7 +695,7 @@ T2D_TEST(a_drop_that_is_gone_is_not_saved) {
     auto* doomed = dynamic_cast<Drop*>(&adopted);
     T2D_REQUIRE(doomed != nullptr);
     T2D_CHECK(scene->world.layer().destroy(*doomed));
-    T2D_CHECK_EQ(scene->world.layer().entity_count(), 3u);   // still listed until the tick ends
+    T2D_CHECK_EQ(scene->world.layer().entity_count(), 3u); // still listed until the tick ends
 
     const std::optional<t2d::save::File> decoded =
         t2d::save::decode(t2d::save::encode(make_test_save(*scene, content, test_session())));
@@ -606,7 +752,7 @@ T2D_TEST(a_save_whose_build_records_disagree_with_its_plots_is_refused) {
     // A sweep that had already run out is not a sweep in progress.
     refuses(with_builds(*decoded, {{bin, 10.0f, 10.0f}, {rig, 1.0f, 5.0f}}), "cannot be restored");
     // A record for a plot the save does not have.
-    refuses(with_builds(*decoded, {{9u, 1.0f, 5.0f}}), "has 4 plots");
+    refuses(with_builds(*decoded, {{9u, 1.0f, 5.0f}}), "has 5 plots");
 }
 
 T2D_TEST(a_mirrored_plots_are_counted_again_after_a_load) {
@@ -624,9 +770,9 @@ T2D_TEST(a_mirrored_plots_are_counted_again_after_a_load) {
         where.anchor = GridPos{x, y};
         return layer->place(content.registry, content.definitions, where, &report);
     };
-    SceneTile* first = place(1, 1);
-    SceneTile* second = place(3, 1);
-    SceneTile* third = place(5, 1);
+    Tile* first = place(1, 1);
+    Tile* second = place(3, 1);
+    Tile* third = place(5, 1);
     T2D_REQUIRE(first != nullptr && second != nullptr && third != nullptr);
     first->set_mirrored(true);
     second->set_mirrored(true);
@@ -635,10 +781,9 @@ T2D_TEST(a_mirrored_plots_are_counted_again_after_a_load) {
 
     MineWorld world{9, LayerShape{6, 4, 1}};
     world.install_layer(std::move(layer), report);
-    const std::optional<t2d::save::File> decoded =
-        t2d::save::decode(t2d::save::encode(make_game_save(world, test_session(), BuildingUnlocks{},
-                                                           ResearchState{}, BuildAnimation{}, 2.0f,
-                                                           t2d::Vec2{1.0f, 2.0f}, 1.5f, content.registry)));
+    const std::optional<t2d::save::File> decoded = t2d::save::decode(t2d::save::encode(
+        make_game_save(world, test_session(), BuildingUnlocks{}, ResearchState{}, BuildAnimation{}, 2.0f,
+                       t2d::Vec2{1.0f, 2.0f}, 1.5f, content.registry)));
     T2D_REQUIRE(decoded.has_value());
     GameLoadReport load_report;
     const std::optional<GameSaveData> loaded =
@@ -659,11 +804,10 @@ T2D_TEST(a_save_written_before_the_technology_tree_loads_with_nothing_researched
     const std::optional<BuiltScene> scene = build_scene(content);
     T2D_REQUIRE(scene.has_value());
     t2d::save::File old = make_test_save(*scene, content, test_session());
-    old.chunks.erase(std::remove_if(old.chunks.begin(), old.chunks.end(),
-                                    [](const t2d::save::Chunk& chunk) {
-                                        return chunk.id == game_save_chunk::kResearch;
-                                    }),
-                     old.chunks.end());
+    old.chunks.erase(
+        std::remove_if(old.chunks.begin(), old.chunks.end(),
+                       [](const t2d::save::Chunk& chunk) { return chunk.id == game_save_chunk::kResearch; }),
+        old.chunks.end());
     T2D_CHECK(old.find(game_save_chunk::kResearch) == nullptr);
     GameLoadReport report;
     const std::optional<GameSaveData> loaded =
@@ -672,6 +816,345 @@ T2D_TEST(a_save_written_before_the_technology_tree_loads_with_nothing_researched
     T2D_CHECK(report.ok);
     T2D_CHECK_EQ(loaded->research.size(), 1u);
     T2D_CHECK_FALSE(loaded->research.researched(ContentKind::Warehouse, scene->bin));
+}
+
+T2D_TEST(a_save_written_before_tasks_existed_comes_back_at_zero) {
+    // The TASK chunk is optional: a save from before tasks existed has none, and every task block starts
+    // at the first step with nothing done (docs/SAVE.md, docs/GAME_DESIGN.md section 1.52).
+    Fixture content;
+    const std::optional<BuiltScene> scene = build_scene(content);
+    T2D_REQUIRE(scene.has_value());
+    t2d::save::File old = make_test_save(*scene, content, test_session());
+    old.chunks.erase(
+        std::remove_if(old.chunks.begin(), old.chunks.end(),
+                       [](const t2d::save::Chunk& chunk) { return chunk.id == game_save_chunk::kTasks; }),
+        old.chunks.end());
+    T2D_CHECK(old.find(game_save_chunk::kTasks) == nullptr);
+
+    GameLoadReport report;
+    const std::optional<GameSaveData> loaded =
+        load_game_save(old, content.registry, content.definitions, &report);
+    T2D_REQUIRE(loaded.has_value());
+    T2D_CHECK(report.ok);
+    const std::vector<std::unique_ptr<Tile>>& plots = loaded->world->layer().plots();
+    T2D_REQUIRE(plots.size() == 5u);
+    const Tile* task_block = plots[scene->task_index].get();
+    T2D_REQUIRE(task_block != nullptr);
+    T2D_REQUIRE(task_block->has_task());
+    T2D_CHECK_EQ(task_block->task().count(), 2u);
+    T2D_CHECK_EQ(task_block->task().current(), 0u);
+    T2D_CHECK_EQ(task_block->container().count_of(ContentKind::Item, scene->stone), 5u);
+}
+
+T2D_TEST(a_task_chunk_that_does_not_fit_the_plots_is_refused) {
+    // The TASK chunk names a plot and how many steps it had done. A record that cannot describe a task
+    // plot refuses the whole load; a count the designer has shortened since is clamped with a warning.
+    Fixture content;
+    const std::optional<BuiltScene> scene = build_scene(content);
+    T2D_REQUIRE(scene.has_value());
+    const std::optional<t2d::save::File> decoded =
+        t2d::save::decode(t2d::save::encode(make_test_save(*scene, content, test_session())));
+    T2D_REQUIRE(decoded.has_value());
+
+    const auto with_tasks = [](t2d::save::File file, const std::vector<std::pair<t2d::u32, t2d::u32>>& records) {
+        for (t2d::save::Chunk& chunk : file.chunks) {
+            if (chunk.id != game_save_chunk::kTasks) continue;
+            t2d::save::Writer writer;
+            writer.write_u32(static_cast<t2d::u32>(records.size()));
+            for (const auto& [plot, completed] : records) {
+                writer.write_u32(plot);
+                writer.write_u32(completed);
+                writer.write_f32(0.0f); // held
+                writer.write_u32(0u);   // no window
+            }
+            chunk.payload = writer.finish();
+            chunk.version = kTasksChunkVersion;
+        }
+        return file;
+    };
+    const auto refuses = [&](const t2d::save::File& file, std::string_view expected) {
+        GameLoadReport report;
+        T2D_CHECK_FALSE(load_game_save(file, content.registry, content.definitions, &report).has_value());
+        T2D_CHECK_MSG(report.error.find(expected) != std::string::npos, "error: {}", report.error);
+    };
+    const auto task_plot = static_cast<t2d::u32>(scene->task_index);
+
+    // Plot 0 is the dirt floor: a TASK record for it names a plot that has no tasks.
+    refuses(with_tasks(*decoded, {{0u, 0u}}), "has no tasks");
+    // The same task block named twice: which count would win is not something a load may guess.
+    refuses(with_tasks(*decoded, {{task_plot, 0u}, {task_plot, 0u}}), "twice");
+    // A plot the save does not have.
+    refuses(with_tasks(*decoded, {{9u, 0u}}), "has 5 plots");
+    // The chunk at another version.
+    {
+        t2d::save::File broken = *decoded;
+        for (t2d::save::Chunk& chunk : broken.chunks) {
+            if (chunk.id == game_save_chunk::kTasks) chunk.version = 3;
+        }
+        refuses(broken, "TASK chunk is at version 3");
+    }
+    // A count past the chain is not a refusal: the content changed, so it is clamped and said so.
+    {
+        GameLoadReport report;
+        const std::optional<GameSaveData> loaded =
+            load_game_save(with_tasks(*decoded, {{task_plot, 99u}}), content.registry, content.definitions,
+                           &report);
+        T2D_REQUIRE(loaded.has_value());
+        T2D_CHECK(report.ok);
+        T2D_REQUIRE(report.warnings.size() == 1u);
+        T2D_CHECK(report.warnings.front().find("clamped") != std::string::npos);
+        const Tile* plot = loaded->world->layer().plots()[task_plot].get();
+        T2D_REQUIRE(plot != nullptr);
+        T2D_CHECK_EQ(plot->task().current(), 2u);
+        T2D_CHECK(plot->task().complete());
+    }
+}
+
+T2D_TEST(a_half_held_rate_task_continues_after_a_load) {
+    // TASK v2 carries the live rate state (docs/SAVE.md, docs/GAME_DESIGN.md section 1.55): a hold that
+    // was 0.8 s into its 2 s at save time is 0.8 s into it after the load, and the window's deliveries
+    // still count for as long as they had left.
+    std::optional<RateScene> scene = build_rate_scene();
+    T2D_REQUIRE(scene.has_value());
+    const ContentId stone = scene->stone;
+    const usize block = scene->block_index;
+    Tile* live = scene->world.layer().plots()[block].get();
+    T2D_REQUIRE(live != nullptr);
+    T2D_CHECK_EQ(live->task().window_progress(0.0f), 20u);
+    T2D_CHECK_EQ(scene->world.layer().tick(0.8f), 0u);
+    T2D_CHECK_EQ(live->task().held(), 0.8f);
+    T2D_CHECK_EQ(live->task().current(), 0u);
+    T2D_CHECK_EQ(live->container().count_of(ContentKind::Item, stone), 20u);
+
+    const t2d::save::File file = save_rate_scene(*scene);
+    const t2d::save::Chunk* task_chunk = file.find(game_save_chunk::kTasks);
+    T2D_REQUIRE(task_chunk != nullptr);
+    T2D_CHECK_EQ(task_chunk->version, kTasksChunkVersion);
+
+    GameLoadReport report;
+    const std::optional<GameSaveData> loaded =
+        load_game_save(file, scene->content.registry, scene->content.definitions, &report);
+    T2D_REQUIRE(loaded.has_value());
+    T2D_CHECK(report.ok);
+    const std::vector<std::unique_ptr<Tile>>& plots = loaded->world->layer().plots();
+    T2D_REQUIRE(plots.size() == 2u);
+    Tile* restored = plots[block].get();
+    T2D_REQUIRE(restored != nullptr);
+    T2D_CHECK_EQ(restored->task().current(), 0u);
+    T2D_CHECK_MSG(std::abs(restored->task().held() - 0.8f) < 1e-4f, "held: {}", restored->task().held());
+    // The window came back with its remaining life: 20 items still satisfy the 15 the step asks for.
+    T2D_CHECK_EQ(restored->task().window_progress(0.0f), 20u);
+    T2D_CHECK_EQ(restored->container().count_of(ContentKind::Item, stone), 20u);
+    // The hold continues from where it stopped: 1.3 more seconds reach 2.1 >= 2 and the step completes,
+    // consuming exactly the 15 the window asked for.
+    T2D_CHECK_EQ(loaded->world->layer().tick(1.3f), 0u);
+    T2D_CHECK_EQ(restored->task().current(), 1u);
+    T2D_CHECK_EQ(restored->task().held(), 0.0f);
+    T2D_CHECK_EQ(restored->task().window_progress(1.3f), 0u);
+    T2D_CHECK_EQ(restored->container().count_of(ContentKind::Item, stone), 5u);
+}
+
+T2D_TEST(a_finished_rate_task_comes_back_finished) {
+    // A rate step that had already completed is just its count: held and window were cleared when it
+    // advanced, so the save writes zeros for them and the load settles into the finished chain.
+    std::optional<RateScene> scene = build_rate_scene();
+    T2D_REQUIRE(scene.has_value());
+    const ContentId stone = scene->stone;
+    const usize block = scene->block_index;
+    Tile* live = scene->world.layer().plots()[block].get();
+    T2D_REQUIRE(live != nullptr);
+    T2D_CHECK_EQ(scene->world.layer().tick(2.5f), 0u);
+    T2D_CHECK_EQ(live->task().current(), 1u);
+    T2D_CHECK_EQ(live->task().held(), 0.0f);
+    T2D_CHECK_EQ(live->container().count_of(ContentKind::Item, stone), 5u);
+
+    GameLoadReport report;
+    const std::optional<GameSaveData> loaded = load_game_save(
+        save_rate_scene(*scene), scene->content.registry, scene->content.definitions, &report);
+    T2D_REQUIRE(loaded.has_value());
+    T2D_CHECK(report.ok);
+    const std::vector<std::unique_ptr<Tile>>& plots = loaded->world->layer().plots();
+    T2D_REQUIRE(plots.size() == 2u);
+    Tile* restored = plots[block].get();
+    T2D_REQUIRE(restored != nullptr);
+    T2D_CHECK(restored->task().complete());
+    T2D_CHECK_EQ(restored->task().held(), 0.0f);
+    T2D_CHECK_EQ(restored->task().window_progress(0.0f), 0u);
+    T2D_CHECK_EQ(restored->container().count_of(ContentKind::Item, stone), 5u);
+}
+
+T2D_TEST(a_version_1_task_chunk_still_loads_without_live_state) {
+    // Version 1 knew only plot + completed. A load reads it as it was meant then: the count is kept, and
+    // the hold and window start empty - live state it never wrote (docs/SAVE.md).
+    std::optional<RateScene> scene = build_rate_scene();
+    T2D_REQUIRE(scene.has_value());
+    const ContentId stone = scene->stone;
+    const usize block = scene->block_index;
+    T2D_CHECK_EQ(scene->world.layer().tick(0.8f), 0u);
+
+    t2d::save::File old = save_rate_scene(*scene);
+    for (t2d::save::Chunk& chunk : old.chunks) {
+        if (chunk.id != game_save_chunk::kTasks) continue;
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        writer.write_u32(static_cast<t2d::u32>(block));
+        writer.write_u32(0);
+        chunk.payload = writer.finish();
+        chunk.version = 1;
+    }
+
+    GameLoadReport report;
+    const std::optional<GameSaveData> loaded =
+        load_game_save(old, scene->content.registry, scene->content.definitions, &report);
+    T2D_REQUIRE(loaded.has_value());
+    T2D_CHECK(report.ok);
+    const std::vector<std::unique_ptr<Tile>>& plots = loaded->world->layer().plots();
+    T2D_REQUIRE(plots.size() == 2u);
+    Tile* restored = plots[block].get();
+    T2D_REQUIRE(restored != nullptr);
+    T2D_CHECK_EQ(restored->task().current(), 0u);
+    T2D_CHECK_EQ(restored->task().held(), 0.0f);
+    T2D_CHECK_EQ(restored->task().window_progress(0.0f), 0u); // no window in v1
+    // The items were in the container at save time and stay there; with no window they are no progress
+    // yet, so the step does not complete just because the box is full.
+    T2D_CHECK_EQ(restored->container().count_of(ContentKind::Item, stone), 20u);
+}
+
+T2D_TEST(a_task_chunk_with_bad_live_state_is_refused) {
+    // TASK v2's live state is validated like the rest of the chunk: a hold or a window record that could
+    // not have been written by this game refuses the whole load (docs/SAVE.md, section 1.55).
+    std::optional<RateScene> scene = build_rate_scene();
+    T2D_REQUIRE(scene.has_value());
+    T2D_CHECK_EQ(scene->world.layer().tick(0.8f), 0u);
+    const t2d::save::File good = save_rate_scene(*scene);
+    const t2d::u32 block = static_cast<t2d::u32>(scene->block_index);
+
+    const auto with_payload = [](t2d::save::File file, const std::vector<t2d::u8>& payload,
+                                 t2d::u32 version = kTasksChunkVersion) {
+        for (t2d::save::Chunk& chunk : file.chunks) {
+            if (chunk.id != game_save_chunk::kTasks) continue;
+            chunk.payload = payload;
+            chunk.version = version;
+        }
+        return file;
+    };
+    // One record: plot, completed, held, entries, then the window's (remaining, amount) pairs.
+    const auto record = [&](t2d::save::Writer& writer, t2d::f32 held, t2d::u32 entries,
+                            const std::vector<std::pair<t2d::f32, t2d::u32>>& window) {
+        writer.write_u32(block);
+        writer.write_u32(0);
+        writer.write_f32(held);
+        writer.write_u32(entries);
+        for (const auto& [remaining, amount] : window) {
+            writer.write_f32(remaining);
+            writer.write_u32(amount);
+        }
+    };
+    const auto refuses = [&](const t2d::save::File& file, std::string_view expected) {
+        GameLoadReport report;
+        T2D_CHECK_FALSE(
+            load_game_save(file, scene->content.registry, scene->content.definitions, &report).has_value());
+        T2D_CHECK_MSG(!report.error.empty() && report.error.find(expected) != std::string::npos,
+                      "error: {}", report.error);
+    };
+
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.5f, runtime::content::kMaxTaskWindowEntries + 1u, {});
+        refuses(with_payload(good, writer.finish()), "holds at most");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.5f, 1u, {{0.0f, 5u}});
+        refuses(with_payload(good, writer.finish()), "finite time left");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.5f, 1u, {{-3.0f, 5u}});
+        refuses(with_payload(good, writer.finish()), "finite time left");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.5f, 1u, {{std::numeric_limits<t2d::f32>::quiet_NaN(), 5u}});
+        refuses(with_payload(good, writer.finish()), "finite time left");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.5f, 1u, {{4.0f, 0u}});
+        refuses(with_payload(good, writer.finish()), "delivery of 0 items");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, -1.0f, 0u, {});
+        refuses(with_payload(good, writer.finish()), "cannot be negative");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, std::numeric_limits<t2d::f32>::quiet_NaN(), 0u, {});
+        refuses(with_payload(good, writer.finish()), "finite time");
+    }
+    {
+        // The floor at plot 0 has no tasks.
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        writer.write_u32(0);
+        writer.write_u32(0);
+        writer.write_f32(0.0f);
+        writer.write_u32(0);
+        refuses(with_payload(good, writer.finish()), "has no tasks");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(2);
+        record(writer, 0.0f, 0u, {});
+        record(writer, 0.0f, 0u, {});
+        refuses(with_payload(good, writer.finish()), "twice");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.0f, 0u, {});
+        writer.write_u32(0); // one trailing word
+        refuses(with_payload(good, writer.finish()), "bytes after");
+    }
+    {
+        t2d::save::Writer writer;
+        writer.write_u32(1);
+        record(writer, 0.0f, 0u, {});
+        refuses(with_payload(good, writer.finish(), 3), "version 3");
+    }
+}
+
+T2D_TEST(a_deliver_task_block_round_trips_without_a_window) {
+    // A pure deliver chain writes TASK v2 with held 0 and no entries; the round trip is what it was.
+    Fixture content;
+    const std::optional<BuiltScene> scene = build_scene(content);
+    T2D_REQUIRE(scene.has_value());
+    const t2d::save::File file = make_test_save(*scene, content, test_session());
+    const t2d::save::Chunk* task_chunk = file.find(game_save_chunk::kTasks);
+    T2D_REQUIRE(task_chunk != nullptr);
+    T2D_CHECK_EQ(task_chunk->version, kTasksChunkVersion);
+    // count + plot + completed + held + entries: one record, no window.
+    T2D_CHECK_EQ(task_chunk->payload.size(), sizeof(t2d::u32) * 5u);
+
+    GameLoadReport report;
+    const std::optional<GameSaveData> loaded =
+        load_game_save(file, content.registry, content.definitions, &report);
+    T2D_REQUIRE(loaded.has_value());
+    T2D_CHECK(report.ok);
+    const Tile* task_block = loaded->world->layer().plots()[scene->task_index].get();
+    T2D_REQUIRE(task_block != nullptr);
+    T2D_CHECK_EQ(task_block->task().current(), 0u);
+    T2D_CHECK_EQ(task_block->task().held(), 0.0f);
+    T2D_CHECK_EQ(task_block->task().window_progress(0.0f), 0u);
+    T2D_CHECK_EQ(task_block->container().count_of(ContentKind::Item, scene->stone), 5u);
 }
 
 T2D_TEST_MAIN

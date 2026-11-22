@@ -22,17 +22,11 @@
 
 #include <mine/types/click.h>
 #include <mine/types/container.h>
-#include <mine/types/drag_into.h>
-#include <mine/types/drill.h>
 #include <mine/types/drop.h>
 #include <mine/types/drop_definition.h>
 #include <mine/types/entity.h>
-#include <mine/types/entity_tile.h>
-#include <mine/types/floor.h>
 #include <mine/types/item.h>
 #include <mine/types/item_definition.h>
-#include <mine/types/scene_tile.h>
-#include <mine/types/single_ore.h>
+#include <mine/types/task.h>
 #include <mine/types/tile.h>
 #include <mine/types/tile_definition.h>
-#include <mine/types/warehouse.h>

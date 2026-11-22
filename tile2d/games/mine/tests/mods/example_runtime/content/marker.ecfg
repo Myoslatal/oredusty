@@ -1,0 +1,7 @@
+# One structure whose tile type is the module's own. It has no picture in this fixture: the
+# module's preview override answers with a known part, which is what the test inspects.
+structure::
+    mod_marker::
+        tile_type:"example:marker"
+    mod_marker_alt::
+        tile_type:"example:marker_alt"

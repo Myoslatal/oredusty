@@ -143,7 +143,7 @@ T2D_TEST(a_manifest_that_is_wrong_is_refused) {
         {"noid", "name:\"no id\"\n", "needs a non empty id"},
         {"badid", "id:\"has space\"\n", "may only use letters"},
         {"unknownkey", "id:\"a\"\ntiers:3\n", "'tiers' is not a manifest key"},
-        {"nativeapi", "id:\"a\"\nnative:\"liba.so\"\n", "needs api:1"},
+        {"nativeapi", "id:\"a\"\nnative:\"liba.so\"\n", "needs api:2"},
         {"apionly", "id:\"a\"\napi:1\ncontent:[\"c.ecfg\"]\n", nullptr},   // a warning, not an error
         {"badcontent", "id:\"a\"\ncontent:3\n", "content must be a file name"},
     };

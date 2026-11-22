@@ -23,6 +23,7 @@
 #include <mine/layer_rules.h>
 #include <mine/mod_package.h>
 #include <mine/registry.h>
+#include <mine/runtime/runtime_context.h>
 
 #include <t2d/core/ecfg.h>
 
@@ -38,12 +39,12 @@ inline constexpr const char* kPackHeaderName = "pack.ecfg";
 
 /// One content pack: a directory, the files it holds, and what it added to the registry.
 struct ContentPack {
-    std::string directory;     ///< where it lives
-    std::string id;            ///< the header's id, or the directory's name
-    std::string name;          ///< the header's name, or the id
-    std::string version;       ///< the header's version, may be empty
-    std::vector<std::string> requirements;   ///< the header's requires, by pack id
-    bool declared = false;     ///< true when the directory carries a pack.ecfg
+    std::string directory;                 ///< where it lives
+    std::string id;                        ///< the header's id, or the directory's name
+    std::string name;                      ///< the header's name, or the id
+    std::string version;                   ///< the header's version, may be empty
+    std::vector<std::string> requirements; ///< the header's requires, by pack id
+    bool declared = false;                 ///< true when the directory carries a pack.ecfg
     /// The content files, in load order: every *.ecfg under the directory except the header, sorted by
     /// path so the order does not depend on what the filesystem returns first.
     std::vector<std::string> files;
@@ -52,8 +53,8 @@ struct ContentPack {
     std::vector<t2d::EcfgDocument> documents;
     /// What this pack added to the registry, and what its pictures cost (filled in by the pipeline).
     std::vector<ContentEntry> registered;
-    usize images = 0;         ///< pictures it referenced and that are there
-    usize images_failed = 0;  ///< pictures it referenced and that are not
+    usize images = 0;        ///< pictures it referenced and that are there
+    usize images_failed = 0; ///< pictures it referenced and that are not
     bool ok = true;
     std::string error;
 
@@ -88,14 +89,14 @@ struct ContentPipelineReport {
     /// like any other - a directory of .ecfg files and art - and the first one is found beside the
     /// executable (content_search.h); what makes them the game's own is that they register first, so
     /// their ids are the ones that never move.
-    usize base_packs = 0;        ///< base packs that loaded
-    usize base_files = 0;        ///< content files they hold
-    usize base_registered = 0;   ///< names they added
-    usize packs = 0;             ///< packs that loaded
-    usize pack_content = 0;      ///< names the packs added
-    usize base_images = 0;       ///< pictures the game's own pack referenced and that are there
-    usize pack_images = 0;       ///< pictures the packs referenced and that are there
-    usize mod_images = 0;        ///< pictures the mods' content files referenced and that are there
+    usize base_packs = 0;      ///< base packs that loaded
+    usize base_files = 0;      ///< content files they hold
+    usize base_registered = 0; ///< names they added
+    usize packs = 0;           ///< packs that loaded
+    usize pack_content = 0;    ///< names the packs added
+    usize base_images = 0;     ///< pictures the game's own pack referenced and that are there
+    usize pack_images = 0;     ///< pictures the packs referenced and that are there
+    usize mod_images = 0;      ///< pictures the mods' content files referenced and that are there
     /// Every picture the load resolved, in load order, from all three stages: what the engine draws
     /// the content with. A picture that is not there is in here too, with ok == false and the reason.
     std::vector<ResolvedImage> images;
@@ -108,10 +109,10 @@ struct ContentPipelineReport {
     /// mode generator's rules (layer_rules.h). A layer entry the engine cannot read is in the report's
     /// errors and not here, so the story is the layers that are actually there.
     LayerRules layers;
-    usize mods = 0;              ///< mods that loaded
+    usize mods = 0; ///< mods that loaded
     usize native_mods = 0;
     usize mod_content = 0;
-    usize total_content = 0;     ///< everything in the registry afterwards
+    usize total_content = 0; ///< everything in the registry afterwards
     /// One record per thing the pipeline was asked to load, in the order it handled them: the game's
     /// own pack, then the packs (the ones that could not even be read first, then the ones it loaded,
     /// in dependency order), then the mod packages. The failures are in here too - a pack that does not
@@ -136,7 +137,7 @@ struct ContentPipelineReport {
 class ContentPipeline {
 public:
     ContentPipeline() = default;
-    T2D_NON_MOVABLE(ContentPipeline);   // it owns loaded libraries
+    T2D_NON_MOVABLE(ContentPipeline); // it owns loaded libraries
 
     /// The directories of the game's own content (the first stage), in load order: the game's own pack
     /// first, then whatever a command line added to it. Empty means the game has none.
@@ -150,6 +151,8 @@ public:
     [[nodiscard]] const std::vector<ContentPack>& packs() const { return packs_; }
     [[nodiscard]] const ModHost& mods() const { return mods_; }
     [[nodiscard]] const ContentPipelineReport& report() const { return report_; }
+    /// The registries this pipeline's content is built against; mods register into the same instance.
+    [[nodiscard]] const std::shared_ptr<runtime::RuntimeContext>& runtime() const { return runtime_; }
 
     /// Clears \p registry and loads everything, in order.
     const ContentPipelineReport& load(ContentRegistry& registry);
@@ -160,6 +163,9 @@ private:
     std::vector<std::string> base_packs_;
     std::vector<std::string> pack_directories_;
     std::vector<std::string> mod_directories_;
+    /// Declared before the host and the report: a reload restores overrides through the context while
+    /// it is still alive, and the report's ContentDefinitions keeps a shared_ptr to it.
+    std::shared_ptr<runtime::RuntimeContext> runtime_ = std::make_shared<runtime::RuntimeContext>();
     std::vector<ContentPack> packs_;
     ModHost mods_;
     ContentPipelineReport report_;

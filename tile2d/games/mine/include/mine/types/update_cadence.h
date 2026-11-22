@@ -2,7 +2,7 @@
 //
 // A thing that runs owns a **cadence**: every tick by default, or a period in seconds it declares
 // (docs/GAME_DESIGN.md sections 1.13, 1.24). The rule lives here once, because two kinds of thing run -
-// a functional plot (types/entity_tile.h) and an entity (types/entity.h) - and a mine must not tick its
+// a functional plot (types/tile.h) and an entity (types/entity.h) - and a mine must not tick its
 // machines on one rule and the things moving between them on another.
 //
 // The cadence is time, not ticks: due() is handed the frame's seconds and decides for itself whether

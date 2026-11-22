@@ -1,17 +1,13 @@
-// Mine - the half of a thing that receives clicks.
+// Mine - a view of one object's Click component.
 //
-// A click is an event the game's own logic gets told about (the screen turns a mouse press into "this
-// cell was clicked", app.cpp), and what a thing does with one is its own: a **click** is that side of it,
-// and it is a component because everything that shows a panel needs the same two rules - a click **on it**
-// opens (or closes) its panel, and a click **somewhere else** closes it, because a panel that stayed open
-// while the pointer went elsewhere would be lying about what is selected (docs/GAME_DESIGN.md section
-// 1.27).
-//
-// It holds no idea of what the panel shows: that is the container's (types/container.h), and drawing it
-// is the screen's job.
+// The open flag and the count live in ClickData inside the object; this class carries the pointers the
+// component table reads. It is deliberately tiny: what a click means is the ClickFunctions table's
+// business, and the panel that shows the container belongs to the screen.
 #pragma once
 
 #include <t2d/core/types.h>
+
+#include <mine/runtime/content/components.h>
 
 namespace mine::types {
 
@@ -19,19 +15,21 @@ using t2d::u32;
 
 class Click {
 public:
-    /// A click arrived. \p on_it is whether it landed on the thing this belongs to. Returns whether that
-    /// thing took it - true when it did, which is also what opened or closed its panel.
-    bool receive(bool on_it);
-    /// Whether its panel is showing.
-    [[nodiscard]] bool open() const { return open_; }
-    /// Shows or hides the panel by hand (a screen that opens one for its own reason).
-    void set_open(bool open) { open_ = open; }
-    /// How many clicks landed on it so far.
-    [[nodiscard]] u32 clicks() const { return clicks_; }
+    Click() = default;
+    Click(void* data, const runtime::content::ClickFunctions* functions)
+        : data_(data), functions_(functions) {}
+
+    [[nodiscard]] bool valid() const { return data_ != nullptr && functions_ != nullptr; }
+    /// A click arrived; \p on_it says whether it landed on the thing. Returns whether it took the click.
+    bool receive(bool on_it) {
+        return functions_ != nullptr && functions_->receive(nullptr, data_, on_it ? 1 : 0) != 0;
+    }
+    [[nodiscard]] bool open() const { return functions_ != nullptr && functions_->open(nullptr, data_) != 0; }
+    [[nodiscard]] u32 clicks() const;
 
 private:
-    bool open_ = false;
-    u32 clicks_ = 0;
+    void* data_ = nullptr;
+    const runtime::content::ClickFunctions* functions_ = nullptr;
 };
 
 } // namespace mine::types

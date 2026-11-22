@@ -48,6 +48,14 @@ inline constexpr t2d::u32 kBuilds = t2d::save::fourcc('B', 'U', 'I', 'L');
 /// Which research nodes this mine has studied. Optional at load: a save written before the technology
 /// tree existed simply has none and comes back with nothing researched (docs/GAME_DESIGN.md 1.50).
 inline constexpr t2d::u32 kResearch = t2d::save::fourcc('R', 'S', 'C', 'H');
+/// Custom component state: plot index, component type id, schema version and bytes. Optional at load:
+/// a save written before this chunk (or one with no custom component state) simply has none.
+inline constexpr t2d::u32 kComponents = t2d::save::fourcc('C', 'M', 'P', 'T');
+/// How far each task block's chain had got, and the live state its rate steps measure: plot index,
+/// completed count, held seconds, and the current rate window as (remaining seconds, amount) pairs.
+/// Optional at load: a save written before tasks existed (or one with no task block) has none, and every
+/// task block starts at 0 (docs/GAME_DESIGN.md sections 1.52-1.55, docs/SAVE.md).
+inline constexpr t2d::u32 kTasks = t2d::save::fourcc('T', 'A', 'S', 'K');
 
 } // namespace game_save_chunk
 
@@ -56,6 +64,10 @@ inline constexpr std::string_view kGameSaveName = "mine";
 inline constexpr t2d::u32 kGameSaveVersion = 1;
 /// The version each of the chunks above is written at; a load refuses a chunk at any other one.
 inline constexpr t2d::u32 kGameSaveChunkVersion = 1;
+/// The TASK chunk has a version of its own: 1 is a plot index and a completed count; 2 adds the live
+/// rate state - held seconds and the current window's deliveries as **remaining** seconds plus amount,
+/// not timestamps, because a load's layer clock starts at 0 (docs/SAVE.md). A load reads both.
+inline constexpr t2d::u32 kTasksChunkVersion = 2;
 
 /// What a load found: whether it succeeded, why not, and what it brought back. A load refuses as a whole,
 /// so a successful one restores every record it read and leaves \c warnings empty; the field is the shape

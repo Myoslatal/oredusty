@@ -5,7 +5,6 @@
 // game names no content at all (docs/GAME_DESIGN.md section 7).
 #include <mine/pointer_drag.h>
 #include <mine/types/tile_definition.h>
-#include <mine/types/warehouse.h>
 #include <mine/world.h>
 
 #include <support/test_support.h>
@@ -52,13 +51,13 @@ T2D_TEST(a_drop_is_not_updated_by_the_layer_and_the_pointer_can_drag_it) {
     T2D_CHECK(drop.draggable());
     T2D_CHECK_EQ(drop.kind(), ContentKind::Drop);
     T2D_CHECK_EQ(drop.name(fixture.registry), std::string("scrap"));
-    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Drop));   // it is not something that occupies cells
+    T2D_CHECK_FALSE(kind_is_a_tile(ContentKind::Drop)); // it is not something that occupies cells
     // A plain entity is not draggable: what the pointer may move is the kind of thing it is.
     Entity plain(ContentKind::Machine, fixture.add(ContentKind::Machine, "cart"), t2d::Vec2{});
     T2D_CHECK_FALSE(plain.draggable());
 
-    Drop& in_layer =
-        static_cast<Drop&>(layer.adopt(std::make_unique<Drop>(ContentKind::Drop, scrap, t2d::Vec2{4.5f, 6.25f})));
+    Drop& in_layer = static_cast<Drop&>(
+        layer.adopt(std::make_unique<Drop>(ContentKind::Drop, scrap, t2d::Vec2{4.5f, 6.25f})));
     // The layer's quadtree finds it - a drop is an entity - and a pass over the layer runs nothing: what
     // the tick count reports is the things that took their turn, and a drop never does.
     T2D_CHECK_EQ(layer.entities_within(t2d::Vec2{4.5f, 6.25f}, 0.5f).size(), 1u);
@@ -69,8 +68,8 @@ T2D_TEST(a_drop_is_not_updated_by_the_layer_and_the_pointer_can_drag_it) {
 }
 
 T2D_TEST(the_data_says_what_a_drop_is_and_the_definer_builds_it) {
-    const std::vector<DropDefinition> drops = read_drops(
-        "drop::\n    scrap::\n        image:\"art/scrap.png\"\n        weight:3\n    bolt::\n");
+    const std::vector<DropDefinition> drops =
+        read_drops("drop::\n    scrap::\n        image:\"art/scrap.png\"\n        weight:3\n    bolt::\n");
     T2D_REQUIRE(drops.size() == 2u);
     T2D_CHECK_EQ(drops[0].kind, ContentKind::Drop);
     T2D_CHECK_EQ(drops[0].name, std::string("scrap"));
@@ -98,7 +97,8 @@ T2D_TEST(the_data_says_what_a_drop_is_and_the_definer_builds_it) {
     // An entry read out of another table is not a drop: the table an entry is written in is what it is
     // (docs/TYPES.md section 9).
     t2d::EcfgError parse_error;
-    const std::optional<t2d::EcfgDocument> document = t2d::EcfgDocument::parse("ore::\n    stone::\n", &parse_error);
+    const std::optional<t2d::EcfgDocument> document =
+        t2d::EcfgDocument::parse("ore::\n    stone::\n", &parse_error);
     T2D_REQUIRE(document.has_value());
     const t2d::EcfgValue* ore_table = document->find("ore");
     T2D_REQUIRE(ore_table != nullptr);
@@ -131,8 +131,8 @@ T2D_TEST(the_pointer_picks_a_drop_up_and_puts_it_down_somewhere_else) {
     const ContentId cart = fixture.add(ContentKind::Machine, "cart");
     MineLayer layer(0, LayerShape{40, 30, 1}, 1);
 
-    Drop& drop =
-        static_cast<Drop&>(layer.adopt(std::make_unique<Drop>(ContentKind::Drop, scrap, t2d::Vec2{10.0f, 10.0f})));
+    Drop& drop = static_cast<Drop&>(
+        layer.adopt(std::make_unique<Drop>(ContentKind::Drop, scrap, t2d::Vec2{10.0f, 10.0f})));
     // Something that is not draggable, right next to it: the pointer must not pick that up.
     layer.adopt(std::make_unique<Entity>(ContentKind::Machine, cart, t2d::Vec2{10.25f, 10.0f}));
 
@@ -155,7 +155,7 @@ T2D_TEST(the_pointer_picks_a_drop_up_and_puts_it_down_somewhere_else) {
     T2D_CHECK_NEAR(drop.position().x, 20.0f, 1e-6f);
     T2D_CHECK_NEAR(drop.position().y, 15.0f, 1e-6f);
     const std::vector<Entity*> left_behind = layer.entities_within(t2d::Vec2{10.0f, 10.0f}, 1.0f);
-    T2D_REQUIRE(left_behind.size() == 1u);   // the machine that stood next to it is still there
+    T2D_REQUIRE(left_behind.size() == 1u); // the machine that stood next to it is still there
     T2D_CHECK(left_behind[0] != &drop);
     T2D_CHECK_EQ(layer.entities_within(t2d::Vec2{20.0f, 15.0f}, 1.0f).size(), 1u);
     // A move to where it already is moves nothing.
@@ -200,7 +200,7 @@ T2D_TEST(the_debug_fill_lays_out_every_registered_drop) {
     Fixture fixture;
     fixture.add(ContentKind::Drop, "scrap");
     fixture.add(ContentKind::Drop, "bolt");
-    fixture.add(ContentKind::Item, "stone");   // not a drop: the fill lays out the drop table only
+    fixture.add(ContentKind::Item, "stone"); // not a drop: the fill lays out the drop table only
     MineLayer layer(0, LayerShape{40, 30, 1}, 1);
     // No definitions: the fill builds a plain drop when the load read no file for the content, which is
     // what a name a mod registered through the C ABI looks like (types/drop_definition.h).
@@ -237,7 +237,7 @@ T2D_TEST(nearby_drops_of_one_item_become_one_pile) {
     T2D_CHECK_EQ(first.count(), 2u);
     T2D_CHECK_NEAR(first.position().x, 10.0f, 1e-6f);
     T2D_CHECK_NEAR(first.position().y, 10.0f, 1e-6f);
-    T2D_CHECK_EQ(layer.entity_count(), 2u);   // the merged one is dead, and swept at the end of the tick
+    T2D_CHECK_EQ(layer.entity_count(), 2u); // the merged one is dead, and swept at the end of the tick
     (void)layer.tick(0.0f);
     T2D_CHECK_EQ(layer.entity_count(), 1u);
 
@@ -256,8 +256,8 @@ T2D_TEST(nearby_drops_of_one_item_become_one_pile) {
     T2D_CHECK_EQ(first.count(), 3u);
 
     // Out of the radius is a drop of its own; exactly on it is near enough - the rule is "within".
-    Drop& far = layer.drop(ContentKind::Drop, scrap,
-                           t2d::Vec2{10.0f, 10.0f + MineLayer::kDropMergeRadius + 0.01f});
+    Drop& far =
+        layer.drop(ContentKind::Drop, scrap, t2d::Vec2{10.0f, 10.0f + MineLayer::kDropMergeRadius + 0.01f});
     T2D_CHECK(&far != &first);
     T2D_CHECK_EQ(far.count(), 1u);
     Drop& edge = layer.drop(ContentKind::Drop, scrap, t2d::Vec2{10.0f - MineLayer::kDropMergeRadius, 10.0f});
@@ -272,7 +272,7 @@ T2D_TEST(nearby_drops_of_one_item_become_one_pile) {
         layer.adopt(std::make_unique<Drop>(ContentKind::Drop, scrap, t2d::Vec2{35.7f, 5.0f}, 1)));
     Drop& between = static_cast<Drop&>(
         layer.adopt(std::make_unique<Drop>(ContentKind::Drop, scrap, t2d::Vec2{35.4f, 5.0f}, 1)));
-    T2D_CHECK(layer.merge_drop(between) == &far_pile);   // 0.3 away, against 0.4 for the other
+    T2D_CHECK(layer.merge_drop(between) == &far_pile); // 0.3 away, against 0.4 for the other
     T2D_CHECK_EQ(far_pile.count(), 2u);
     T2D_CHECK_FALSE(between.alive());
     T2D_CHECK_EQ(near_pile.count(), 2u);
@@ -283,7 +283,7 @@ T2D_TEST(nearby_drops_of_one_item_become_one_pile) {
     Drop& fresh = layer.drop(ContentKind::Drop, bolt, t2d::Vec2{30.2f, 20.0f});
     T2D_CHECK(&fresh != &doomed);
     T2D_CHECK_EQ(fresh.count(), 1u);
-    T2D_CHECK(layer.merge_drop(doomed) == nullptr);   // it is not this layer's any more
+    T2D_CHECK(layer.merge_drop(doomed) == nullptr); // it is not this layer's any more
 
     // Nothing near it: a drop alone on the ground has no pile to join.
     Drop& alone = static_cast<Drop&>(
@@ -305,7 +305,7 @@ T2D_TEST(nearby_drops_of_one_item_become_one_pile) {
     const Drop plain(ContentKind::Drop, scrap, t2d::Vec2{});
     T2D_CHECK_EQ(plain.count(), 1u);
     const Drop below_one(ContentKind::Drop, scrap, t2d::Vec2{}, 0);
-    T2D_CHECK_EQ(below_one.count(), 1u);   // a count below one is read as one
+    T2D_CHECK_EQ(below_one.count(), 1u); // a count below one is read as one
 }
 
 T2D_TEST(a_drop_let_go_near_a_pile_joins_it) {
@@ -332,12 +332,12 @@ T2D_TEST(a_drop_let_go_near_a_pile_joins_it) {
     T2D_CHECK_EQ(pile.count(), 3u);
     T2D_CHECK_FALSE(lone.alive());
     (void)layer.tick(0.0f);
-    T2D_CHECK_EQ(layer.entity_count(), 2u);   // the pile and the other item
+    T2D_CHECK_EQ(layer.entity_count(), 2u); // the pile and the other item
 
     // One of **another** item, let go on the same spot, does not join it: a pile is of one item.
     T2D_CHECK(drag.begin(layer, t2d::Vec2{10.2f, 10.0f}));
     T2D_CHECK(drag.held() == &other);
-    T2D_CHECK(drag.end() == ReleaseResult::Left);   // let go where it lies, next to the pile
+    T2D_CHECK(drag.end() == ReleaseResult::Left); // let go where it lies, next to the pile
     T2D_CHECK(other.alive());
     T2D_CHECK_EQ(pile.count(), 3u);
     T2D_CHECK_EQ(other.count(), 1u);
@@ -376,7 +376,7 @@ T2D_TEST(dragging_from_a_pile_takes_one_item) {
     T2D_CHECK_EQ(pile.count(), 3u);
     T2D_CHECK(pile.alive());
     (void)layer.tick(0.0f);
-    T2D_CHECK_EQ(layer.entity_count(), 1u);   // the pile, and nothing else: the taken drop went back in
+    T2D_CHECK_EQ(layer.entity_count(), 1u); // the pile, and nothing else: the taken drop went back in
 
     // Carried away and let go on the open ground: the pile keeps two and the item that was carried lies on
     // its own - an item is never lost, only moved.
@@ -385,7 +385,7 @@ T2D_TEST(dragging_from_a_pile_takes_one_item) {
     T2D_CHECK(drag.move_to(t2d::Vec2{14.0f, 14.0f}));
     T2D_CHECK(drag.end() == ReleaseResult::Left);
     T2D_CHECK_EQ(pile.count(), 2u);
-    T2D_CHECK_EQ(items_on_the_ground(), 3u);   // two in the pile and one where it was let go
+    T2D_CHECK_EQ(items_on_the_ground(), 3u); // two in the pile and one where it was let go
 
     // A warehouse beside it: dragging from the pile into the warehouse stores **one** item, not the pile.
     (void)fixture.add(ContentKind::Warehouse, "bin");
@@ -401,15 +401,15 @@ T2D_TEST(dragging_from_a_pile_takes_one_item) {
     where.layer = 0;
     where.anchor = GridPos{14, 14};
     LayerBuildReport report;
-    auto* warehouse = dynamic_cast<Warehouse*>(layer.place(fixture.registry, definitions, where, &report));
+    Tile* warehouse = layer.place(fixture.registry, definitions, where, &report);
     T2D_REQUIRE(warehouse != nullptr);
     T2D_CHECK(drag.begin(layer, t2d::Vec2{10.0f, 10.0f}));
     T2D_CHECK_EQ(pile.count(), 1u);
     T2D_CHECK(drag.move_to(t2d::Vec2{14.5f, 14.5f}));
     T2D_CHECK(drag.end() == ReleaseResult::Stored);
-    T2D_CHECK_EQ(warehouse->container()->total(), 1u);
+    T2D_CHECK_EQ(warehouse->container().total(), 1u);
     T2D_CHECK_EQ(pile.count(), 1u);
-    T2D_CHECK_EQ(items_on_the_ground(), 2u);   // one still in the pile, one in the box
+    T2D_CHECK_EQ(items_on_the_ground(), 2u); // one still in the pile, one in the box
 
     // The pile is down to one: what is left **is** the drop, and dragging it takes the drop itself.
     T2D_CHECK(drag.begin(layer, t2d::Vec2{10.0f, 10.0f}));

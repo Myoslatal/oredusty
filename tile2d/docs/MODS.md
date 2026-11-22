@@ -138,12 +138,15 @@ __not_main:"false"     # 与不写一样：普通文件（`true` / `false` 两�
   |---|---|---|
   | `image:"art/wall.png"` | 任何内容 | 这块内容画出来用的贴图。路径相对**声明它的那个文件**（包、本体内容文件、模组内容文件都一样）。**物品的 `image` 就是背包槽、配方、需求画它的那张图**；**掉落物的 `image` 是它躺在地上长什么样** |
   | `random_reverse:true` | **占格子的内容**（structure / machine / floor / ore） | 允许地图初始化时把这份内容的若干份**左右翻转渲染**（50%），避免同一份贴图重复成千上万次时全部朝同一边。**由内容作者决定**，不写就是不翻转；物品与掉落物不在格子上，所以它们没有这个字段（写了也只是设计者字段，引擎不读） |
+  | `size::` | **任何占格子的内容**（structure / machine / floor / ore / drill / warehouse） | **占地尺寸**：`width` / `height`，各 **1..4096 格**，不写就是 **1×1**。**定义**属性：这份内容的每个地块都这么大；一次放置自己写了尺寸时以放置为准（存档记的是地块**实际**足迹）。与下面 `layer::` 的 `size::` **不是一回事**：那个是整张地图多大 |
+  | `tile_type:"task_block"` | **任何占格子的内容** | 选中一个**已注册的 tile 类型**（内置的见 `docs/RUNTIME.md` 的 Built-in tiles；模组的见本文 §2），由它的组件决定这个地块会不会跑、装不装东西、接不接受拖入。不写就按 `ContentKind` 映射到内置类型；写了没注册的名字在构建地块时报告，地块建不出来 |
   | `dig_power:1.0` | **`drill::`** | **挖掘能力**：这台钻头每秒挖掉多少硬度。一个出料周期 = 矿的 `hardness` ÷ 这个数（`docs/GAME_DESIGN.md` §1.26）。不写、写 0 或写负数都会被**拒绝**：没有这个数就没有节奏 |
   | `hardness:2.0` | **`ore::`** | **矿物硬度**：挖穿它要多少"能力·秒"。同样**必须大于零**，否则被拒绝 |
   | `drop:"chunk"` | **`ore::`** | 这条矿挖出来是哪条**掉落物**（`drop::` 表里的名字）。不写、写空、或写了没注册的名字都会被拒绝——钻头没有东西可丢 |
-  | `capacity:12` | **`warehouse::`** | **容量**：这个仓库装得下多少件东西。必须是**大于零的整数**，否则被拒绝；不写就是装不下任何东西的仓库（不是被塞了一个谁也没写的尺寸）。`docs/GAME_DESIGN.md` §1.27 |
+  | `capacity:12` | **任何带 container 的地块**（今天：`warehouse::` 与任务方块） | **容量**：这个地块的 container 装得下多少件东西。必须是**大于零的整数**，否则被拒绝；不写就是装不下任何东西（不是被塞了一个谁也没写的尺寸）。没有 container 组件的地块读到它也没有地方放。`docs/GAME_DESIGN.md` §1.27、§1.51 |
+  | `tasks::` | **任何带 task 组件的地块**（今天：任务方块） | **任务链**（`docs/GAME_DESIGN.md` §1.52、§1.53）：表里**从上到下依次执行**，每个条目是一个任务，条目名只用于报告；最多 **8** 条，空 `tasks::` 表示这个地块没有任务。两种类型，**字段按类型区分**（写了本类型不认识的字段会被拒绝，消息里给出该类型允许的字段）：① `type:"deliver"` + `item`（物品内容名）+ `count`（大于 0 的整数）——容器里攒够 `count` 个即完成；② `type:"rate"` + `item` + `rate`（件/秒，>0 的实数）+ 可选 `window`（测量窗口秒数，>0，默认 **1.0**）+ 可选 `hold`（持续判定秒数，≥0，默认 **0**）——最近 `window` 秒的滑动窗口内累计输入 ≥ `ceil(rate*window)` 件；`hold` 为 0 时窗口达标即完成，大于 0 时这个条件还要**连续保持** `hold` 秒（条件一旦不成立立刻归零重新计时）。两种类型都通过地块**自己的 container** 交付：物品进容器就计入进度，完成时**正好消费需要的那几件**、超出部分留在容器里；速率窗口随物品滑出而减少，面板显示实测速率（窗口内件数 ÷ window）与要求的 `rate`。点击地块打开面板看当前 / 总进度。rate 的窗口与 hold 进度**会随存档保存**并在读档后继续（`TASK` chunk 版本 2，用剩余秒数记录，`docs/SAVE.md`、`docs/GAME_DESIGN.md` §1.55） |
   | `research::` | **任何占格子的内容** | **科技树节点**（`docs/GAME_DESIGN.md` §1.50）：`cost:["stone",20]`（研究消耗，名字/数量成对）、`parent:["a","b"]`（前置节点名，可多个；根节点不写）、`is_root:true`、`tree:"intro"`（分类）、`min_layer:1`（最小第几层允许研究）。节点名就是内容名，必须唯一；未知字段、坏类型、环、缺父都会被报告或拒绝 |
-  | `size::` | `layer::` | 这一层多大：`width` / `height`（1..4096 格）/ `tile_layers`（1..32 个瓦片层）。不写的字段用会话/命令行的尺寸 |
+  | `size::` | `layer::` | 这一**层**多大：`width` / `height`（1..4096 格）/ `tile_layers`（1..32 个瓦片层）。不写的字段用会话/命令行的尺寸。注意别和上面**内容**的 `size::`（一个地块占几格）混了 |
   | `floor::` | `layer::` | 这一层的地板创建器：`layer`（铺在哪个瓦片层，默认 0）与规则，目前一条规则 `full_flash:"<地板名>"`——**把这一层的每个格子都设成这个地板** |
 
   加载时引擎校验：文件存在、是 PNG（Ore 自带解码器），不存在/不是 PNG 都会报告；`random_reverse` 写成
@@ -182,17 +185,17 @@ __not_main:"false"     # 与不写一样：普通文件（`true` / `false` 两�
 **写的顺序就是矿场的顺序**——第一个是第 0 层，第二个是第 1 层……这也是注册表发号的顺序，
 所以第 n 层的内容 id 是 n+1，存档（按名字对）永远指向同一层。
 
-一层的**创建器按固定顺序跑**，与文件里写的先后无关：**地板创建器先铺，散点生成器后撒**——这正是散点
+一层的**创建器按固定顺序跑**，与文件里写的先后无关：**地板创建器先铺，`place_block` 放下固定的方块，散点生成器最后撒**——这正是散点
 能问"这一格的地板是什么"的原因，也是它不会落在同一瓦片层已经有东西的格子上的原因。
 
 ```
-# 本体内容里的第一层（games/mine/content/layers.ecfg），一字不改：
+# 本体内容里的第一层（games/mine/content/layers.ecfg）的节选，注释是这里加的：
 layer::
     entrance::                    # 层名：注册表按它认这一层
         size::                    # 这一层多大（三个字段都可以不写）
             width:100
             height:100
-            tile_layers:2         # 1..32 个瓦片层
+            tile_layers:3         # 1..32 个瓦片层：地板、地里的矿、建筑
         floor::                   # 地板创建器
             layer:0               # 铺在哪个瓦片层（默认 0）
             full_flash:"dirt"     # 一条规则：每个格子都设成这个地板
@@ -206,6 +209,9 @@ layer::
                 max:35            # 最多几个（不写就是不限）
                 floor:"dirt"      # 地板限制：只落在地板是 dirt 的格子上
 ```
+
+完整的第一层还用 `place_block` 放下两座方块：石头仓库（(50,50)，一开始装着 10 块石头）与 2×1 的任务方块
+（(52,50)，占 (52,50)-(53,50)，**不能建造**——它没有 `building::`，`docs/GAME_DESIGN.md` §1.51）。
 
 矿物本身是一个内容条目（`games/mine/content/ores.ecfg`），`image` 是引擎读的两个字段之一（§1.18）：
 
@@ -356,7 +362,7 @@ id:"example_native"            # 必填。唯一，只能用字母/数字/_/-/.
 name:"Example (native)"        # 可选，给人看的；缺省用 id
 version:"1.0"                  # 可选
 description:"..."              # 可选
-api:1                          # 原生模组必填：它编译时用的模组 API 版本
+api:2                          # 原生模组必填：它编译时用的模组 API 版本
 requires:["example_data"]      # 可选：依赖的模组 id（字符串或数组）
 content:["content/a.ecfg"]     # 可选：要注册的内容文件，按顺序
 native:"libexample_native.so"  # 可选：相对包目录的动态库
@@ -381,7 +387,9 @@ data::                         # 可选：模组自己的参数，本体不解�
 1. 扫描每个 `--mods` 目录（目录本身是包，或目录下每个子目录是一个包），文件名排序保证确定性。
 2. 校验清单、查重、检查依赖。
 3. 按依赖**拓扑排序**（同一层内按目录顺序，确定性）。
-4. 逐个加载：先数据（注册进注册表），再代码（打开库、校验、`on_load`）。
+4. 逐个加载：先**解析**这个包的全部内容文件（不注册），然后打开库、校验、调用 `on_load`；成功后才把
+   数据注册进注册表。这样 `on_load` 注册的自定义组件/tile 类型和接口覆写在任何该包内容注册、任何
+   `ContentDefinitions::runtime` 构造对象之前就已经在共享注册表里。
 5. 最后一次性把沙盒里已放置的格子**按名字**重新定位，并重建面板。
 
 名字冲突**不合并**：谁先注册谁保留，后来者被报告为错误，但它的其它内容照常加载。冲突可能来自
@@ -403,7 +411,7 @@ MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry();
 
 ```c
 struct MineModApi {
-    u32 abi_version;      // = kModApiVersion
+    u32 abi_version;      // = kModApiVersion（当前 2）
     u32 struct_size;      // 这个结构体多大，见下
     void (*log)(void* self, u32 level, const char* message);
     ContentId (*register_content)(void* self, u32 kind, const char* name);
@@ -411,6 +419,15 @@ struct MineModApi {
     const char* (*content_name)(void* self, u32 kind, ContentId id);
     const char* (*mod_value)(void* self, const char* key);   // 读自己的 data::
     i64 (*mod_int)(void* self, const char* key, i64 fallback);
+
+    // 版本 2 追加：运行时类型与注册期接口覆写
+    u64 (*find_component)(void* self, const char* name);
+    u64 (*find_tile_type)(void* self, const char* name);
+    int (*register_component)(void* self, const MineComponentDesc* desc);
+    int (*register_tile_type)(void* self, const MineTileTypeDesc* desc);
+    int (*override_component_interface)(void* self, u64 type_id, u32 interface_id,
+                                        u32 expected_version, const void* replacement,
+                                        const void** previous);
 };
 
 struct MineModDesc {
@@ -427,6 +444,9 @@ struct MineModDesc {
   只有已有字段改变含义时才动 `kModApiVersion`，那时老模组会被明确拒绝，而不是用错布局调用。
 * `on_load` 返回非 0 即拒绝运行，宿主随即关掉这个库、什么都不留。`on_unload` 在库被关闭**之前**调用，
   且保证此时宿主不在任何模组回调里（重载发生在帧之间）。
+* 组件/tile 类型只能从 **`on_load` 里**注册或覆写；宿主用 `in_on_load` 限定。重载时先按相反顺序
+  把所有覆写的 active 表恢复成注册表，再调用 `on_unload`、关库；同 id 的组件/tile 在新库的 `on_load`
+  里是**原地刷新**（`ComponentType*`/`TileType*` 指针不变，已有对象继续有效），不是重复注册。
 * 动态库**不是沙箱**：模组以游戏的权限运行，能做游戏能做的一切。ABI 校验管的是兼容性，不是安全。
 
 一个最小原生模组（完整可运行版本见 `games/mine/tests/mods/example_native/native.cpp`）：
@@ -449,6 +469,36 @@ static const mine::MineModDesc g_desc{mine::kModApiVersion, sizeof(mine::MineMod
 
 MINE_MOD_EXPORT const mine::MineModDesc* mine_mod_entry() { return &g_desc; }
 ```
+
+### 3.1 自定义组件、tile 类型与接口覆写
+
+版本 2 的 API 把运行时注册表交给模组。一个组件就是一个 C 兼容的 ComponentDesc（数据布局 +
+构造/析构 + 函数表），一个 tile 类型就是 TileTypeDesc（组件 id 列表 + 一张不透明函数表）。id
+用和本体同一套 FNV-1a 算；ComponentDesc.abi_hash 必须是 mine::kModComponentAbiHash，否则宿主在
+读取数据前拒绝。
+
+完整可加载例子见 games/mine/tests/mods/example_runtime/native.cpp：注册一个自定义组件、一个
+自定义 tile，并覆写内置 preview 接口；内容文件用 tile_type:"example:marker" 选中它。
+
+* tile_type 为空时仍按 ContentKind 映射到内置 tile 类型；非空时必须命中共享
+  TileTypeRegistry 里已注册的类型，TileRuntimeLibrary 按该类型的组件列表建 archetype。
+* 自定义组件的数据块先零初始化，再调用 construct。TileTypeDesc 末尾追加了 shared 数组：每个
+  组件一个 const void*，count 为 0 或 component_count；内置组件仍用内容数据里的 per-content
+  shared（container/preview/building/drill），自定义组件用 tile type 给的 shared。shared 指针是
+  模组静态数据，必须在该模组被加载期间有效。重载时宿主把已有 TileRuntimeLibrary 的 archetype
+  shared 指针原地刷新，所以重载完成后旧对象和新对象都指向新库的 shared；从 on_unload 到新
+  on_load 之间不要调用旧对象。
+* 自定义 tile 通过 preview 组件接口绘制，所以要有内容可画就应包含 kPreviewComponent。它自己的
+  不透明函数表会被保存、可按名查到，但游戏暂时不调用。
+* ComponentDesc 末尾追加可选 save/load 回调，用于把自定义组件状态写进存档的 CMPT chunk：
+  save(shared,data,out,capacity) 先以 out=null/0 查询大小，再写入；load(shared,data,in,size)
+  返回消费的字节数，0 表示拒绝。两者必须同时给出，或同时为空。内置组件已由 PLOT 保存，CMPT
+  不会再写它们。
+* override_component_interface 只能在 on_load 里调用。宿主校验组件存在、expected_version 与
+  注册的 schema 版本一致、接口存在、替换表以合法的 InterfaceTableHeader 开头；previous 返回
+  原 active 表，可继续调用。覆写对已有对象和之后构造的对象都生效；on_unload 前宿主恢复注册表。
+* 注册始终校验：descriptor 大小、ABI hash、同一次加载里的重复 id/name、未知接口、坏表头都会
+  被报告，调用返回非 0。
 
 ## 3.5 代码表模组：改本体自己的函数
 
@@ -580,16 +630,20 @@ printf 'key press F6\nkey press RETURN\nshot /tmp/list.png\nquit\n' | nc 127.0.0
   （物流、机器取料都还没有，`docs/GAME_DESIGN.md` §1.27）。
 * **没有 tick / 行为钩子**：游戏自己的模拟层还没写（M2），所以现在没有可以挂钩的地方。API 的追加式设计
   就是为它准备的：模拟出现后，`on_tick` 之类的函数加到 `MineModApi` 末尾即可。
-* **没有补丁/覆盖机制（内容侧）**：同名内容报冲突而不是覆盖。做"修改别人的内容"需要明确的加载顺序与
-  覆盖语义，那是后续的设计。
-* **原生模组改不了本体的内部函数**：`dlopen` 进来的库无法改变本体在链接时就绑定好的调用。要改内部函数
+* **内容侧仍没有补丁/覆盖机制**：同名内容报冲突而不是覆盖。运行时层现在允许 dlopen 模组在
+  `on_load` 里覆写**组件接口的 active 函数表**（§3.1），这是行为覆写，不是内容字段 patch；修改
+  别人定义的数值仍要等明确的内容覆盖语义。
+* **原生模组改不了本体的内部函数**：`dlopen` 进来的库只能注册运行时类型、覆写组件接口表；它无法改变本体
+  在链接时就绑定好的内部函数调用。要改内部函数
   与类，用**代码表**（§3.5、[`TABLES.md`](TABLES.md)）：**整个本体已经在表里**（`mine.codetab`，release
   806 节 / 2553 符号 / 9773 重定位，由 `codetab build` 编——工具链在打包前先把它链接成一个程序），`mine_game` 是启动器，模组表在启动时合并，
   强定义连 vtable 条目一起改道。表里还带一份**构建记录**（`abi=`）：`codetab build` 问编译器这个构建的 ABI 是什么，
   头文件按内容哈希；加载时指纹相同就**完全合并**（`-O0` 的模组与 `-O3` 的本体就是一个程序），
   不同就**拒绝并指名是哪个事实**（另一个 `std::string` ABI、头文件改动、CPU 缺特性）——没有"降级加载"
   （[`ABI.md`](ABI.md) §1.5）。所以模组请用 dev 包里的 `codetab` 与头文件编：指纹天然一致。
-  测试：`test_code_table`（33 用例 / 333 断言）、`test_mine_table`（3 用例 / 17 断言）。加载时按 `requires`
+  测试：`test_code_table`（33 用例 / 333 断言）、`test_mine_table`（3 用例 / 17 断言）、
+  `test_mod_runtime`（3 用例 / 61 断言，真实 dlopen 的组件/tile 注册、shared、状态存档
+  CMPT、版本/ABI/重复注册拒绝、preview 覆写与卸载恢复）。加载时按 `requires`
   校验版本，并按**公开面**（`engine.api`）判断越界：清单内跨整个 major 放行，清单外同版本静默、相差一个 minor
   警告后仍然加载、再远拒绝，major 不同一律拒绝。
 * **代码表模组有一层 ABI 边界**：名字解析只保证"符号找得到"，不保证类型布局、vtable 形状、内联函数体与编译开关
